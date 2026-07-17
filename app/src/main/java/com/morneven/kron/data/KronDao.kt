@@ -12,6 +12,7 @@ interface KronDao {
     @Insert suspend fun insertAccount(value: AccountEntity): Long
     @Insert suspend fun insertCategory(value: CategoryEntity): Long
     @Insert suspend fun insertPortfolio(value: PortfolioEntity): Long
+    @Update suspend fun updatePortfolio(value: PortfolioEntity)
     @Insert suspend fun insertPeriod(value: BudgetPeriodEntity): Long
     @Insert suspend fun insertAllocation(value: AllocationEntity): Long
     @Insert suspend fun insertAllocationTemplate(value: PortfolioAllocationTemplateEntity): Long

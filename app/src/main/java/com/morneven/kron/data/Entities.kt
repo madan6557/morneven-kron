@@ -19,6 +19,7 @@ object LedgerType {
     const val REVERSAL = "REVERSAL"
     const val AUTOMATION = "AUTOMATION"
     const val IMPORT = "IMPORT"
+    const val SYSTEM = "SYSTEM"
 }
 
 object BudgetBucket {

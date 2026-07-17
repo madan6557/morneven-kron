@@ -1,5 +1,11 @@
 # KRON Changelog
 
+## 1.0.11 - 2026-07-17
+
+- Menambahkan tombol Hentikan portfolio.
+- Portfolio yang dihentikan tidak membuat periode baru, sementara seluruh periode dan jurnal lama tetap dipertahankan.
+- Penghentian tercatat sebagai event sistem dan audit.
+
 ## 1.0.10 - 2026-07-17
 
 - Setelah autentikasi app lock, visibilitas mengembalikan pilihan terakhir jika fitur pengingat aktif.

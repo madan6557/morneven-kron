@@ -43,6 +43,7 @@ fun BudgetScreen(
     onChannelTransfer: () -> Unit,
     onReleaseRollover: (String) -> Unit,
     onDetail: (Long) -> Unit,
+    onPause: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val grouped = state.allocations.groupBy { it.periodId }
@@ -143,6 +144,12 @@ fun BudgetScreen(
                 }
                 Button(onClick = { onDetail(first.periodId) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                     Text("Lihat detail budget")
+                }
+                val portfolio = state.portfolios.firstOrNull { it.id == first.portfolioId }
+                if (portfolio?.isPaused == false) {
+                    Button(onClick = { onPause(first.portfolioId) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                        Text("Hentikan portfolio")
+                    }
                 }
                 if (rows.any { it.availableAmount < 0 }) {
                     Button(onClick = onResolve, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {

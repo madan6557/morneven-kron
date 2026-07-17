@@ -265,7 +265,7 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
                 )
             }
             composable("budget") {
-                BudgetScreen(state, { dialog = ActionDialog.PORTFOLIO }, { dialog = ActionDialog.RESOLVE }, viewModel::fundPeriod, { dialog = ActionDialog.CHANNEL_TRANSFER }, viewModel::releaseRolloverToVault, { detailPeriodId = it })
+                BudgetScreen(state, { dialog = ActionDialog.PORTFOLIO }, { dialog = ActionDialog.RESOLVE }, viewModel::fundPeriod, { dialog = ActionDialog.CHANNEL_TRANSFER }, viewModel::releaseRolloverToVault, { detailPeriodId = it }, viewModel::pausePortfolio)
             }
             composable("activity") { ActivityScreen(state, { auditId = it }) }
             composable("reports") { ReportsScreen(state, onExport = { reportLauncher.launch("KRON-laporan-${LocalDate.now()}.csv") }) }
