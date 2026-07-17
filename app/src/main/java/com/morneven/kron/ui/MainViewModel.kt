@@ -322,6 +322,7 @@ class MainViewModel @Inject constructor(
 
     fun fundPeriod(periodId: Long) = runAction("Portfolio aktif") { repository.fundUnderfundedPeriod(periodId) }
     fun pausePortfolio(portfolioId: Long) = runAction("Portfolio dihentikan") { repository.pausePortfolio(portfolioId) }
+    fun pauseRecurringRule(ruleId: String) = runAction("Jadwal transaksi dihentikan") { repository.pauseRecurringRule(ruleId) }
 
     fun resolveFromAllocation(sourceId: Long, targetId: Long, amount: Long, note: String) = runAction("Budget minus berhasil diselesaikan") {
         repository.resolveFromAllocation(sourceId, targetId, amount, note)

@@ -60,6 +60,7 @@ fun HomeScreen(
     onTransfer: () -> Unit,
     onResolve: () -> Unit,
     onAllActivities: () -> Unit,
+    onPauseRule: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val visible = state.valuesVisible
@@ -239,6 +240,7 @@ fun HomeScreen(
                         }
                         Text(displayMoney(rule.amount, visible), style = MaterialTheme.typography.labelLarge)
                     }
+                    androidx.compose.material3.TextButton(onClick = { onPauseRule(rule.id) }) { Text("Hentikan jadwal") }
                 }
             }
         }

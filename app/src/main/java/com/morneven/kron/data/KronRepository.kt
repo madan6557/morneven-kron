@@ -611,6 +611,15 @@ class KronRepository @Inject constructor(
         dao.insertRule(rule)
     }
 
+    suspend fun pauseRecurringRule(ruleId: String, reason: String = "Jadwal transaksi dihentikan pengguna") = database.withTransaction {
+        val rule = requireNotNull(dao.allRules().firstOrNull { it.id == ruleId })
+        if (rule.isPaused) return@withTransaction
+        dao.updateRule(rule.copy(isPaused = true))
+        val eventId = UUID.randomUUID().toString()
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.SYSTEM, "Jadwal transaksi dihentikan", reason, "USER", LocalDate.now().toEpochDay()))
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = reason, beforeJson = "{\"ruleId\":\"$ruleId\",\"paused\":false}", afterJson = "{\"ruleId\":\"$ruleId\",\"paused\":true}"))
+    }
+
     suspend fun pausePortfolio(portfolioId: Long, reason: String = "Portfolio dihentikan pengguna") = database.withTransaction {
         val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == portfolioId })
         if (portfolio.isPaused) return@withTransaction

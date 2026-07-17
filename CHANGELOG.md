@@ -1,5 +1,10 @@
 # KRON Changelog
 
+## 1.0.12 - 2026-07-17
+
+- Menambahkan tombol Hentikan jadwal pada transaksi otomatis.
+- Penghentian aturan otomatis tercatat sebagai event dan audit tanpa menghapus occurrence sebelumnya.
+
 ## 1.0.11 - 2026-07-17
 
 - Menambahkan tombol Hentikan portfolio.

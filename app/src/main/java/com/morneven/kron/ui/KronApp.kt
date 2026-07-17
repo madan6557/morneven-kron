@@ -262,6 +262,7 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
                     { dialog = ActionDialog.TRANSFER },
                     { dialog = ActionDialog.RESOLVE },
                     { navController.navigate("activity") },
+                    viewModel::pauseRecurringRule,
                 )
             }
             composable("budget") {
