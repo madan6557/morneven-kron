@@ -10,6 +10,7 @@ import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -68,6 +69,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -81,6 +83,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.morneven.kron.R
 import com.morneven.kron.ui.dialogs.AccountDialog
 import com.morneven.kron.ui.dialogs.AuditDialog
 import com.morneven.kron.ui.dialogs.ChannelTransferDialog
@@ -397,12 +400,11 @@ private fun KronLogoMark() {
         shadowElevation = 10.dp,
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Text("K", style = MaterialTheme.typography.displaySmall, color = primary, fontWeight = FontWeight.Black)
-            Surface(
-                modifier = Modifier.align(Alignment.TopEnd).padding(10.dp).size(10.dp),
-                shape = RoundedCornerShape(2.dp),
-                color = MaterialTheme.colorScheme.tertiary,
-            ) { }
+            Image(
+                painter = painterResource(R.drawable.ic_launcher_foreground),
+                contentDescription = "Logo KRON",
+                modifier = Modifier.size(80.dp),
+            )
         }
     }
 }
