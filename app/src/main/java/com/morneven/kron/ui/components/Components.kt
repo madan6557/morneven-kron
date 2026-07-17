@@ -107,6 +107,12 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
 
 fun displayMoney(value: Long, visible: Boolean): String = if (visible) formatIdr(value) else "Rp ••••••"
 
+fun displayCompactMoney(value: Long, visible: Boolean): String = when {
+    !visible -> displayMoney(value, false)
+    value.absoluteValue >= 1_000_000 -> compactIdr(value)
+    else -> formatIdr(value)
+}
+
 @Composable
 fun HudCard(
     modifier: Modifier = Modifier,
@@ -212,12 +218,16 @@ fun signedColor(value: Long): Color = when {
 fun compactIdr(value: Long): String {
     val abs = value.absoluteValue
     val suffix = when {
+        abs >= 1_000_000_000_000_000 -> "kuad"
+        abs >= 1_000_000_000_000 -> "T"
         abs >= 1_000_000_000 -> "M"
         abs >= 1_000_000 -> "jt"
         abs >= 1_000 -> "rb"
         else -> ""
     }
     val divisor = when (suffix) {
+        "kuad" -> 1_000_000_000_000_000.0
+        "T" -> 1_000_000_000_000.0
         "M" -> 1_000_000_000.0
         "jt" -> 1_000_000.0
         "rb" -> 1_000.0

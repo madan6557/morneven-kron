@@ -1,5 +1,12 @@
 # KRON Changelog
 
+## 1.0.16 - 2026-07-17
+
+- Merapikan hierarchy, filter, grafik, kartu aset, dan rincian budget pada halaman Laporan.
+- Membuat filter rentang dapat digulir agar tidak meluber pada layar kecil.
+- Menyingkat nominal besar pada Posisi Keuangan hingga satuan juta, miliar, triliun, dan kuadriliun.
+- Merapikan fallback form pengeluaran ketika belum ada budget aktif.
+
 ## 1.0.15 - 2026-07-17
 
 - Memperketat pengeluaran agar saldo akun tidak dapat menjadi negatif.

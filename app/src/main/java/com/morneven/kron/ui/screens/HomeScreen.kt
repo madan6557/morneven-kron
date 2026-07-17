@@ -43,6 +43,7 @@ import com.morneven.kron.ui.components.HudCard
 import com.morneven.kron.ui.components.Metric
 import com.morneven.kron.ui.components.SectionHeader
 import com.morneven.kron.ui.components.displayMoney
+import com.morneven.kron.ui.components.displayCompactMoney
 import com.morneven.kron.ui.components.signedColor
 import com.morneven.kron.ui.theme.KronBlue
 import com.morneven.kron.ui.theme.KronGold
@@ -97,31 +98,31 @@ fun HomeScreen(
             HudCard(accent = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)) {
                 Text("POSISI KEUANGAN", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
                 Spacer(Modifier.height(8.dp))
-                Text(displayMoney(state.totalAssets, visible), style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Black)
+                Text(displayCompactMoney(state.totalAssets, visible), style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Black, maxLines = 1)
                 Text("Total aset nyata", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(18.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Metric("Cash", displayMoney(cashAssets, visible), Modifier.weight(1f), KronGold)
-                    Metric("eBudget", displayMoney(eBudgetAssets, visible), Modifier.weight(1f), KronBlue)
+                    Metric("Cash", displayCompactMoney(cashAssets, visible), Modifier.weight(1f), KronGold)
+                    Metric("eBudget", displayCompactMoney(eBudgetAssets, visible), Modifier.weight(1f), KronBlue)
                 }
                 Spacer(Modifier.height(16.dp))
                 Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f), shape = MaterialTheme.shapes.medium) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Main Vault", style = MaterialTheme.typography.labelLarge)
-                            Text(displayMoney(state.totalVault, visible), style = MaterialTheme.typography.labelLarge)
+                            Text(displayCompactMoney(state.totalVault, visible), style = MaterialTheme.typography.labelLarge, maxLines = 1)
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { ChannelBadge(FundingChannel.CASH) }
-                            Text(displayMoney(state.vaultCash, visible), style = MaterialTheme.typography.bodyMedium)
+                            Text(displayCompactMoney(state.vaultCash, visible), style = MaterialTheme.typography.bodyMedium, maxLines = 1)
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { ChannelBadge(FundingChannel.EBUDGET) }
-                            Text(displayMoney(state.vaultEBudget, visible), style = MaterialTheme.typography.bodyMedium)
+                            Text(displayCompactMoney(state.vaultEBudget, visible), style = MaterialTheme.typography.bodyMedium, maxLines = 1)
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Reserve rollover", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
-                            Text(displayMoney(state.rolloverCash + state.rolloverEBudget, visible), style = MaterialTheme.typography.bodyMedium)
+                            Text(displayCompactMoney(state.rolloverCash + state.rolloverEBudget, visible), style = MaterialTheme.typography.bodyMedium, maxLines = 1)
                         }
                     }
                 }
