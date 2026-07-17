@@ -212,7 +212,15 @@ fun HomeScreen(
         }
 
         if (state.rules.isNotEmpty()) {
-            item { SectionHeader("Jadwal berikutnya") }
+            item {
+                SectionHeader("Transaksi otomatis berikutnya")
+                Text(
+                    "Jadwal pemasukan atau pengeluaran yang akan dicatat KRON secara otomatis.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+            }
             items(state.rules.filterNot { it.isPaused }.take(3), key = { it.id }) { rule ->
                 HudCard {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -220,8 +228,13 @@ fun HomeScreen(
                             Icon(Icons.Outlined.CalendarMonth, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
                             Column {
                                 Text(rule.title, style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    if (rule.direction == "INCOME") "Pemasukan otomatis" else "Pengeluaran otomatis",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (rule.direction == "INCOME") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                )
                                 Text(LocalDate.ofEpochDay(rule.nextEpochDay).format(DateTimeFormatter.ofPattern("d MMM yyyy", Locale.forLanguageTag("id-ID"))), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("Setiap ${rule.intervalCount} ${if (rule.cadence == "YEARLY") "tahun" else "bulan"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+                                Text("Berulang setiap ${rule.intervalCount} ${if (rule.cadence == "YEARLY") "tahun" else "bulan"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
                             }
                         }
                         Text(displayMoney(rule.amount, visible), style = MaterialTheme.typography.labelLarge)

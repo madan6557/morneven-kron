@@ -25,6 +25,7 @@ interface KronDao {
     @Insert suspend fun insertReceipt(value: ReceiptEntity)
 
     @Update suspend fun updatePeriod(value: BudgetPeriodEntity)
+    @Update suspend fun updateAllocation(value: AllocationEntity)
     @Update suspend fun updateEvent(value: ActivityEventEntity)
     @Update suspend fun updateRule(value: RecurringRuleEntity)
 

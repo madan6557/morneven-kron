@@ -1,5 +1,11 @@
 # KRON Changelog
 
+## 1.0.8 - 2026-07-17
+
+- Menambahkan tampilan detail setiap periode budget.
+- Menambahkan koreksi nominal budget melalui jurnal koreksi dan audit.
+- Koreksi tidak menghapus jurnal lama dan memeriksa saldo Main Vault.
+
 ## 1.0.7 - 2026-07-17
 
 - Memasang aset logo launcher KRON pada layar kunci.

@@ -48,6 +48,7 @@ import com.morneven.kron.data.FundingChannel
 import com.morneven.kron.data.TransactionDirection
 import com.morneven.kron.ui.KronUiState
 import com.morneven.kron.ui.components.ChannelBadge
+import com.morneven.kron.ui.components.HudCard
 import com.morneven.kron.ui.components.displayMoney
 import com.morneven.kron.ui.components.MoneyField
 import com.morneven.kron.ui.components.parseMoneyInput
@@ -219,6 +220,51 @@ fun PortfolioDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (String
             Text("Tambah kategori")
         }
     }
+}
+
+@Composable
+fun BudgetDetailDialog(state: KronUiState, periodId: Long, onDismiss: () -> Unit, onCorrect: (Long, Long, String) -> Unit) {
+    val rows = state.allocations.filter { it.periodId == periodId }
+    var correctionId by remember { mutableStateOf<Long?>(null) }
+    var correctedAmount by remember { mutableStateOf("") }
+    var reason by remember { mutableStateOf("Koreksi nominal budget") }
+    val selected = rows.firstOrNull { it.id == correctionId }
+    val validCorrection = selected != null && money(correctedAmount) >= 0 && money(correctedAmount) != selected.plannedAmount && reason.isNotBlank()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Detail budget") },
+        text = {
+            Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                rows.firstOrNull()?.let { row ->
+                    Text(row.portfolioName, style = MaterialTheme.typography.titleLarge)
+                    Text("${LocalDate.ofEpochDay(row.startEpochDay)} sampai ${LocalDate.ofEpochDay(row.endEpochDay)} · ${row.periodStatus.replace('_', ' ')}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                rows.forEach { row ->
+                    HudCard {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Column(Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) { ChannelBadge(row.fundingChannel); Text(row.categoryName) }
+                                Text("Rencana ${displayMoney(row.plannedAmount, state.valuesVisible)}", style = MaterialTheme.typography.bodySmall)
+                                Text("Booking ${displayMoney(row.bookedAmount, state.valuesVisible)} · Terpakai ${displayMoney(row.spentAmount, state.valuesVisible)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("Sisa ${displayMoney(row.availableAmount, state.valuesVisible)}", style = MaterialTheme.typography.titleMedium, color = if (row.availableAmount < 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary)
+                            }
+                            Button(onClick = { correctionId = row.id; correctedAmount = row.plannedAmount.toString() }) { Text("Koreksi") }
+                        }
+                    }
+                }
+                if (selected != null) {
+                    Text("Koreksi jurnal", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.tertiary)
+                    MoneyField(correctedAmount, { correctedAmount = it }, "Nominal rencana baru")
+                    OutlinedTextField(reason, { reason = it }, label = { Text("Alasan koreksi") }, modifier = Modifier.fillMaxWidth())
+                    Text("Koreksi membuat event reversal/koreksi dan tidak menghapus jurnal lama.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onCorrect(requireNotNull(correctionId), money(correctedAmount), reason); onDismiss() }, enabled = validCorrection) { Text("Simpan koreksi") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Tutup") } },
+    )
 }
 
 @Composable

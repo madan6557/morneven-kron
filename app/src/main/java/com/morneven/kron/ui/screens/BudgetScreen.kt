@@ -42,6 +42,7 @@ fun BudgetScreen(
     onFund: (Long) -> Unit,
     onChannelTransfer: () -> Unit,
     onReleaseRollover: (String) -> Unit,
+    onDetail: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val grouped = state.allocations.groupBy { it.periodId }
@@ -139,6 +140,9 @@ fun BudgetScreen(
                             Text("booking ${displayMoney(row.bookedAmount, state.valuesVisible)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
+                }
+                Button(onClick = { onDetail(first.periodId) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                    Text("Lihat detail budget")
                 }
                 if (rows.any { it.availableAmount < 0 }) {
                     Button(onClick = onResolve, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {

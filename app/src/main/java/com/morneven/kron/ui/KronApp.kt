@@ -86,6 +86,7 @@ import androidx.navigation.compose.rememberNavController
 import com.morneven.kron.R
 import com.morneven.kron.ui.dialogs.AccountDialog
 import com.morneven.kron.ui.dialogs.AuditDialog
+import com.morneven.kron.ui.dialogs.BudgetDetailDialog
 import com.morneven.kron.ui.dialogs.ChannelTransferDialog
 import com.morneven.kron.ui.dialogs.ExpenseDialog
 import com.morneven.kron.ui.dialogs.IncomeDialog
@@ -207,6 +208,7 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
     val snackbar = remember { SnackbarHostState() }
     var dialog by remember { mutableStateOf<ActionDialog?>(null) }
     var auditId by remember { mutableStateOf<String?>(null) }
+    var detailPeriodId by remember { mutableStateOf<Long?>(null) }
     var passwordMode by remember { mutableStateOf<String?>(null) }
     var pendingPassword by remember { mutableStateOf<CharArray?>(null) }
     val backupLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
@@ -262,7 +264,7 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
                 )
             }
             composable("budget") {
-                BudgetScreen(state, { dialog = ActionDialog.PORTFOLIO }, { dialog = ActionDialog.RESOLVE }, viewModel::fundPeriod, { dialog = ActionDialog.CHANNEL_TRANSFER }, viewModel::releaseRolloverToVault)
+                BudgetScreen(state, { dialog = ActionDialog.PORTFOLIO }, { dialog = ActionDialog.RESOLVE }, viewModel::fundPeriod, { dialog = ActionDialog.CHANNEL_TRANSFER }, viewModel::releaseRolloverToVault, { detailPeriodId = it })
             }
             composable("activity") { ActivityScreen(state, { auditId = it }) }
             composable("reports") { ReportsScreen(state, onExport = { reportLauncher.launch("KRON-laporan-${LocalDate.now()}.csv") }) }
@@ -290,6 +292,7 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
         null -> Unit
     }
     auditId?.let { id -> state.activities.firstOrNull { it.id == id }?.let { event -> AuditDialog(event, state, { auditId = null }) { eventId, reason -> auditId = null; viewModel.reverseEvent(eventId, reason) } } }
+    detailPeriodId?.let { periodId -> BudgetDetailDialog(state, periodId, { detailPeriodId = null }, viewModel::correctAllocation) }
     passwordMode?.let { mode ->
         PasswordDialog(mode == "BACKUP", { passwordMode = null }) { password ->
             passwordMode = null

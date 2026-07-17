@@ -501,6 +501,28 @@ class KronRepository @Inject constructor(
         eventId
     }
 
+    suspend fun correctAllocation(allocationId: Long, newPlannedAmount: Long, note: String) = database.withTransaction {
+        require(newPlannedAmount >= 0) { "Nominal budget tidak boleh negatif" }
+        val allocation = requireNotNull(dao.allocationById(allocationId))
+        val oldPlanned = allocation.plannedAmount
+        val delta = newPlannedAmount - oldPlanned
+        require(delta != 0L) { "Tidak ada perubahan nominal" }
+        val spent = oldPlanned - dao.allocationAvailable(allocationId)
+        require(newPlannedAmount >= spent) { "Budget baru lebih kecil dari pengeluaran yang sudah tercatat" }
+        if (delta > 0) require(dao.vaultBalance(allocation.fundingChannel) >= delta) { "Main Vault tidak mencukupi untuk menambah budget" }
+        val eventId = UUID.randomUUID().toString()
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.REALLOCATION, "Koreksi budget", note, "USER", LocalDate.now().toEpochDay()))
+        dao.insertBudgetLines(listOf(
+            BudgetJournalLineEntity(eventId = eventId, allocationId = allocationId, fundingChannel = allocation.fundingChannel, amount = delta),
+            BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = allocation.fundingChannel, amount = -delta),
+        ))
+        dao.updateAllocation(allocation.copy(plannedAmount = newPlannedAmount))
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = note, beforeJson = "{\"planned\":$oldPlanned}", afterJson = "{\"planned\":$newPlannedAmount}"))
+        refreshPeriodStatus(allocation.periodId)
+        assertInvariant()
+        eventId
+    }
+
     suspend fun transferBookedChannel(
         sourceAllocationId: Long,
         fromAccountId: Long,

@@ -333,6 +333,10 @@ class MainViewModel @Inject constructor(
         repository.releaseRolloverToVault(channel)
     }
 
+    fun correctAllocation(allocationId: Long, newPlannedAmount: Long, note: String) = runAction("Koreksi budget tercatat") {
+        repository.correctAllocation(allocationId, newPlannedAmount, note)
+    }
+
     fun allocateUnallocated(targetId: Long, amount: Long, note: String) = runAction("Pengeluaran berhasil dialokasikan") {
         repository.allocateUnallocated(targetId, amount, note)
     }
