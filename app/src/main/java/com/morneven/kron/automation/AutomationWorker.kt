@@ -1,0 +1,28 @@
+package com.morneven.kron.automation
+
+import android.content.Context
+import androidx.work.CoroutineWorker
+import androidx.work.WorkerParameters
+import com.morneven.kron.data.KronDatabase
+import com.morneven.kron.data.KronRepository
+import com.morneven.kron.data.TransactionDirection
+
+class AutomationWorker(
+    appContext: Context,
+    workerParams: WorkerParameters,
+) : CoroutineWorker(appContext, workerParams) {
+    override suspend fun doWork(): Result = runCatching {
+        val database = KronDatabase.getInstance(applicationContext)
+        KronRepository(database).apply {
+            seedIfNeeded()
+            processDueRules(direction = TransactionDirection.INCOME)
+            reconcilePortfolios()
+            processDueRules(direction = TransactionDirection.EXPENSE)
+        }
+    }.fold(onSuccess = { Result.success() }, onFailure = { Result.retry() })
+
+    companion object {
+        const val UNIQUE_WORK_NAME = "kron_daily_reconciliation"
+        const val CHANNEL_ID = "kron_finance_activity"
+    }
+}

@@ -1,0 +1,403 @@
+package com.morneven.kron.data
+
+import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Index
+import androidx.room.PrimaryKey
+
+object LedgerType {
+    const val OPENING_BALANCE = "OPENING_BALANCE"
+    const val INCOME = "INCOME"
+    const val EXPENSE = "EXPENSE"
+    const val TRANSFER = "TRANSFER"
+    const val CHANNEL_TRANSFER = "CHANNEL_TRANSFER"
+    const val PORTFOLIO_BOOKING = "PORTFOLIO_BOOKING"
+    const val REALLOCATION = "REALLOCATION"
+    const val OVERBUDGET_COVERAGE = "OVERBUDGET_COVERAGE"
+    const val RELEASE = "RELEASE"
+    const val ROLLOVER = "ROLLOVER"
+    const val REVERSAL = "REVERSAL"
+    const val AUTOMATION = "AUTOMATION"
+    const val IMPORT = "IMPORT"
+}
+
+object BudgetBucket {
+    const val VAULT = "VAULT"
+    const val UNALLOCATED = "UNALLOCATED"
+    const val ROLLOVER = "ROLLOVER"
+    const val EXTERNAL = "EXTERNAL"
+}
+
+object FundingChannel {
+    const val CASH = "CASH"
+    const val EBUDGET = "EBUDGET"
+}
+
+object PeriodStatus {
+    const val DRAFT = "DRAFT"
+    const val UNDERFUNDED = "UNDERFUNDED"
+    const val ACTIVE = "ACTIVE"
+    const val RESOLUTION_REQUIRED = "RESOLUTION_REQUIRED"
+    const val CLOSED = "CLOSED"
+}
+
+object TransactionDirection {
+    const val INCOME = "INCOME"
+    const val EXPENSE = "EXPENSE"
+}
+
+@Entity(tableName = "accounts")
+data class AccountEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val type: String,
+    val fundingChannel: String,
+    val isArchived: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+@Entity(tableName = "categories")
+data class CategoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val direction: String,
+    val color: Long,
+    val icon: String,
+    val isArchived: Boolean = false,
+)
+
+@Entity(tableName = "portfolios")
+data class PortfolioEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val cadence: String,
+    val intervalCount: Int = 1,
+    val plannedIncome: Long,
+    val rolloverEnabled: Boolean,
+    val fundingPriority: Int,
+    val startEpochDay: Long,
+    val endMode: String,
+    val endValue: Long? = null,
+    val isPaused: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+@Entity(
+    tableName = "budget_periods",
+    foreignKeys = [ForeignKey(
+        entity = PortfolioEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["portfolioId"],
+        onDelete = ForeignKey.RESTRICT,
+    )],
+    indices = [Index("portfolioId"), Index(value = ["portfolioId", "startEpochDay"], unique = true)],
+)
+data class BudgetPeriodEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val portfolioId: Long,
+    val startEpochDay: Long,
+    val endEpochDay: Long,
+    val status: String,
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+@Entity(
+    tableName = "allocations",
+    foreignKeys = [
+        ForeignKey(
+            entity = BudgetPeriodEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["periodId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+        ForeignKey(
+            entity = CategoryEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["categoryId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+    ],
+    indices = [Index("periodId"), Index("categoryId"), Index(value = ["periodId", "categoryId", "fundingChannel"], unique = true)],
+)
+data class AllocationEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val periodId: Long,
+    val categoryId: Long,
+    val fundingChannel: String,
+    val plannedAmount: Long,
+)
+
+@Entity(
+    tableName = "portfolio_allocation_templates",
+    foreignKeys = [
+        ForeignKey(
+            entity = PortfolioEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["portfolioId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+        ForeignKey(
+            entity = CategoryEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["categoryId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+    ],
+    indices = [Index("portfolioId"), Index("categoryId"), Index(value = ["portfolioId", "categoryId"], unique = true)],
+)
+data class PortfolioAllocationTemplateEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val portfolioId: Long,
+    val categoryId: Long,
+    val plannedAmount: Long,
+    val cashPercentage: Int,
+)
+
+@Entity(
+    tableName = "activity_events",
+    indices = [Index("effectiveEpochDay"), Index("relatedEventId")],
+)
+data class ActivityEventEntity(
+    @PrimaryKey val id: String,
+    val type: String,
+    val title: String,
+    val note: String,
+    val source: String,
+    val effectiveEpochDay: Long,
+    val createdAt: Long = System.currentTimeMillis(),
+    val relatedEventId: String? = null,
+    val reversedByEventId: String? = null,
+)
+
+@Entity(
+    tableName = "cash_journal_lines",
+    foreignKeys = [
+        ForeignKey(
+            entity = ActivityEventEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["eventId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+        ForeignKey(
+            entity = AccountEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["accountId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+    ],
+    indices = [Index("eventId"), Index("accountId")],
+)
+data class CashJournalLineEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val eventId: String,
+    val accountId: Long,
+    val amount: Long,
+)
+
+@Entity(
+    tableName = "budget_journal_lines",
+    foreignKeys = [
+        ForeignKey(
+            entity = ActivityEventEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["eventId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+        ForeignKey(
+            entity = AllocationEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["allocationId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+    ],
+    indices = [Index("eventId"), Index("allocationId"), Index("bucket")],
+)
+data class BudgetJournalLineEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val eventId: String,
+    val allocationId: Long? = null,
+    val bucket: String? = null,
+    val fundingChannel: String,
+    val amount: Long,
+)
+
+@Entity(
+    tableName = "transaction_splits",
+    foreignKeys = [
+        ForeignKey(
+            entity = ActivityEventEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["eventId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+        ForeignKey(
+            entity = CategoryEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["categoryId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+        ForeignKey(
+            entity = AllocationEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["allocationId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+    ],
+    indices = [Index("eventId"), Index("categoryId"), Index("allocationId")],
+)
+data class TransactionSplitEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val eventId: String,
+    val categoryId: Long?,
+    val allocationId: Long?,
+    val amount: Long,
+)
+
+@Entity(
+    tableName = "recurring_rules",
+    foreignKeys = [
+        ForeignKey(
+            entity = AccountEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["accountId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+        ForeignKey(
+            entity = CategoryEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["categoryId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+        ForeignKey(
+            entity = AllocationEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["allocationId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+    ],
+    indices = [Index("accountId"), Index("categoryId"), Index("allocationId")],
+)
+data class RecurringRuleEntity(
+    @PrimaryKey val id: String,
+    val title: String,
+    val direction: String,
+    val amount: Long,
+    val accountId: Long,
+    val categoryId: Long?,
+    val allocationId: Long?,
+    val cadence: String,
+    val intervalCount: Int = 1,
+    val anchorMonth: Int,
+    val anchorDay: Int,
+    val startEpochDay: Long,
+    val nextEpochDay: Long,
+    val endEpochDay: Long? = null,
+    val remainingOccurrences: Int? = null,
+    val isPaused: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+@Entity(
+    tableName = "recurring_occurrences",
+    foreignKeys = [ForeignKey(
+        entity = RecurringRuleEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["ruleId"],
+        onDelete = ForeignKey.RESTRICT,
+    )],
+    indices = [Index("ruleId"), Index(value = ["ruleId", "dueEpochDay"], unique = true)],
+)
+data class RecurringOccurrenceEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val ruleId: String,
+    val dueEpochDay: Long,
+    val eventId: String,
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+@Entity(
+    tableName = "audit_snapshots",
+    foreignKeys = [ForeignKey(
+        entity = ActivityEventEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["eventId"],
+        onDelete = ForeignKey.RESTRICT,
+    )],
+    indices = [Index("eventId")],
+)
+data class AuditSnapshotEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val eventId: String,
+    val reason: String,
+    val beforeJson: String,
+    val afterJson: String,
+)
+
+@Entity(
+    tableName = "receipts",
+    foreignKeys = [ForeignKey(
+        entity = ActivityEventEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["eventId"],
+        onDelete = ForeignKey.RESTRICT,
+    )],
+    indices = [Index("eventId")],
+)
+data class ReceiptEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val eventId: String,
+    val localPath: String,
+    val mimeType: String,
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+data class AccountBalanceRow(
+    val id: Long,
+    val name: String,
+    val type: String,
+    val fundingChannel: String,
+    val balance: Long,
+)
+
+data class AllocationBalanceRow(
+    val id: Long,
+    val periodId: Long,
+    val portfolioId: Long,
+    val portfolioName: String,
+    val categoryId: Long,
+    val categoryName: String,
+    val color: Long,
+    val fundingChannel: String,
+    val plannedAmount: Long,
+    val bookedAmount: Long,
+    val availableAmount: Long,
+    val spentAmount: Long,
+    val periodStatus: String,
+    val startEpochDay: Long,
+    val endEpochDay: Long,
+)
+
+data class ActivityRow(
+    val id: String,
+    val type: String,
+    val title: String,
+    val note: String,
+    val source: String,
+    val effectiveEpochDay: Long,
+    val createdAt: Long,
+    val relatedEventId: String?,
+    val reversedByEventId: String?,
+    val cashImpact: Long,
+    val vaultImpact: Long,
+    val budgetImpact: Long,
+)
+
+data class CashflowRow(
+    val income: Long,
+    val expense: Long,
+)
+
+data class ChannelBalanceRow(
+    val fundingChannel: String,
+    val balance: Long,
+)

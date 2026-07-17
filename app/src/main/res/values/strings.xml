@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">KRON</string>
+    <string name="notification_channel_name">Aktivitas Keuangan</string>
+    <string name="notification_channel_description">Pengingat budget dan transaksi otomatis KRON</string>
+</resources>
+
