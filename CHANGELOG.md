@@ -1,5 +1,10 @@
 # KRON Changelog
 
+## 1.0.18 - 2026-07-17
+
+- Menyesuaikan arah slide halaman berdasarkan urutan menu navigasi.
+- Perpindahan ke menu di kanan bergerak dari kanan ke kiri, dan sebaliknya.
+
 ## 1.0.17 - 2026-07-17
 
 - Mengganti transisi antar halaman dari fade menjadi slide horizontal ringan.

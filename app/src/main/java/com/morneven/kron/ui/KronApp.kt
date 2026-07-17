@@ -117,6 +117,8 @@ private val destinations = listOf(
     Destination("settings", "Pengaturan", Icons.Outlined.Settings),
 )
 
+private fun routePosition(route: String?): Int = destinations.indexOfFirst { it.route == route }.takeIf { it >= 0 } ?: 0
+
 @Composable
 fun KronApp(viewModel: MainViewModel, activity: FragmentActivity) {
     val state by viewModel.uiState.collectAsState()
@@ -269,10 +271,22 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
             navController,
             startDestination = "home",
             modifier = Modifier.padding(padding),
-            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(220)) },
-            exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(220)) },
-            popEnterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(220)) },
-            popExitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(220)) },
+            enterTransition = {
+                val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) AnimatedContentTransitionScope.SlideDirection.Left else AnimatedContentTransitionScope.SlideDirection.Right
+                slideIntoContainer(direction, tween(220))
+            },
+            exitTransition = {
+                val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) AnimatedContentTransitionScope.SlideDirection.Left else AnimatedContentTransitionScope.SlideDirection.Right
+                slideOutOfContainer(direction, tween(220))
+            },
+            popEnterTransition = {
+                val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) AnimatedContentTransitionScope.SlideDirection.Left else AnimatedContentTransitionScope.SlideDirection.Right
+                slideIntoContainer(direction, tween(220))
+            },
+            popExitTransition = {
+                val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) AnimatedContentTransitionScope.SlideDirection.Left else AnimatedContentTransitionScope.SlideDirection.Right
+                slideOutOfContainer(direction, tween(220))
+            },
         ) {
             composable("home") {
                 HomeScreen(
