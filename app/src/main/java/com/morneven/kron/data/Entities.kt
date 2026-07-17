@@ -20,6 +20,7 @@ object LedgerType {
     const val AUTOMATION = "AUTOMATION"
     const val IMPORT = "IMPORT"
     const val SYSTEM = "SYSTEM"
+    const val UNEXPECTED_EXPENSE = "UNEXPECTED_EXPENSE"
 }
 
 object BudgetBucket {
@@ -168,6 +169,7 @@ data class ActivityEventEntity(
     val createdAt: Long = System.currentTimeMillis(),
     val relatedEventId: String? = null,
     val reversedByEventId: String? = null,
+    val targetAllocationId: Long? = null,
 )
 
 @Entity(

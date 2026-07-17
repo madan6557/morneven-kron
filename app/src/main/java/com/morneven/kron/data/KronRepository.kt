@@ -132,8 +132,9 @@ class KronRepository @Inject constructor(
         title: String,
         note: String,
         effectiveDate: LocalDate = LocalDate.now(),
+        targetAllocationId: Long? = null,
     ) = database.withTransaction {
-        val eventId = postIncomeInternal(accountId, amount, categoryId, title, note, effectiveDate, LedgerType.INCOME, "USER")
+        val eventId = postIncomeInternal(accountId, amount, categoryId, title, note, effectiveDate, LedgerType.INCOME, "USER", targetAllocationId)
         assertInvariant()
         eventId
     }
@@ -147,6 +148,7 @@ class KronRepository @Inject constructor(
         effectiveDate: LocalDate,
         eventType: String,
         source: String,
+        targetAllocationId: Long? = null,
     ): String {
         require(amount > 0) { "Nominal harus lebih dari nol" }
         val channel = requireNotNull(dao.accountById(accountId)).fundingChannel
@@ -158,6 +160,7 @@ class KronRepository @Inject constructor(
             note = note,
             source = source,
             effectiveEpochDay = effectiveDate.toEpochDay(),
+            targetAllocationId = targetAllocationId,
         ))
         dao.insertCashLines(listOf(CashJournalLineEntity(eventId = eventId, accountId = accountId, amount = amount)))
         dao.insertBudgetLines(listOf(
@@ -180,9 +183,10 @@ class KronRepository @Inject constructor(
         splits: List<ExpenseSplitInput>,
         title: String,
         note: String,
+        unexpected: Boolean = false,
         effectiveDate: LocalDate = LocalDate.now(),
     ) = database.withTransaction {
-        val eventId = postExpenseInternal(accountId, amount, splits, title, note, effectiveDate, LedgerType.EXPENSE, "USER")
+        val eventId = postExpenseInternal(accountId, amount, splits, title, note, effectiveDate, if (unexpected) LedgerType.UNEXPECTED_EXPENSE else LedgerType.EXPENSE, "USER", unexpected)
         assertInvariant()
         eventId
     }
@@ -196,12 +200,14 @@ class KronRepository @Inject constructor(
         effectiveDate: LocalDate,
         eventType: String,
         source: String,
+        unexpected: Boolean = false,
     ): String {
         require(amount > 0) { "Nominal harus lebih dari nol" }
         require(splits.isNotEmpty() && splits.all { it.amount > 0 } && splits.sumOf { it.amount } == amount) {
             "Total split harus sama dengan nominal transaksi"
         }
         val channel = requireNotNull(dao.accountById(accountId)).fundingChannel
+        if (unexpected) require(channel == FundingChannel.CASH) { "Pengeluaran tak terduga hanya memakai Cash" }
         val effectiveSplits = splits.map { split ->
             val allocation = split.allocationId?.let { dao.allocationById(it) }
             val period = allocation?.let { dao.periodById(it.periodId) }
@@ -220,7 +226,7 @@ class KronRepository @Inject constructor(
             effectiveEpochDay = effectiveDate.toEpochDay(),
         ))
         dao.insertCashLines(listOf(CashJournalLineEntity(eventId = eventId, accountId = accountId, amount = -amount)))
-        val budgetLines = effectiveSplits.map { split ->
+        val budgetLines = if (unexpected) emptyList() else effectiveSplits.map { split ->
             if (split.allocationId != null) {
                 BudgetJournalLineEntity(eventId = eventId, allocationId = split.allocationId, fundingChannel = channel, amount = -split.amount)
             } else {
@@ -649,7 +655,7 @@ class KronRepository @Inject constructor(
                 }
                 val dueDate = LocalDate.ofEpochDay(next.nextEpochDay)
                 val eventId = if (next.direction == TransactionDirection.INCOME) {
-                    postIncomeInternal(next.accountId, next.amount, next.categoryId, next.title, "Dibuat otomatis", dueDate, LedgerType.AUTOMATION, "SYSTEM")
+                    postIncomeInternal(next.accountId, next.amount, next.categoryId, next.title, "Dibuat otomatis", dueDate, LedgerType.AUTOMATION, "SYSTEM", next.allocationId)
                 } else {
                     postExpenseInternal(next.accountId, next.amount, listOf(ExpenseSplitInput(next.categoryId, next.allocationId, next.amount)), next.title, "Dibuat otomatis", dueDate, LedgerType.AUTOMATION, "SYSTEM")
                 }

@@ -60,7 +60,7 @@ fun HomeScreen(
     onTransfer: () -> Unit,
     onResolve: () -> Unit,
     onAllActivities: () -> Unit,
-    onPauseRule: (String) -> Unit,
+    onPauseRule: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val visible = state.valuesVisible

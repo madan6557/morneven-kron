@@ -1,5 +1,13 @@
 # KRON Changelog
 
+## 1.0.13 - 2026-07-17
+
+- Menambahkan throttling autentikasi, target budget pemasukan, dan mode pengeluaran tak terduga.
+- Menghapus FAB pengeluaran global dan memperjelas alur form pengeluaran serta transfer.
+- Menambahkan grafik cash flow interaktif, filter rentang, dan rincian aktual per budget.
+- Menambahkan konfirmasi beralasan untuk menghentikan portfolio atau jadwal otomatis.
+- Menampilkan nomor versi dinamis pada Pengaturan.
+
 ## 1.0.12 - 2026-07-17
 
 - Menambahkan tombol Hentikan jadwal pada transaksi otomatis.

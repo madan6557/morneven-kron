@@ -56,6 +56,8 @@ data class KronUiState(
     val appLockEnabled: Boolean = false,
     val theme: String = "DARK",
     val onboardingComplete: Boolean = false,
+    val authFailures: Int = 0,
+    val authLockedUntil: Long = 0L,
     val message: String? = null,
 ) {
     val totalAssets: Long get() = accountBalances.sumOf { it.balance }
@@ -88,6 +90,8 @@ private data class PreferenceSlice(
     val appLock: Boolean,
     val theme: String,
     val onboarding: Boolean,
+    val authFailures: Int = 0,
+    val authLockedUntil: Long = 0L,
 )
 
 @HiltViewModel
@@ -126,22 +130,24 @@ class MainViewModel @Inject constructor(
         MetadataSlice(accounts, categories, portfolios, periods, unallocated.associate { it.fundingChannel to it.balance })
     }
 
+    private val visibilityPreference = combine(sessionVisibility, preferences.rememberVisibility, preferences.rememberedVisibility) { session, remember, remembered -> Triple(session, remember, remembered) }
+    private val authPreference = combine(preferences.authFailures, preferences.authLockedUntil) { failures, lockedUntil -> failures to lockedUntil }
     private val preferenceState = combine(
-        sessionVisibility,
-        preferences.rememberVisibility,
-        preferences.rememberedVisibility,
+        visibilityPreference,
         preferences.appLockEnabled,
         preferences.theme,
-    ) { session, remember, remembered, appLock, theme ->
+        authPreference,
+        preferences.onboardingComplete,
+    ) { visibility, appLock, theme, auth, onboarding ->
         PreferenceSlice(
-            visible = session ?: remembered,
-            remember = remember,
+            visible = visibility.first ?: visibility.third,
+            remember = visibility.second,
             appLock = appLock,
             theme = theme,
-            onboarding = false,
+            onboarding = onboarding,
+            authFailures = auth.first,
+            authLockedUntil = auth.second,
         )
-    }.combine(preferences.onboardingComplete) { prefs, onboarding ->
-        prefs.copy(onboarding = onboarding)
     }
 
     val uiState: StateFlow<KronUiState> = combine(ledger, metadata, cashflow, preferenceState, message) { ledger, metadata, cashflow, prefs, message ->
@@ -167,6 +173,8 @@ class MainViewModel @Inject constructor(
             theme = prefs.theme,
             onboardingComplete = prefs.onboarding,
             message = message,
+            authFailures = prefs.authFailures,
+            authLockedUntil = prefs.authLockedUntil,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), KronUiState())
 
@@ -191,6 +199,9 @@ class MainViewModel @Inject constructor(
     fun hideValuesForLock() {
         sessionVisibility.value = false
     }
+
+    fun recordAuthFailure() = viewModelScope.launch { preferences.recordAuthFailure() }
+    fun resetAuthFailures() = viewModelScope.launch { preferences.resetAuthFailures() }
 
     fun restoreRememberedVisibility() = viewModelScope.launch {
         sessionVisibility.value = preferences.rememberedVisibility.first()
@@ -228,6 +239,7 @@ class MainViewModel @Inject constructor(
         accountId: Long,
         amount: Long,
         categoryId: Long?,
+        targetAllocationId: Long? = null,
         title: String,
         note: String,
         recurring: String? = null,
@@ -239,7 +251,7 @@ class MainViewModel @Inject constructor(
         require(intervalCount > 0) { "Interval harus minimal 1" }
         require(endDate == null || !endDate.isBefore(startDate)) { "Tanggal akhir tidak boleh sebelum tanggal mulai" }
         if (recurring == null || recordNow) {
-            repository.addIncome(accountId, amount, categoryId, title, note)
+            repository.addIncome(accountId, amount, categoryId, title, note, targetAllocationId = targetAllocationId)
         }
         if (recurring != null) {
             val today = LocalDate.now()
@@ -254,7 +266,7 @@ class MainViewModel @Inject constructor(
                 amount = amount,
                 accountId = accountId,
                 categoryId = categoryId,
-                allocationId = null,
+                allocationId = targetAllocationId,
                 cadence = recurring,
                 intervalCount = intervalCount,
                 anchorMonth = startDate.monthValue,
@@ -273,6 +285,7 @@ class MainViewModel @Inject constructor(
         splits: List<ExpenseSplitInput>,
         title: String,
         note: String,
+        unexpected: Boolean = false,
         recurring: String? = null,
         startDate: LocalDate = LocalDate.now(),
         endDate: LocalDate? = null,
@@ -281,8 +294,8 @@ class MainViewModel @Inject constructor(
     ) = runAction("Pengeluaran tercatat") {
         require(intervalCount > 0) { "Interval harus minimal 1" }
         require(endDate == null || !endDate.isBefore(startDate)) { "Tanggal akhir tidak boleh sebelum tanggal mulai" }
-        if (recurring == null || recordNow) repository.addExpense(accountId, amount, splits, title, note)
-        if (recurring != null && splits.size == 1) {
+        if (recurring == null || recordNow) repository.addExpense(accountId, amount, splits, title, note, unexpected)
+        if (recurring != null && splits.size == 1 && !unexpected) {
             val today = LocalDate.now()
             val first = if (recordNow) {
                 ScheduleCalculator.firstAfter(startDate, today, recurring, intervalCount)
@@ -321,8 +334,8 @@ class MainViewModel @Inject constructor(
     }
 
     fun fundPeriod(periodId: Long) = runAction("Portfolio aktif") { repository.fundUnderfundedPeriod(periodId) }
-    fun pausePortfolio(portfolioId: Long) = runAction("Portfolio dihentikan") { repository.pausePortfolio(portfolioId) }
-    fun pauseRecurringRule(ruleId: String) = runAction("Jadwal transaksi dihentikan") { repository.pauseRecurringRule(ruleId) }
+    fun pausePortfolio(portfolioId: Long, reason: String) = runAction("Portfolio dihentikan") { repository.pausePortfolio(portfolioId, reason) }
+    fun pauseRecurringRule(ruleId: String, reason: String) = runAction("Jadwal transaksi dihentikan") { repository.pauseRecurringRule(ruleId, reason) }
 
     fun resolveFromAllocation(sourceId: Long, targetId: Long, amount: Long, note: String) = runAction("Budget minus berhasil diselesaikan") {
         repository.resolveFromAllocation(sourceId, targetId, amount, note)

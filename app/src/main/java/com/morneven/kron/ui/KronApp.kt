@@ -105,6 +105,7 @@ import java.time.LocalDate
 private enum class ActionDialog { INCOME, EXPENSE, TRANSFER, PORTFOLIO, RESOLVE, CHANNEL_TRANSFER, ACCOUNT }
 
 private data class Destination(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector)
+private data class CriticalAction(val title: String, val summary: String, val onConfirm: (String) -> Unit)
 
 private val destinations = listOf(
     Destination("home", "Beranda", Icons.Outlined.Home),
@@ -151,12 +152,22 @@ fun KronApp(viewModel: MainViewModel, activity: FragmentActivity) {
         val lifecycleOwner = LocalLifecycleOwner.current
         val authenticate = remember(activity) {
             {
+                if (System.currentTimeMillis() < state.authLockedUntil) {
+                    lockError = "Terlalu banyak percobaan. Coba lagi nanti."
+                    return@remember
+                }
                 val executor = ContextCompat.getMainExecutor(activity)
                 val prompt = BiometricPrompt(activity, executor, object : BiometricPrompt.AuthenticationCallback() {
                     override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                         locked = false
                         lockError = null
+                        viewModel.resetAuthFailures()
                         viewModel.restoreRememberedVisibility()
+                    }
+
+                    override fun onAuthenticationFailed() {
+                        viewModel.recordAuthFailure()
+                        lockError = "Autentikasi gagal (${state.authFailures + 1}/5)."
                     }
 
                     override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
@@ -194,7 +205,7 @@ fun KronApp(viewModel: MainViewModel, activity: FragmentActivity) {
             onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
         }
         if (locked) {
-            LockScreen(lockError, authenticate)
+            LockScreen(lockError, state.authFailures, state.authLockedUntil, authenticate)
         } else {
             MainScaffold(state, viewModel)
         }
@@ -211,6 +222,8 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
     var auditId by remember { mutableStateOf<String?>(null) }
     var detailPeriodId by remember { mutableStateOf<Long?>(null) }
     var passwordMode by remember { mutableStateOf<String?>(null) }
+    var criticalAction by remember { mutableStateOf<CriticalAction?>(null) }
+    var criticalReason by remember { mutableStateOf("") }
     var pendingPassword by remember { mutableStateOf<CharArray?>(null) }
     val backupLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         val password = pendingPassword
@@ -246,9 +259,7 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
             }
         },
         floatingActionButton = {
-            if (current != "settings") FloatingActionButton(onClick = { dialog = ActionDialog.EXPENSE }) {
-                Icon(Icons.Outlined.Add, contentDescription = "Tambah transaksi")
-            }
+            Unit
         },
         contentWindowInsets = WindowInsets.systemBars,
     ) { padding ->
@@ -262,11 +273,11 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
                     { dialog = ActionDialog.TRANSFER },
                     { dialog = ActionDialog.RESOLVE },
                     { navController.navigate("activity") },
-                    viewModel::pauseRecurringRule,
+                    { ruleId -> criticalAction = CriticalAction("Hentikan jadwal otomatis", "Occurrence berikutnya tidak akan dibuat. Riwayat lama tetap tersimpan.") { viewModel.pauseRecurringRule(ruleId, it) }; criticalReason = "" },
                 )
             }
             composable("budget") {
-                BudgetScreen(state, { dialog = ActionDialog.PORTFOLIO }, { dialog = ActionDialog.RESOLVE }, viewModel::fundPeriod, { dialog = ActionDialog.CHANNEL_TRANSFER }, viewModel::releaseRolloverToVault, { detailPeriodId = it }, viewModel::pausePortfolio)
+                BudgetScreen(state, { dialog = ActionDialog.PORTFOLIO }, { dialog = ActionDialog.RESOLVE }, viewModel::fundPeriod, { dialog = ActionDialog.CHANNEL_TRANSFER }, viewModel::releaseRolloverToVault, { detailPeriodId = it }, { portfolioId -> criticalAction = CriticalAction("Hentikan portfolio", "Periode baru tidak akan dibuat. Jurnal dan periode lama tetap tersimpan.") { viewModel.pausePortfolio(portfolioId, it) }; criticalReason = "" })
             }
             composable("activity") { ActivityScreen(state, { auditId = it }) }
             composable("reports") { ReportsScreen(state, onExport = { reportLauncher.launch("KRON-laporan-${LocalDate.now()}.csv") }) }
@@ -284,8 +295,8 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
         }
     }
     when (dialog) {
-        ActionDialog.INCOME -> IncomeDialog(state, { dialog = null }) { account, amount, category, title, note, recurring, startDate, endDate, interval, recordNow -> dialog = null; viewModel.addIncome(account, amount, category, title, note, recurring, startDate, endDate, interval, recordNow) }
-        ActionDialog.EXPENSE -> ExpenseDialog(state, { dialog = null }) { account, amount, splits, title, note, recurring, startDate, endDate, interval, recordNow -> dialog = null; viewModel.addExpense(account, amount, splits, title, note, recurring, startDate, endDate, interval, recordNow) }
+        ActionDialog.INCOME -> IncomeDialog(state, { dialog = null }) { account, amount, category, target, title, note, recurring, startDate, endDate, interval, recordNow -> dialog = null; viewModel.addIncome(account, amount, category, target, title, note, recurring, startDate, endDate, interval, recordNow) }
+        ActionDialog.EXPENSE -> ExpenseDialog(state, { dialog = null }) { account, amount, splits, title, note, unexpected, recurring, startDate, endDate, interval, recordNow -> dialog = null; viewModel.addExpense(account, amount, splits, title, note, unexpected, recurring, startDate, endDate, interval, recordNow) }
         ActionDialog.TRANSFER -> TransferDialog(state, { dialog = null }) { from, to, amount, note -> dialog = null; viewModel.transfer(from, to, amount, note) }
         ActionDialog.PORTFOLIO -> PortfolioDialog(state, { dialog = null }) { name, cadence, income, rollover, drafts, startDate, endDate, interval -> dialog = null; viewModel.createPortfolio(name, cadence, income, rollover, drafts, startDate, endDate, interval) }
         ActionDialog.RESOLVE -> ResolveDialog(state, { dialog = null }, { source, target, amount, note -> dialog = null; viewModel.resolveFromAllocation(source, target, amount, note) }, { target, amount, note -> dialog = null; viewModel.resolveFromVault(target, amount, note) }, { target, amount, note -> dialog = null; viewModel.resolveFromRollover(target, amount, note) }, { target, amount, note -> dialog = null; viewModel.allocateUnallocated(target, amount, note) })
@@ -303,10 +314,24 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
             else restoreLauncher.launch(arrayOf("application/octet-stream", "application/zip", "*/*"))
         }
     }
+    criticalAction?.let { action ->
+        AlertDialog(
+            onDismissRequest = { criticalAction = null },
+            title = { Text(action.title) },
+            text = {
+                Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)) {
+                    Text(action.summary)
+                    OutlinedTextField(criticalReason, { criticalReason = it }, label = { Text("Alasan wajib") }, modifier = Modifier.fillMaxWidth())
+                }
+            },
+            confirmButton = { Button(onClick = { action.onConfirm(criticalReason); criticalAction = null }, enabled = criticalReason.isNotBlank()) { Text("Konfirmasi") } },
+            dismissButton = { TextButton(onClick = { criticalAction = null }) { Text("Batal") } },
+        )
+    }
 }
 
 @Composable
-private fun LockScreen(error: String?, onUnlock: () -> Unit) {
+private fun LockScreen(error: String?, failures: Int, lockedUntil: Long, onUnlock: () -> Unit) {
     val primary = MaterialTheme.colorScheme.primary
     val tertiary = MaterialTheme.colorScheme.tertiary
     Box(
@@ -372,6 +397,9 @@ private fun LockScreen(error: String?, onUnlock: () -> Unit) {
                     ) {
                         Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center, modifier = Modifier.padding(12.dp))
                     }
+                }
+                if (failures > 0 && lockedUntil <= System.currentTimeMillis()) {
+                    Text("Percobaan gagal: $failures/5", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
                 }
                 Spacer(Modifier.height(if (error == null) 22.dp else 14.dp))
                 Button(
