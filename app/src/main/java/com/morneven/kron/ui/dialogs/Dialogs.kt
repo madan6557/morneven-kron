@@ -136,8 +136,10 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Lo
                 }
                 val visibleCategories = if (!unexpected && split.allocationId != null) categories.filter { it.id == split.categoryId } else categories
                 ChoiceField("Kategori", split.categoryId, visibleCategories, { it.id }, { it.name }) { value -> splits[index] = split.copy(categoryId = value) }
-                val allocations = state.allocations.filter { it.categoryId == split.categoryId && it.fundingChannel == accountChannel && it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") }
+                if (false) {
+                    val allocations = state.allocations.filter { it.categoryId == split.categoryId && it.fundingChannel == accountChannel && it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") }
                 ChoiceFieldNullable("Budget", split.allocationId, allocations, { it.id }, { "${it.portfolioName} · ${displayMoney(it.availableAmount, state.valuesVisible)}" }, "Belum teralokasi") { value -> splits[index] = split.copy(allocationId = value) }
+                }
                 MoneyField(split.amount, { value -> splits[index] = split.copy(amount = value) }, "Nominal bagian")
             }
         }

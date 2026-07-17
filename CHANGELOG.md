@@ -1,5 +1,9 @@
 # KRON Changelog
 
+## 1.0.14 - 2026-07-17
+
+- Merapikan form pengeluaran agar hanya menampilkan pemilihan alokasi budget baru.
+
 ## 1.0.13 - 2026-07-17
 
 - Menambahkan throttling autentikasi, target budget pemasukan, dan mode pengeluaran tak terduga.
