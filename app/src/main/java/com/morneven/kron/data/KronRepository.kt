@@ -206,7 +206,9 @@ class KronRepository @Inject constructor(
         require(splits.isNotEmpty() && splits.all { it.amount > 0 } && splits.sumOf { it.amount } == amount) {
             "Total split harus sama dengan nominal transaksi"
         }
-        val channel = requireNotNull(dao.accountById(accountId)).fundingChannel
+        val account = requireNotNull(dao.accountById(accountId))
+        require(dao.accountBalance(accountId) >= amount) { "Saldo akun tidak mencukupi untuk pengeluaran ini" }
+        val channel = account.fundingChannel
         if (unexpected) require(channel == FundingChannel.CASH) { "Pengeluaran tak terduga hanya memakai Cash" }
         val effectiveSplits = splits.map { split ->
             val allocation = split.allocationId?.let { dao.allocationById(it) }

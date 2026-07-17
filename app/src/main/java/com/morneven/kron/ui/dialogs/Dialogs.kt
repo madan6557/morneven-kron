@@ -106,10 +106,12 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Lo
     var unexpected by remember { mutableStateOf(false) }
     val splits = remember { mutableStateListOf(SplitDraft(null, null, "")) }
     val accountChannel = accounts.firstOrNull { it.id == accountId }?.fundingChannel
+    val accountBalance = state.accountBalances.firstOrNull { it.id == accountId }?.balance ?: 0L
     val splitTotal = splits.sumOf { money(it.amount) }
     val activeAllocations = state.allocations.filter { it.fundingChannel == accountChannel && it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") }
     val validBudgetSplits = unexpected || splits.all { it.allocationId != null && it.categoryId != null }
-    FormDialog("Catat pengeluaran", onDismiss, confirmEnabled = accountId != null && splitTotal > 0 && splits.all { money(it.amount) > 0 } && validBudgetSplits && intervalCount > 0 && (endDate == null || !endDate!!.isBefore(startDate)), onConfirm = {
+    val enoughBalance = splitTotal <= accountBalance
+    FormDialog("Catat pengeluaran", onDismiss, confirmEnabled = accountId != null && splitTotal > 0 && enoughBalance && splits.all { money(it.amount) > 0 } && validBudgetSplits && intervalCount > 0 && (endDate == null || !endDate!!.isBefore(startDate)), onConfirm = {
         onSubmit(requireNotNull(accountId), splitTotal, splits.map { ExpenseSplitInput(it.categoryId, if (unexpected) null else it.allocationId, money(it.amount)) }, title, note, unexpected, recurring, startDate, endDate, intervalCount, recordNow)
     }) {
         ChoiceField("Akun pembayaran", accountId, accounts, { it.id }, { "${it.name} · ${channelLabel(it.fundingChannel)}" }) {
@@ -148,6 +150,9 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Lo
             Text("Tambah split")
         }
         Text("Total ${displayMoney(splitTotal, state.valuesVisible)}", style = MaterialTheme.typography.titleMedium)
+        if (splitTotal > accountBalance && splitTotal > 0) {
+            Text("Saldo akun tidak mencukupi. Tersedia ${displayMoney(accountBalance, state.valuesVisible)}.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
         OutlinedTextField(title, { title = it }, label = { Text("Judul") }, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(note, { note = it }, label = { Text("Catatan") }, modifier = Modifier.fillMaxWidth())
         if (splits.size == 1) {

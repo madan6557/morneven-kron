@@ -1,5 +1,10 @@
 # KRON Changelog
 
+## 1.0.15 - 2026-07-17
+
+- Memperketat pengeluaran agar saldo akun tidak dapat menjadi negatif.
+- Budget yang belum dapat dibooking karena kas kurang tetap berstatus DRAFT/UNDERFUNDED dan dapat dibooking kemudian melalui tombol Booking dari Main Vault.
+
 ## 1.0.14 - 2026-07-17
 
 - Merapikan form pengeluaran agar hanya menampilkan pemilihan alokasi budget baru.
