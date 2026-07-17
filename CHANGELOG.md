@@ -1,5 +1,11 @@
 # KRON Changelog
 
+## 1.0.19 - 2026-07-17
+
+- Menambahkan CRUD akun: edit metadata dan arsipkan akun dengan konfirmasi serta alasan.
+- Jurnal akun tetap dipertahankan; akun bersaldo tidak dapat diarsipkan.
+- Validasi perubahan kanal mencegah perubahan saat saldo masih tidak nol.
+
 ## 1.0.18 - 2026-07-17
 
 - Menyesuaikan arah slide halaman berdasarkan urutan menu navigasi.

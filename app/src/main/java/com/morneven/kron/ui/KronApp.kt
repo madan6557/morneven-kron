@@ -87,6 +87,8 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.morneven.kron.R
 import com.morneven.kron.ui.dialogs.AccountDialog
+import com.morneven.kron.ui.dialogs.EditAccountDialog
+import com.morneven.kron.data.AccountEntity
 import com.morneven.kron.ui.dialogs.AuditDialog
 import com.morneven.kron.ui.dialogs.BudgetDetailDialog
 import com.morneven.kron.ui.dialogs.ChannelTransferDialog
@@ -228,6 +230,7 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
     var passwordMode by remember { mutableStateOf<String?>(null) }
     var criticalAction by remember { mutableStateOf<CriticalAction?>(null) }
     var criticalReason by remember { mutableStateOf("") }
+    var editAccount by remember { mutableStateOf<AccountEntity?>(null) }
     var pendingPassword by remember { mutableStateOf<CharArray?>(null) }
     val backupLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         val password = pendingPassword
@@ -309,6 +312,8 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
                 SettingsScreen(
                     state,
                     { dialog = ActionDialog.ACCOUNT },
+                    { editAccount = it },
+                    { account -> criticalAction = CriticalAction("Arsipkan akun", "Riwayat akun tetap tersimpan. Akun hanya disembunyikan dari daftar aktif.") { reason -> viewModel.archiveAccount(account.id, reason) }; criticalReason = "" },
                     viewModel::setRememberVisibility,
                     viewModel::setAppLock,
                     viewModel::setTheme,
@@ -316,6 +321,12 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
                     { passwordMode = "RESTORE" },
                 )
             }
+        }
+    }
+    editAccount?.let { account ->
+        EditAccountDialog(account, { editAccount = null }) { name, channel ->
+            editAccount = null
+            viewModel.updateAccount(account.id, name, channel)
         }
     }
     when (dialog) {

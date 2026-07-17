@@ -16,6 +16,8 @@ import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Restore
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -31,11 +33,14 @@ import com.morneven.kron.ui.components.ChannelBadge
 import com.morneven.kron.ui.components.HudCard
 import com.morneven.kron.ui.components.SectionHeader
 import com.morneven.kron.ui.components.displayMoney
+import com.morneven.kron.data.AccountEntity
 
 @Composable
 fun SettingsScreen(
     state: KronUiState,
     onAddAccount: () -> Unit,
+    onEditAccount: (AccountEntity) -> Unit,
+    onArchiveAccount: (AccountEntity) -> Unit,
     onRememberVisibility: (Boolean) -> Unit,
     onAppLock: (Boolean) -> Unit,
     onTheme: (String) -> Unit,
@@ -52,7 +57,7 @@ fun SettingsScreen(
             SectionHeader("Akun")
             HudCard {
                 state.accountBalances.forEach { account ->
-                    Row(Modifier.fillMaxWidth().padding(vertical = 7.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().padding(vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(account.name, style = MaterialTheme.typography.titleMedium)
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -61,6 +66,12 @@ fun SettingsScreen(
                             }
                         }
                         Text(displayMoney(account.balance, state.valuesVisible), style = MaterialTheme.typography.labelLarge)
+                        androidx.compose.material3.IconButton(onClick = { onEditAccount(state.accounts.firstOrNull { it.id == account.id } ?: return@IconButton) }) {
+                            Icon(Icons.Outlined.Edit, contentDescription = "Edit akun")
+                        }
+                        androidx.compose.material3.IconButton(onClick = { onArchiveAccount(state.accounts.firstOrNull { it.id == account.id } ?: return@IconButton) }, enabled = account.balance == 0L) {
+                            Icon(Icons.Outlined.DeleteOutline, contentDescription = "Arsipkan akun")
+                        }
                     }
                 }
                 SettingRow(Icons.Outlined.Add, "Tambah akun", "Cash, bank, atau e-wallet", onClick = onAddAccount)

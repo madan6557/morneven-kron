@@ -417,6 +417,21 @@ fun AccountDialog(onDismiss: () -> Unit, onSubmit: (String, String, String, Long
 }
 
 @Composable
+fun EditAccountDialog(account: AccountEntity, onDismiss: () -> Unit, onSubmit: (String, String) -> Unit) {
+    var name by remember { mutableStateOf(account.name) }
+    var channel by remember { mutableStateOf(account.fundingChannel) }
+    FormDialog("Edit akun", onDismiss, confirmEnabled = name.isNotBlank(), onConfirm = { onSubmit(name.trim(), channel) }) {
+        OutlinedTextField(name, { name = it }, label = { Text("Nama akun") }, modifier = Modifier.fillMaxWidth())
+        Text("Kanal dana", style = MaterialTheme.typography.labelLarge)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = channel == FundingChannel.CASH, onClick = { channel = FundingChannel.CASH }, label = { Text("Cash") })
+            FilterChip(selected = channel == FundingChannel.EBUDGET, onClick = { channel = FundingChannel.EBUDGET }, label = { Text("eBudget") })
+        }
+        Text("Kanal hanya dapat diubah jika saldo akun Rp 0. Riwayat jurnal tetap tersimpan.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
 fun AuditDialog(event: ActivityRow, state: KronUiState, onDismiss: () -> Unit, onRevert: (String, String) -> Unit) {
     var reason by remember { mutableStateOf("") }
     FormDialog("Detail audit", onDismiss, confirmText = "Revert", confirmEnabled = event.reversedByEventId == null && event.type != "REVERSAL" && reason.isNotBlank(), onConfirm = { onRevert(event.id, reason) }) {

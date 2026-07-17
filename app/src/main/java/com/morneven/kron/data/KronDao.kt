@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface KronDao {
     @Insert suspend fun insertAccount(value: AccountEntity): Long
+    @Update suspend fun updateAccount(value: AccountEntity)
     @Insert suspend fun insertCategory(value: CategoryEntity): Long
     @Insert suspend fun insertPortfolio(value: PortfolioEntity): Long
     @Update suspend fun updatePortfolio(value: PortfolioEntity)

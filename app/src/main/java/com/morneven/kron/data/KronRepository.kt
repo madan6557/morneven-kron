@@ -125,6 +125,33 @@ class KronRepository @Inject constructor(
         accountId
     }
 
+    suspend fun updateAccount(accountId: Long, name: String, fundingChannel: String) = database.withTransaction {
+        require(name.isNotBlank()) { "Nama akun wajib diisi" }
+        require(fundingChannel == FundingChannel.CASH || fundingChannel == FundingChannel.EBUDGET) { "Kanal dana tidak valid" }
+        val account = requireNotNull(dao.accountById(accountId)) { "Akun tidak ditemukan" }
+        val balance = dao.accountBalance(accountId)
+        require(account.fundingChannel == fundingChannel || balance == 0L) {
+            "Kanal tidak dapat diubah saat saldo akun tidak nol"
+        }
+        val eventId = UUID.randomUUID().toString()
+        dao.updateAccount(account.copy(name = name.trim(), fundingChannel = fundingChannel))
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.SYSTEM, "Akun diperbarui", "${account.name} → ${name.trim()}", "USER", LocalDate.now().toEpochDay()))
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = "Perubahan metadata akun", beforeJson = "{\"name\":\"${account.name}\",\"channel\":\"${account.fundingChannel}\"}", afterJson = "{\"name\":\"${name.trim()}\",\"channel\":\"$fundingChannel\"}"))
+        assertInvariant()
+    }
+
+    suspend fun archiveAccount(accountId: Long, reason: String) = database.withTransaction {
+        require(reason.isNotBlank()) { "Alasan wajib diisi" }
+        val account = requireNotNull(dao.accountById(accountId)) { "Akun tidak ditemukan" }
+        require(!account.isArchived) { "Akun sudah diarsipkan" }
+        require(dao.accountBalance(accountId) == 0L) { "Saldo akun harus Rp 0 sebelum diarsipkan" }
+        val eventId = UUID.randomUUID().toString()
+        dao.updateAccount(account.copy(isArchived = true))
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.SYSTEM, "Akun diarsipkan", reason, "USER", LocalDate.now().toEpochDay()))
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = reason, beforeJson = "{\"accountId\":$accountId,\"archived\":false}", afterJson = "{\"accountId\":$accountId,\"archived\":true}"))
+        assertInvariant()
+    }
+
     suspend fun addIncome(
         accountId: Long,
         amount: Long,

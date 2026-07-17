@@ -235,6 +235,14 @@ class MainViewModel @Inject constructor(
         repository.addAccount(name, type, channel, openingBalance)
     }
 
+    fun updateAccount(accountId: Long, name: String, channel: String) = runAction("Akun diperbarui") {
+        repository.updateAccount(accountId, name, channel)
+    }
+
+    fun archiveAccount(accountId: Long, reason: String) = runAction("Akun diarsipkan") {
+        repository.archiveAccount(accountId, reason)
+    }
+
     fun addIncome(
         accountId: Long,
         amount: Long,
