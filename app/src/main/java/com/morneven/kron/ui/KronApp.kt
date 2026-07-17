@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.SystemClock
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.core.tween
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
@@ -263,7 +265,15 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
         },
         contentWindowInsets = WindowInsets.systemBars,
     ) { padding ->
-        NavHost(navController, startDestination = "home", modifier = Modifier.padding(padding)) {
+        NavHost(
+            navController,
+            startDestination = "home",
+            modifier = Modifier.padding(padding),
+            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(220)) },
+            exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(220)) },
+            popEnterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(220)) },
+            popExitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(220)) },
+        ) {
             composable("home") {
                 HomeScreen(
                     state,

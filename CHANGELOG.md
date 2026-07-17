@@ -1,5 +1,9 @@
 # KRON Changelog
 
+## 1.0.17 - 2026-07-17
+
+- Mengganti transisi antar halaman dari fade menjadi slide horizontal ringan.
+
 ## 1.0.16 - 2026-07-17
 
 - Merapikan hierarchy, filter, grafik, kartu aset, dan rincian budget pada halaman Laporan.
