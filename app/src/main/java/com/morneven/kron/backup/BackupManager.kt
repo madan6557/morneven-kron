@@ -116,12 +116,13 @@ class BackupManager @Inject constructor(
     private fun validateDatabase(file: File) {
         val db = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
         db.use {
+            require(scalar(it, "PRAGMA user_version") == 4L) { "Versi backup tidak kompatibel dengan KRON saat ini" }
             require(!it.rawQuery("PRAGMA foreign_key_check", null).use { cursor -> cursor.moveToFirst() }) { "Relasi database tidak valid" }
             val cash = scalar(it, "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines")
             val available = scalar(it, "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE bucket IN ('VAULT','UNALLOCATED','ROLLOVER') OR allocationId IS NOT NULL")
             require(cash == available) { "Invariant total aset backup tidak seimbang" }
             listOf(FundingChannel.CASH, FundingChannel.EBUDGET).forEach { channel ->
-                val channelCash = scalar(it, "SELECT COALESCE(SUM(c.amount),0) FROM cash_journal_lines c JOIN accounts a ON a.id=c.accountId WHERE a.fundingChannel='$channel'")
+                val channelCash = scalar(it, "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines WHERE fundingChannel='$channel'")
                 val channelAvailable = scalar(it, "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE fundingChannel='$channel' AND (bucket IN ('VAULT','UNALLOCATED','ROLLOVER') OR allocationId IS NOT NULL)")
                 require(channelCash == channelAvailable) { "Invariant kanal $channel tidak seimbang" }
             }
@@ -143,7 +144,7 @@ class BackupManager @Inject constructor(
     private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
     companion object {
-        private const val DATABASE_NAME = "kron.db"
+        private const val DATABASE_NAME = "kron-v4.db"
         private const val PENDING_FILE = "pending-restore.db"
         private const val MAX_BACKUP_BYTES = 250 * 1024 * 1024
         private val MAGIC = "KRONBKP1".toByteArray()

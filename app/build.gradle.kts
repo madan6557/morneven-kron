@@ -20,8 +20,8 @@ android {
         applicationId = "com.morneven.kron"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.19"
+        versionCode = 20
+        versionName = "1.0.20"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
     }
@@ -70,7 +70,7 @@ android {
 androidComponents {
     onVariants(selector().withBuildType("release")) { variant ->
         variant.outputs.forEach { output ->
-        output.outputFileName.set("KRON-1.0.19.apk")
+        output.outputFileName.set("KRON-1.0.20.apk")
         }
     }
 }

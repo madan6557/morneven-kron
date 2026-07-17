@@ -60,10 +60,10 @@ import java.time.LocalDate
 import java.time.ZoneOffset
 
 @Composable
-fun IncomeDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Long, Long?, Long?, String, String, String?, LocalDate, LocalDate?, Int, Boolean) -> Unit) {
-    val accounts = state.accounts
+fun IncomeDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, String, Long, Long?, Long?, String, String, String?, LocalDate, LocalDate?, Int, Boolean) -> Unit) {
+    val account = state.activeAccount
     val categories = state.categories.filter { it.direction == TransactionDirection.INCOME }
-    var accountId by remember { mutableStateOf(accounts.firstOrNull()?.id) }
+    var channel by remember { mutableStateOf(FundingChannel.CASH) }
     var categoryId by remember { mutableStateOf(categories.firstOrNull()?.id) }
     var targetAllocationId by remember { mutableStateOf<Long?>(null) }
     var amount by remember { mutableStateOf("") }
@@ -74,10 +74,12 @@ fun IncomeDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Lon
     var endDate by remember { mutableStateOf<LocalDate?>(null) }
     var intervalCount by remember { mutableIntStateOf(1) }
     var recordNow by remember { mutableStateOf(true) }
-    FormDialog("Catat pemasukan", onDismiss, confirmEnabled = accountId != null && money(amount) > 0 && intervalCount > 0 && (endDate == null || !endDate!!.isBefore(startDate)), onConfirm = {
-        onSubmit(requireNotNull(accountId), money(amount), categoryId, targetAllocationId, title, note, recurring, startDate, endDate, intervalCount, recordNow)
+    FormDialog("Catat pemasukan", onDismiss, confirmEnabled = account != null && money(amount) > 0 && intervalCount > 0 && (endDate == null || !endDate!!.isBefore(startDate)), onConfirm = {
+        onSubmit(requireNotNull(account).id, channel, money(amount), categoryId, targetAllocationId, title, note, recurring, startDate, endDate, intervalCount, recordNow)
     }) {
-        ChoiceField("Akun", accountId, accounts, { it.id }, { "${it.name} · ${channelLabel(it.fundingChannel)}" }) { accountId = it }
+        Text("Akun aktif: ${account?.name ?: "Belum ada"}", style = MaterialTheme.typography.titleMedium)
+        Text("Masuk ke kanal", style = MaterialTheme.typography.labelLarge)
+        ChannelSelector(channel) { channel = it }
         MoneyField(amount, { amount = it }, "Nominal")
         ChoiceField("Kategori", categoryId, categories, { it.id }, { it.name }) { categoryId = it }
         ChoiceFieldNullable("Target budget (opsional)", targetAllocationId, state.allocations.filter { it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") }, { it.id }, { "${it.portfolioName} · ${it.categoryName}" }, "Tanpa target") { targetAllocationId = it }
@@ -92,10 +94,10 @@ private data class SplitDraft(var categoryId: Long?, var allocationId: Long?, va
 private data class BudgetCategoryDraft(var name: String, var amount: String, var cashPercentage: Int = 50)
 
 @Composable
-fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Long, List<ExpenseSplitInput>, String, String, Boolean, String?, LocalDate, LocalDate?, Int, Boolean) -> Unit) {
-    val accounts = state.accounts
+fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, String, Long, List<ExpenseSplitInput>, String, String, Boolean, String?, LocalDate, LocalDate?, Int, Boolean) -> Unit) {
+    val account = state.activeAccount
     val categories = state.categories.filter { it.direction == TransactionDirection.EXPENSE }
-    var accountId by remember { mutableStateOf(accounts.firstOrNull()?.id) }
+    var channel by remember { mutableStateOf(FundingChannel.CASH) }
     var title by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
     var recurring by remember { mutableStateOf<String?>(null) }
@@ -105,23 +107,27 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Lo
     var recordNow by remember { mutableStateOf(true) }
     var unexpected by remember { mutableStateOf(false) }
     val splits = remember { mutableStateListOf(SplitDraft(null, null, "")) }
-    val accountChannel = accounts.firstOrNull { it.id == accountId }?.fundingChannel
-    val accountBalance = state.accountBalances.firstOrNull { it.id == accountId }?.balance ?: 0L
+    val accountRow = state.accountBalances.firstOrNull { it.id == account?.id }
+    val accountBalance = if (channel == FundingChannel.CASH) accountRow?.cashBalance ?: 0L else accountRow?.eBudgetBalance ?: 0L
     val splitTotal = splits.sumOf { money(it.amount) }
-    val activeAllocations = state.allocations.filter { it.fundingChannel == accountChannel && it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") }
+    val activeAllocations = state.allocations.filter { it.fundingChannel == channel && it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") }
     val validBudgetSplits = unexpected || splits.all { it.allocationId != null && it.categoryId != null }
     val enoughBalance = splitTotal <= accountBalance
-    FormDialog("Catat pengeluaran", onDismiss, confirmEnabled = accountId != null && splitTotal > 0 && enoughBalance && splits.all { money(it.amount) > 0 } && validBudgetSplits && intervalCount > 0 && (endDate == null || !endDate!!.isBefore(startDate)), onConfirm = {
-        onSubmit(requireNotNull(accountId), splitTotal, splits.map { ExpenseSplitInput(it.categoryId, if (unexpected) null else it.allocationId, money(it.amount)) }, title, note, unexpected, recurring, startDate, endDate, intervalCount, recordNow)
+    FormDialog("Catat pengeluaran", onDismiss, confirmEnabled = account != null && splitTotal > 0 && enoughBalance && splits.all { money(it.amount) > 0 } && validBudgetSplits && intervalCount > 0 && (endDate == null || !endDate!!.isBefore(startDate)), onConfirm = {
+        onSubmit(requireNotNull(account).id, channel, splitTotal, splits.map { ExpenseSplitInput(it.categoryId, if (unexpected) null else it.allocationId, money(it.amount)) }, title, note, unexpected, recurring, startDate, endDate, intervalCount, recordNow)
     }) {
-        ChoiceField("Akun pembayaran", accountId, accounts, { it.id }, { "${it.name} · ${channelLabel(it.fundingChannel)}" }) {
-            accountId = it
-            splits.indices.forEach { index -> splits[index] = splits[index].copy(allocationId = null) }
-        }
+        Text("Akun aktif: ${account?.name ?: "Belum ada"}", style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = !unexpected, onClick = { unexpected = false }, label = { Text("Untuk budget") })
-            FilterChip(selected = unexpected, onClick = { unexpected = true; accountId = accounts.firstOrNull { it.fundingChannel == FundingChannel.CASH }?.id }, label = { Text("Tak terduga") })
+            FilterChip(selected = unexpected, onClick = { unexpected = true; channel = FundingChannel.CASH }, label = { Text("Tak terduga") })
         }
+        if (!unexpected) {
+            Text("Kanal pembayaran", style = MaterialTheme.typography.labelLarge)
+            ChannelSelector(channel) { value ->
+                channel = value
+                splits.indices.forEach { index -> splits[index] = splits[index].copy(allocationId = null, categoryId = null) }
+            }
+        } else ChannelBadge(FundingChannel.CASH)
         Text(if (unexpected) "Langsung mengurangi Cash dan tidak mengurangi budget." else "Pilih alokasi budget terlebih dahulu, lalu kategori yang terhubung.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
         Text("SPLIT TRANSAKSI", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
         splits.forEachIndexed { index, split ->
@@ -139,7 +145,7 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Lo
                 val visibleCategories = if (!unexpected && split.allocationId != null) categories.filter { it.id == split.categoryId } else categories
                 ChoiceField("Kategori", split.categoryId, visibleCategories, { it.id }, { it.name }) { value -> splits[index] = split.copy(categoryId = value) }
                 if (!unexpected && activeAllocations.isEmpty()) {
-                    val allocations = state.allocations.filter { it.categoryId == split.categoryId && it.fundingChannel == accountChannel && it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") }
+                    val allocations = state.allocations.filter { it.categoryId == split.categoryId && it.fundingChannel == channel && it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") }
                 ChoiceFieldNullable("Budget", split.allocationId, allocations, { it.id }, { "${it.portfolioName} · ${displayMoney(it.availableAmount, state.valuesVisible)}" }, "Belum teralokasi") { value -> splits[index] = split.copy(allocationId = value) }
                 }
                 MoneyField(split.amount, { value -> splits[index] = split.copy(amount = value) }, "Nominal bagian")
@@ -163,22 +169,31 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Lo
 }
 
 @Composable
-fun TransferDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Long, Long, String) -> Unit) {
+fun TransferDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, String, Long, String, Long, String) -> Unit) {
     val accounts = state.accounts
-    var from by remember { mutableStateOf(accounts.firstOrNull()?.id) }
-    var to by remember { mutableStateOf(accounts.drop(1).firstOrNull()?.id) }
+    val sourceAccount = state.activeAccount
+    var fromChannel by remember { mutableStateOf(FundingChannel.CASH) }
+    var toAccountId by remember { mutableStateOf(sourceAccount?.id ?: accounts.firstOrNull()?.id) }
+    var toChannel by remember { mutableStateOf(FundingChannel.EBUDGET) }
     var amount by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
-    val fromRow = state.accountBalances.firstOrNull { it.id == from }
-    val fromChannel = accounts.firstOrNull { it.id == from }?.fundingChannel
-    val toChannel = accounts.firstOrNull { it.id == to }?.fundingChannel
-    FormDialog("Transfer dan konversi Vault", onDismiss, confirmEnabled = from != null && to != null && from != to && money(amount) in 1..(fromRow?.balance ?: 0), onConfirm = {
-        onSubmit(requireNotNull(from), requireNotNull(to), money(amount), note)
+    val sourceRow = state.accountBalances.firstOrNull { it.id == sourceAccount?.id }
+    val sourceBalance = if (fromChannel == FundingChannel.CASH) sourceRow?.cashBalance ?: 0L else sourceRow?.eBudgetBalance ?: 0L
+    val targetAccount = accounts.firstOrNull { it.id == toAccountId }
+    val distinctTarget = sourceAccount?.id != toAccountId || fromChannel != toChannel
+    FormDialog("Transfer dana", onDismiss, confirmEnabled = sourceAccount != null && toAccountId != null && distinctTarget && money(amount) in 1..sourceBalance, onConfirm = {
+        onSubmit(requireNotNull(sourceAccount).id, fromChannel, requireNotNull(toAccountId), toChannel, money(amount), note)
     }) {
-        ChoiceField("Dari akun", from, accounts, { it.id }, { "${it.name} · ${channelLabel(it.fundingChannel)}" }) { from = it }
-        ChoiceField("Ke akun", to, accounts, { it.id }, { "${it.name} · ${channelLabel(it.fundingChannel)}" }) { to = it }
-        if (fromChannel != null && toChannel != null && fromChannel != toChannel) {
-            Text("Transfer lintas kanal akan memindahkan komposisi Main Vault. Dana kategori terbooking tidak berubah.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+        Text("Akun sumber: ${sourceAccount?.name ?: "Belum ada"}", style = MaterialTheme.typography.titleMedium)
+        Text("Kanal sumber", style = MaterialTheme.typography.labelLarge)
+        ChannelSelector(fromChannel) { fromChannel = it }
+        Text("Tersedia ${displayMoney(sourceBalance, state.valuesVisible)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ChoiceField("Akun tujuan", toAccountId, accounts, { it.id }, { it.name }) { toAccountId = it }
+        Text("Kanal tujuan", style = MaterialTheme.typography.labelLarge)
+        ChannelSelector(toChannel) { toChannel = it }
+        Text("Dari ${sourceAccount?.name ?: "-"} · ${channelLabel(fromChannel)} ke ${targetAccount?.name ?: "-"} · ${channelLabel(toChannel)}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.tertiary)
+        if (fromChannel != toChannel) {
+            Text("Transfer lintas kanal memindahkan komposisi Main Vault. Dana kategori terbooking tidak berubah.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
         }
         MoneyField(amount, { amount = it }, "Nominal")
         OutlinedTextField(note, { note = it }, label = { Text("Catatan") }, modifier = Modifier.fillMaxWidth())
@@ -373,20 +388,17 @@ fun ChannelTransferDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (
     val sources = state.allocations.filter { it.availableAmount > 0 }
     var allocationId by remember { mutableStateOf(sources.firstOrNull()?.id) }
     val source = sources.firstOrNull { it.id == allocationId }
-    val fromAccounts = state.accounts.filter { it.fundingChannel == source?.fundingChannel }
-    val toAccounts = state.accounts.filter { it.fundingChannel != source?.fundingChannel }
-    var fromId by remember(source?.fundingChannel) { mutableStateOf(fromAccounts.firstOrNull()?.id) }
-    var toId by remember(source?.fundingChannel) { mutableStateOf(toAccounts.firstOrNull()?.id) }
+    val account = state.activeAccount
     var amount by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
-    val accountBalance = state.accountBalances.firstOrNull { it.id == fromId }?.balance ?: 0
+    val accountRow = state.accountBalances.firstOrNull { it.id == account?.id }
+    val accountBalance = if (source?.fundingChannel == FundingChannel.CASH) accountRow?.cashBalance ?: 0L else accountRow?.eBudgetBalance ?: 0L
     val limit = minOf(source?.availableAmount ?: 0, accountBalance)
-    FormDialog("Pindahkan Cash dan eBudget", onDismiss, confirmEnabled = source != null && fromId != null && toId != null && money(amount) in 1..limit, onConfirm = {
-        onSubmit(requireNotNull(allocationId), requireNotNull(fromId), requireNotNull(toId), money(amount), note)
+    FormDialog("Pindahkan Cash dan eBudget", onDismiss, confirmEnabled = source != null && account != null && money(amount) in 1..limit, onConfirm = {
+        onSubmit(requireNotNull(allocationId), requireNotNull(account).id, account.id, money(amount), note)
     }) {
         ChoiceField("Kategori sumber", allocationId, sources, { it.id }, { "${it.categoryName} · ${channelLabel(it.fundingChannel)} · ${displayMoney(it.availableAmount, state.valuesVisible)}" }) { allocationId = it }
-        ChoiceField("Akun asal", fromId, fromAccounts, { it.id }, { it.name }) { fromId = it }
-        ChoiceField("Akun tujuan", toId, toAccounts, { it.id }, { it.name }) { toId = it }
+        Text("Akun aktif: ${account?.name ?: "Belum ada"}", style = MaterialTheme.typography.titleMedium)
         MoneyField(amount, { amount = it }, "Nominal")
         OutlinedTextField(note, { note = it }, label = { Text("Catatan") }, modifier = Modifier.fillMaxWidth())
         if (source != null) {
@@ -401,33 +413,24 @@ fun ChannelTransferDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (
 }
 
 @Composable
-fun AccountDialog(onDismiss: () -> Unit, onSubmit: (String, String, String, Long) -> Unit) {
+fun AccountDialog(onDismiss: () -> Unit, onSubmit: (String, Long, Long) -> Unit) {
     var name by remember { mutableStateOf("") }
-    var channel by remember { mutableStateOf(FundingChannel.CASH) }
-    var opening by remember { mutableStateOf("") }
-    FormDialog("Tambah akun", onDismiss, confirmEnabled = name.isNotBlank(), onConfirm = { onSubmit(name, "LEDGER", channel, money(opening)) }) {
+    var openingCash by remember { mutableStateOf("") }
+    var openingEBudget by remember { mutableStateOf("") }
+    FormDialog("Tambah akun", onDismiss, confirmEnabled = name.isNotBlank(), onConfirm = { onSubmit(name, money(openingCash), money(openingEBudget)) }) {
         OutlinedTextField(name, { name = it }, label = { Text("Nama akun") }, modifier = Modifier.fillMaxWidth())
-        Text("Kanal dana", style = MaterialTheme.typography.labelLarge)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = channel == FundingChannel.CASH, onClick = { channel = FundingChannel.CASH }, label = { Text("Cash") })
-            FilterChip(selected = channel == FundingChannel.EBUDGET, onClick = { channel = FundingChannel.EBUDGET }, label = { Text("eBudget") })
-        }
-        MoneyField(opening, { opening = it }, "Saldo awal")
+        Text("Setiap akun otomatis memiliki kanal Cash dan eBudget.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        MoneyField(openingCash, { openingCash = it }, "Saldo awal Cash")
+        MoneyField(openingEBudget, { openingEBudget = it }, "Saldo awal eBudget")
     }
 }
 
 @Composable
-fun EditAccountDialog(account: AccountEntity, onDismiss: () -> Unit, onSubmit: (String, String) -> Unit) {
+fun EditAccountDialog(account: AccountEntity, onDismiss: () -> Unit, onSubmit: (String) -> Unit) {
     var name by remember { mutableStateOf(account.name) }
-    var channel by remember { mutableStateOf(account.fundingChannel) }
-    FormDialog("Edit akun", onDismiss, confirmEnabled = name.isNotBlank(), onConfirm = { onSubmit(name.trim(), channel) }) {
+    FormDialog("Edit akun", onDismiss, confirmEnabled = name.isNotBlank(), onConfirm = { onSubmit(name.trim()) }) {
         OutlinedTextField(name, { name = it }, label = { Text("Nama akun") }, modifier = Modifier.fillMaxWidth())
-        Text("Kanal dana", style = MaterialTheme.typography.labelLarge)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = channel == FundingChannel.CASH, onClick = { channel = FundingChannel.CASH }, label = { Text("Cash") })
-            FilterChip(selected = channel == FundingChannel.EBUDGET, onClick = { channel = FundingChannel.EBUDGET }, label = { Text("eBudget") })
-        }
-        Text("Kanal hanya dapat diubah jika saldo akun Rp 0. Riwayat jurnal tetap tersimpan.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Kanal Cash dan eBudget selalu tersedia dan tidak dapat dihapus.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -560,3 +563,11 @@ private fun <T, K> ChoiceFieldNullable(label: String, selected: K?, values: List
 
 private fun money(value: String): Long = parseMoneyInput(value)
 private fun channelLabel(channel: String): String = if (channel == FundingChannel.CASH) "Cash" else "eBudget"
+
+@Composable
+private fun ChannelSelector(selected: String, onSelect: (String) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(selected = selected == FundingChannel.CASH, onClick = { onSelect(FundingChannel.CASH) }, label = { Text("Cash") })
+        FilterChip(selected = selected == FundingChannel.EBUDGET, onClick = { onSelect(FundingChannel.EBUDGET) }, label = { Text("eBudget") })
+    }
+}

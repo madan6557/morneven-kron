@@ -39,7 +39,10 @@ interface KronDao {
     @Query("SELECT * FROM recurring_rules ORDER BY nextEpochDay, createdAt") fun observeRules(): Flow<List<RecurringRuleEntity>>
 
     @Query("""
-        SELECT a.id, a.name, a.type, a.fundingChannel, COALESCE(SUM(c.amount), 0) AS balance
+        SELECT a.id, a.name, a.isActive,
+               COALESCE(SUM(CASE WHEN c.fundingChannel = 'CASH' THEN c.amount ELSE 0 END), 0) AS cashBalance,
+               COALESCE(SUM(CASE WHEN c.fundingChannel = 'EBUDGET' THEN c.amount ELSE 0 END), 0) AS eBudgetBalance,
+               COALESCE(SUM(c.amount), 0) AS totalBalance
         FROM accounts a
         LEFT JOIN cash_journal_lines c ON c.accountId = a.id
         WHERE a.isArchived = 0
@@ -111,7 +114,11 @@ interface KronDao {
     @Query("SELECT * FROM allocations WHERE id = :id") suspend fun allocationById(id: Long): AllocationEntity?
     @Query("SELECT * FROM allocations WHERE periodId = :periodId AND categoryId = :categoryId AND fundingChannel = :channel LIMIT 1") suspend fun allocationFor(periodId: Long, categoryId: Long, channel: String): AllocationEntity?
     @Query("SELECT * FROM accounts WHERE id = :id") suspend fun accountById(id: Long): AccountEntity?
+    @Query("SELECT * FROM accounts WHERE isActive = 1 AND isArchived = 0 LIMIT 1") suspend fun activeAccount(): AccountEntity?
+    @Query("SELECT COUNT(*) FROM accounts WHERE isActive = 1 AND isArchived = 0") suspend fun activeAccountCount(): Int
+    @Query("UPDATE accounts SET isActive = CASE WHEN id = :accountId THEN 1 ELSE 0 END WHERE isArchived = 0") suspend fun activateOnly(accountId: Long)
     @Query("SELECT COALESCE(SUM(amount), 0) FROM cash_journal_lines WHERE accountId = :accountId") suspend fun accountBalance(accountId: Long): Long
+    @Query("SELECT COALESCE(SUM(amount), 0) FROM cash_journal_lines WHERE accountId = :accountId AND fundingChannel = :channel") suspend fun accountBalance(accountId: Long, channel: String): Long
     @Query("SELECT * FROM budget_periods WHERE id = :id") suspend fun periodById(id: Long): BudgetPeriodEntity?
     @Query("SELECT * FROM budget_periods WHERE portfolioId = :portfolioId ORDER BY startEpochDay") suspend fun periodsForPortfolio(portfolioId: Long): List<BudgetPeriodEntity>
     @Query("SELECT id FROM allocations WHERE periodId = :periodId") suspend fun allocationIdsForPeriod(periodId: Long): List<Long>
@@ -120,7 +127,7 @@ interface KronDao {
     @Query("SELECT * FROM cash_journal_lines WHERE eventId = :eventId") suspend fun cashLinesForEvent(eventId: String): List<CashJournalLineEntity>
     @Query("SELECT * FROM budget_journal_lines WHERE eventId = :eventId") suspend fun budgetLinesForEvent(eventId: String): List<BudgetJournalLineEntity>
     @Query("SELECT * FROM transaction_splits WHERE eventId = :eventId") suspend fun splitsForEvent(eventId: String): List<TransactionSplitEntity>
-    @Query("SELECT * FROM recurring_rules WHERE isPaused = 0 AND nextEpochDay <= :today AND (:direction IS NULL OR direction = :direction) ORDER BY nextEpochDay") suspend fun dueRules(today: Long, direction: String?): List<RecurringRuleEntity>
+    @Query("SELECT r.* FROM recurring_rules r JOIN accounts a ON a.id = r.accountId WHERE r.isPaused = 0 AND a.isActive = 1 AND a.isArchived = 0 AND r.nextEpochDay <= :today AND (:direction IS NULL OR r.direction = :direction) ORDER BY r.nextEpochDay") suspend fun dueRules(today: Long, direction: String?): List<RecurringRuleEntity>
     @Query("SELECT EXISTS(SELECT 1 FROM recurring_occurrences WHERE ruleId = :ruleId AND dueEpochDay = :dueDay)") suspend fun occurrenceExists(ruleId: String, dueDay: Long): Boolean
     @Query("SELECT * FROM accounts ORDER BY createdAt") suspend fun allAccounts(): List<AccountEntity>
     @Query("SELECT * FROM categories ORDER BY id") suspend fun allCategories(): List<CategoryEntity>
@@ -135,7 +142,7 @@ interface KronDao {
     @Query("SELECT * FROM transaction_splits ORDER BY id") suspend fun allSplits(): List<TransactionSplitEntity>
     @Query("SELECT * FROM audit_snapshots WHERE eventId = :eventId ORDER BY id") suspend fun auditsForEvent(eventId: String): List<AuditSnapshotEntity>
     @Query("SELECT * FROM recurring_rules ORDER BY createdAt") suspend fun allRules(): List<RecurringRuleEntity>
-    @Query("SELECT COALESCE(SUM(c.amount), 0) FROM cash_journal_lines c JOIN accounts a ON a.id = c.accountId WHERE a.fundingChannel = :channel") suspend fun cashTotal(channel: String): Long
+    @Query("SELECT COALESCE(SUM(amount), 0) FROM cash_journal_lines WHERE fundingChannel = :channel") suspend fun cashTotal(channel: String): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE fundingChannel = :channel AND (bucket IN ('VAULT','UNALLOCATED','ROLLOVER') OR allocationId IS NOT NULL)") suspend fun budgetAvailableTotal(channel: String): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'ROLLOVER' AND fundingChannel = :channel") suspend fun rolloverBalance(channel: String): Long
     @Query("SELECT fundingChannel, COALESCE(SUM(amount), 0) AS balance FROM budget_journal_lines WHERE bucket = 'ROLLOVER' GROUP BY fundingChannel") fun observeRolloverByChannel(): Flow<List<ChannelBalanceRow>>

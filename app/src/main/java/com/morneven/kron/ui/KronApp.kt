@@ -314,6 +314,7 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
                     { dialog = ActionDialog.ACCOUNT },
                     { editAccount = it },
                     { account -> criticalAction = CriticalAction("Arsipkan akun", "Riwayat akun tetap tersimpan. Akun hanya disembunyikan dari daftar aktif.") { reason -> viewModel.archiveAccount(account.id, reason) }; criticalReason = "" },
+                    { account -> viewModel.activateAccount(account.id) },
                     viewModel::setRememberVisibility,
                     viewModel::setAppLock,
                     viewModel::setTheme,
@@ -324,19 +325,19 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
         }
     }
     editAccount?.let { account ->
-        EditAccountDialog(account, { editAccount = null }) { name, channel ->
+        EditAccountDialog(account, { editAccount = null }) { name ->
             editAccount = null
-            viewModel.updateAccount(account.id, name, channel)
+            viewModel.updateAccount(account.id, name)
         }
     }
     when (dialog) {
-        ActionDialog.INCOME -> IncomeDialog(state, { dialog = null }) { account, amount, category, target, title, note, recurring, startDate, endDate, interval, recordNow -> dialog = null; viewModel.addIncome(account, amount, category, target, title, note, recurring, startDate, endDate, interval, recordNow) }
-        ActionDialog.EXPENSE -> ExpenseDialog(state, { dialog = null }) { account, amount, splits, title, note, unexpected, recurring, startDate, endDate, interval, recordNow -> dialog = null; viewModel.addExpense(account, amount, splits, title, note, unexpected, recurring, startDate, endDate, interval, recordNow) }
-        ActionDialog.TRANSFER -> TransferDialog(state, { dialog = null }) { from, to, amount, note -> dialog = null; viewModel.transfer(from, to, amount, note) }
+        ActionDialog.INCOME -> IncomeDialog(state, { dialog = null }) { account, channel, amount, category, target, title, note, recurring, startDate, endDate, interval, recordNow -> dialog = null; viewModel.addIncome(account, channel, amount, category, target, title, note, recurring, startDate, endDate, interval, recordNow) }
+        ActionDialog.EXPENSE -> ExpenseDialog(state, { dialog = null }) { account, channel, amount, splits, title, note, unexpected, recurring, startDate, endDate, interval, recordNow -> dialog = null; viewModel.addExpense(account, channel, amount, splits, title, note, unexpected, recurring, startDate, endDate, interval, recordNow) }
+        ActionDialog.TRANSFER -> TransferDialog(state, { dialog = null }) { fromAccount, fromChannel, toAccount, toChannel, amount, note -> dialog = null; viewModel.transfer(fromAccount, fromChannel, toAccount, toChannel, amount, note) }
         ActionDialog.PORTFOLIO -> PortfolioDialog(state, { dialog = null }) { name, cadence, income, rollover, drafts, startDate, endDate, interval -> dialog = null; viewModel.createPortfolio(name, cadence, income, rollover, drafts, startDate, endDate, interval) }
         ActionDialog.RESOLVE -> ResolveDialog(state, { dialog = null }, { source, target, amount, note -> dialog = null; viewModel.resolveFromAllocation(source, target, amount, note) }, { target, amount, note -> dialog = null; viewModel.resolveFromVault(target, amount, note) }, { target, amount, note -> dialog = null; viewModel.resolveFromRollover(target, amount, note) }, { target, amount, note -> dialog = null; viewModel.allocateUnallocated(target, amount, note) })
         ActionDialog.CHANNEL_TRANSFER -> ChannelTransferDialog(state, { dialog = null }) { allocation, from, to, amount, note -> dialog = null; viewModel.transferBookedChannel(allocation, from, to, amount, note) }
-        ActionDialog.ACCOUNT -> AccountDialog({ dialog = null }) { name, type, channel, opening -> dialog = null; viewModel.addAccount(name, type, channel, opening) }
+        ActionDialog.ACCOUNT -> AccountDialog({ dialog = null }) { name, openingCash, openingEBudget -> dialog = null; viewModel.addAccount(name, openingCash, openingEBudget) }
         null -> Unit
     }
     auditId?.let { id -> state.activities.firstOrNull { it.id == id }?.let { event -> AuditDialog(event, state, { auditId = null }) { eventId, reason -> auditId = null; viewModel.reverseEvent(eventId, reason) } } }

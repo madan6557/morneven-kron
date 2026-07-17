@@ -169,9 +169,9 @@ fun ReportsScreen(state: KronUiState, onExport: () -> Unit, modifier: Modifier =
         item {
             HudCard {
                 SectionHeader("Komposisi aset")
-                AssetRow(FundingChannel.CASH, state.accountBalances.filter { it.fundingChannel == FundingChannel.CASH }.sumOf { it.balance }, money)
+                AssetRow(FundingChannel.CASH, state.totalCashAssets, money)
                 Spacer(Modifier.height(12.dp))
-                AssetRow(FundingChannel.EBUDGET, state.accountBalances.filter { it.fundingChannel == FundingChannel.EBUDGET }.sumOf { it.balance }, money)
+                AssetRow(FundingChannel.EBUDGET, state.totalEBudgetAssets, money)
             }
         }
         if (periods.isNotEmpty()) item { SectionHeader("Aktual per budget") }

@@ -65,8 +65,8 @@ fun HomeScreen(
     modifier: Modifier = Modifier,
 ) {
     val visible = state.valuesVisible
-    val cashAssets = state.accountBalances.filter { it.fundingChannel == FundingChannel.CASH }.sumOf { it.balance }
-    val eBudgetAssets = state.accountBalances.filter { it.fundingChannel == FundingChannel.EBUDGET }.sumOf { it.balance }
+    val cashAssets = state.totalCashAssets
+    val eBudgetAssets = state.totalEBudgetAssets
     val negative = state.allocations.filter { it.availableAmount < 0 }
     val underfunded = state.periods.filter { it.status == PeriodStatus.UNDERFUNDED }
 
@@ -79,6 +79,7 @@ fun HomeScreen(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column {
                     Text("KRON", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Black)
+                    Text(state.activeAccount?.name ?: "Belum ada akun aktif", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
                     Text(
                         LocalDate.now().format(DateTimeFormatter.ofPattern("MMMM yyyy", Locale.forLanguageTag("id-ID"))).uppercase(),
                         style = MaterialTheme.typography.labelSmall,

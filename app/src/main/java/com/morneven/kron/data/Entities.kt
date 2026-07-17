@@ -52,8 +52,7 @@ object TransactionDirection {
 data class AccountEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
-    val type: String,
-    val fundingChannel: String,
+    val isActive: Boolean = false,
     val isArchived: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
 )
@@ -194,6 +193,7 @@ data class CashJournalLineEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val eventId: String,
     val accountId: Long,
+    val fundingChannel: String,
     val amount: Long,
 )
 
@@ -286,6 +286,7 @@ data class RecurringRuleEntity(
     val direction: String,
     val amount: Long,
     val accountId: Long,
+    val fundingChannel: String,
     val categoryId: Long?,
     val allocationId: Long?,
     val cadence: String,
@@ -357,9 +358,10 @@ data class ReceiptEntity(
 data class AccountBalanceRow(
     val id: Long,
     val name: String,
-    val type: String,
-    val fundingChannel: String,
-    val balance: Long,
+    val isActive: Boolean,
+    val cashBalance: Long,
+    val eBudgetBalance: Long,
+    val totalBalance: Long,
 )
 
 data class AllocationBalanceRow(

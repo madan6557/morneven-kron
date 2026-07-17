@@ -20,6 +20,7 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -41,6 +42,7 @@ fun SettingsScreen(
     onAddAccount: () -> Unit,
     onEditAccount: (AccountEntity) -> Unit,
     onArchiveAccount: (AccountEntity) -> Unit,
+    onActivateAccount: (AccountEntity) -> Unit,
     onRememberVisibility: (Boolean) -> Unit,
     onAppLock: (Boolean) -> Unit,
     onTheme: (String) -> Unit,
@@ -57,24 +59,36 @@ fun SettingsScreen(
             SectionHeader("Akun")
             HudCard {
                 state.accountBalances.forEach { account ->
-                    Row(Modifier.fillMaxWidth().padding(vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(account.name, style = MaterialTheme.typography.titleMedium)
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                ChannelBadge(account.fundingChannel)
-                                Text(account.type, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    val entity = state.accounts.firstOrNull { it.id == account.id }
+                    Column(Modifier.fillMaxWidth().padding(vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(account.name, style = MaterialTheme.typography.titleMedium)
+                                Text(if (account.isActive) "AKUN AKTIF" else "Tidak aktif", style = MaterialTheme.typography.labelSmall, color = if (account.isActive) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            androidx.compose.material3.IconButton(onClick = { entity?.let(onEditAccount) }) {
+                                Icon(Icons.Outlined.Edit, contentDescription = "Edit akun")
+                            }
+                            androidx.compose.material3.IconButton(onClick = { entity?.let(onArchiveAccount) }, enabled = !account.isActive && account.totalBalance == 0L) {
+                                Icon(Icons.Outlined.DeleteOutline, contentDescription = "Arsipkan akun")
                             }
                         }
-                        Text(displayMoney(account.balance, state.valuesVisible), style = MaterialTheme.typography.labelLarge)
-                        androidx.compose.material3.IconButton(onClick = { onEditAccount(state.accounts.firstOrNull { it.id == account.id } ?: return@IconButton) }) {
-                            Icon(Icons.Outlined.Edit, contentDescription = "Edit akun")
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                ChannelBadge("CASH")
+                                Text(displayMoney(account.cashBalance, state.valuesVisible), style = MaterialTheme.typography.labelLarge)
+                            }
+                            Column(Modifier.weight(1f)) {
+                                ChannelBadge("EBUDGET")
+                                Text(displayMoney(account.eBudgetBalance, state.valuesVisible), style = MaterialTheme.typography.labelLarge)
+                            }
                         }
-                        androidx.compose.material3.IconButton(onClick = { onArchiveAccount(state.accounts.firstOrNull { it.id == account.id } ?: return@IconButton) }, enabled = account.balance == 0L) {
-                            Icon(Icons.Outlined.DeleteOutline, contentDescription = "Arsipkan akun")
+                        if (!account.isActive && entity != null) {
+                            TextButton(onClick = { onActivateAccount(entity) }) { Text("Jadikan akun aktif") }
                         }
                     }
                 }
-                SettingRow(Icons.Outlined.Add, "Tambah akun", "Cash, bank, atau e-wallet", onClick = onAddAccount)
+                SettingRow(Icons.Outlined.Add, "Tambah akun", "Setiap akun memiliki Cash dan eBudget", onClick = onAddAccount)
             }
         }
         item {

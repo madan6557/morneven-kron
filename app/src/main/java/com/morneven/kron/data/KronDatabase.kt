@@ -24,7 +24,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AuditSnapshotEntity::class,
         ReceiptEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class KronDatabase : RoomDatabase() {
@@ -37,7 +37,7 @@ abstract class KronDatabase : RoomDatabase() {
             instance ?: Room.databaseBuilder(
                 context.applicationContext,
                 KronDatabase::class.java,
-                "kron.db",
+                "kron-v4.db",
             ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
         }
 

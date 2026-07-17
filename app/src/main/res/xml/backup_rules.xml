@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-    <include domain="database" path="kron.db" requireFlags="clientSideEncryption" />
-    <include domain="database" path="kron.db-wal" requireFlags="clientSideEncryption" />
-    <include domain="database" path="kron.db-shm" requireFlags="clientSideEncryption" />
+    <include domain="database" path="kron-v4.db" requireFlags="clientSideEncryption" />
+    <include domain="database" path="kron-v4.db-wal" requireFlags="clientSideEncryption" />
+    <include domain="database" path="kron-v4.db-shm" requireFlags="clientSideEncryption" />
     <include domain="file" path="datastore/" requireFlags="clientSideEncryption" />
 </full-backup-content>

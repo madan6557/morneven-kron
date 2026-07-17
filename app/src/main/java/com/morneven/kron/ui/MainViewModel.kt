@@ -60,7 +60,11 @@ data class KronUiState(
     val authLockedUntil: Long = 0L,
     val message: String? = null,
 ) {
-    val totalAssets: Long get() = accountBalances.sumOf { it.balance }
+    val activeAccount: AccountEntity? get() = accounts.firstOrNull { it.isActive }
+    val activeAccountBalance: AccountBalanceRow? get() = accountBalances.firstOrNull { it.isActive }
+    val totalAssets: Long get() = accountBalances.sumOf { it.totalBalance }
+    val totalCashAssets: Long get() = accountBalances.sumOf { it.cashBalance }
+    val totalEBudgetAssets: Long get() = accountBalances.sumOf { it.eBudgetBalance }
     val totalVault: Long get() = vaultCash + vaultEBudget
     val bookedCash: Long get() = allocations.filter { it.fundingChannel == FundingChannel.CASH }.sumOf { it.bookedAmount }
     val bookedEBudget: Long get() = allocations.filter { it.fundingChannel == FundingChannel.EBUDGET }.sumOf { it.bookedAmount }
@@ -231,13 +235,15 @@ class MainViewModel @Inject constructor(
         csvExporter.export(uri, current.activities, current.allocations)
     }
 
-    fun addAccount(name: String, type: String, channel: String, openingBalance: Long) = runAction("Akun berhasil ditambahkan") {
-        repository.addAccount(name, type, channel, openingBalance)
+    fun addAccount(name: String, openingCash: Long, openingEBudget: Long) = runAction("Akun berhasil ditambahkan") {
+        repository.addAccount(name, openingCash, openingEBudget)
     }
 
-    fun updateAccount(accountId: Long, name: String, channel: String) = runAction("Akun diperbarui") {
-        repository.updateAccount(accountId, name, channel)
+    fun updateAccount(accountId: Long, name: String) = runAction("Akun diperbarui") {
+        repository.updateAccount(accountId, name)
     }
+
+    fun activateAccount(accountId: Long) = runAction("Akun aktif diganti") { repository.activateAccount(accountId) }
 
     fun archiveAccount(accountId: Long, reason: String) = runAction("Akun diarsipkan") {
         repository.archiveAccount(accountId, reason)
@@ -245,6 +251,7 @@ class MainViewModel @Inject constructor(
 
     fun addIncome(
         accountId: Long,
+        fundingChannel: String,
         amount: Long,
         categoryId: Long?,
         targetAllocationId: Long? = null,
@@ -259,7 +266,7 @@ class MainViewModel @Inject constructor(
         require(intervalCount > 0) { "Interval harus minimal 1" }
         require(endDate == null || !endDate.isBefore(startDate)) { "Tanggal akhir tidak boleh sebelum tanggal mulai" }
         if (recurring == null || recordNow) {
-            repository.addIncome(accountId, amount, categoryId, title, note, targetAllocationId = targetAllocationId)
+            repository.addIncome(accountId, fundingChannel, amount, categoryId, title, note, targetAllocationId = targetAllocationId)
         }
         if (recurring != null) {
             val today = LocalDate.now()
@@ -273,6 +280,7 @@ class MainViewModel @Inject constructor(
                 direction = "INCOME",
                 amount = amount,
                 accountId = accountId,
+                fundingChannel = fundingChannel,
                 categoryId = categoryId,
                 allocationId = targetAllocationId,
                 cadence = recurring,
@@ -289,6 +297,7 @@ class MainViewModel @Inject constructor(
 
     fun addExpense(
         accountId: Long,
+        fundingChannel: String,
         amount: Long,
         splits: List<ExpenseSplitInput>,
         title: String,
@@ -302,7 +311,7 @@ class MainViewModel @Inject constructor(
     ) = runAction("Pengeluaran tercatat") {
         require(intervalCount > 0) { "Interval harus minimal 1" }
         require(endDate == null || !endDate.isBefore(startDate)) { "Tanggal akhir tidak boleh sebelum tanggal mulai" }
-        if (recurring == null || recordNow) repository.addExpense(accountId, amount, splits, title, note, unexpected)
+        if (recurring == null || recordNow) repository.addExpense(accountId, fundingChannel, amount, splits, title, note, unexpected)
         if (recurring != null && splits.size == 1 && !unexpected) {
             val today = LocalDate.now()
             val first = if (recordNow) {
@@ -315,6 +324,7 @@ class MainViewModel @Inject constructor(
                 direction = "EXPENSE",
                 amount = amount,
                 accountId = accountId,
+                fundingChannel = fundingChannel,
                 categoryId = splits.first().categoryId,
                 allocationId = splits.first().allocationId,
                 cadence = recurring,
@@ -329,8 +339,8 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    fun transfer(from: Long, to: Long, amount: Long, note: String) = runAction("Transfer tercatat") {
-        repository.transfer(from, to, amount, note)
+    fun transfer(fromAccount: Long, fromChannel: String, toAccount: Long, toChannel: String, amount: Long, note: String) = runAction("Transfer tercatat") {
+        repository.transfer(fromAccount, fromChannel, toAccount, toChannel, amount, note)
     }
 
     fun transferBookedChannel(sourceAllocationId: Long, from: Long, to: Long, amount: Long, note: String) = runAction("Komposisi dana berhasil dipindahkan") {

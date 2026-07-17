@@ -1,5 +1,13 @@
 # KRON Changelog
 
+## 1.0.20 - 2026-07-17
+
+- Mengubah satu akun agar selalu memiliki saldo Cash dan eBudget secara terpisah.
+- Menambahkan alokasi manual antar kanal dalam akun yang sama dan transfer lintas akun serta kanal.
+- Menambahkan satu akun aktif sebagai sumber transaksi utama dan pilihan untuk mengganti akun aktif.
+- Memindahkan identitas kanal ke setiap baris jurnal kas agar saldo per kanal dapat direkonstruksi akurat.
+- Mengganti database testing ke skema versi 4 tanpa membawa data lama.
+
 ## 1.0.19 - 2026-07-17
 
 - Menambahkan CRUD akun: edit metadata dan arsipkan akun dengan konfirmasi serta alasan.
