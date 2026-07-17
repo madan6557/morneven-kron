@@ -193,7 +193,7 @@ class MainViewModel @Inject constructor(
 
     fun setRememberVisibility(value: Boolean) = viewModelScope.launch {
         preferences.setRememberVisibility(value)
-        if (value) preferences.setLastVisibility(uiState.value.valuesVisible)
+        preferences.setLastVisibility(if (value) uiState.value.valuesVisible else false)
     }
 
     fun setTheme(value: String) = viewModelScope.launch { preferences.setTheme(value) }

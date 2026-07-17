@@ -1,5 +1,9 @@
 # KRON Changelog
 
+## 1.0.9 - 2026-07-17
+
+- Memperbaiki penyimpanan preferensi "Ingat visibilitas" agar saat dinonaktifkan selalu kembali tersembunyi dan tidak memakai nilai lama.
+
 ## 1.0.8 - 2026-07-17
 
 - Menambahkan tampilan detail setiap periode budget.
