@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -189,6 +190,10 @@ class MainViewModel @Inject constructor(
 
     fun hideValuesForLock() {
         sessionVisibility.value = false
+    }
+
+    fun restoreRememberedVisibility() = viewModelScope.launch {
+        sessionVisibility.value = preferences.rememberedVisibility.first()
     }
 
     fun setRememberVisibility(value: Boolean) = viewModelScope.launch {

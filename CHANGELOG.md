@@ -1,5 +1,11 @@
 # KRON Changelog
 
+## 1.0.10 - 2026-07-17
+
+- Setelah autentikasi app lock, visibilitas mengembalikan pilihan terakhir jika fitur pengingat aktif.
+- Form koreksi budget dipindahkan ke dalam kartu kategori yang sedang dikoreksi.
+- Jadwal otomatis diberi penjelasan bahwa revert occurrence tidak membatalkan aturan jadwal.
+
 ## 1.0.9 - 2026-07-17
 
 - Memperbaiki penyimpanan preferensi "Ingat visibilitas" agar saat dinonaktifkan selalu kembali tersembunyi dan tidak memakai nilai lama.

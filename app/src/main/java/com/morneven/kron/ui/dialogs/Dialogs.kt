@@ -3,8 +3,10 @@ package com.morneven.kron.ui.dialogs
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -20,6 +22,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -241,22 +244,25 @@ fun BudgetDetailDialog(state: KronUiState, periodId: Long, onDismiss: () -> Unit
                 }
                 rows.forEach { row ->
                     HudCard {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
                             Column(Modifier.weight(1f)) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) { ChannelBadge(row.fundingChannel); Text(row.categoryName) }
                                 Text("Rencana ${displayMoney(row.plannedAmount, state.valuesVisible)}", style = MaterialTheme.typography.bodySmall)
                                 Text("Booking ${displayMoney(row.bookedAmount, state.valuesVisible)} · Terpakai ${displayMoney(row.spentAmount, state.valuesVisible)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Text("Sisa ${displayMoney(row.availableAmount, state.valuesVisible)}", style = MaterialTheme.typography.titleMedium, color = if (row.availableAmount < 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary)
                             }
-                            Button(onClick = { correctionId = row.id; correctedAmount = row.plannedAmount.toString() }) { Text("Koreksi") }
+                            TextButton(onClick = { correctionId = row.id; correctedAmount = row.plannedAmount.toString() }) { Text("Koreksi") }
+                        }
+                        if (row.id == correctionId) {
+                            Spacer(Modifier.height(10.dp))
+                            HorizontalDivider()
+                            Spacer(Modifier.height(10.dp))
+                            Text("Koreksi ${row.categoryName}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.tertiary)
+                            MoneyField(correctedAmount, { correctedAmount = it }, "Nominal rencana baru")
+                            OutlinedTextField(reason, { reason = it }, label = { Text("Alasan koreksi") }, modifier = Modifier.fillMaxWidth())
+                            Text("Jurnal lama tetap tersimpan dan ditandai dikoreksi.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
-                }
-                if (selected != null) {
-                    Text("Koreksi jurnal", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.tertiary)
-                    MoneyField(correctedAmount, { correctedAmount = it }, "Nominal rencana baru")
-                    OutlinedTextField(reason, { reason = it }, label = { Text("Alasan koreksi") }, modifier = Modifier.fillMaxWidth())
-                    Text("Koreksi membuat event reversal/koreksi dan tidak menghapus jurnal lama.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         },

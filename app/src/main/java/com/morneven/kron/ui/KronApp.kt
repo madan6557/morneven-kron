@@ -156,6 +156,7 @@ fun KronApp(viewModel: MainViewModel, activity: FragmentActivity) {
                     override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                         locked = false
                         lockError = null
+                        viewModel.restoreRememberedVisibility()
                     }
 
                     override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {

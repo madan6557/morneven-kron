@@ -215,7 +215,7 @@ fun HomeScreen(
             item {
                 SectionHeader("Transaksi otomatis berikutnya")
                 Text(
-                    "Jadwal pemasukan atau pengeluaran yang akan dicatat KRON secara otomatis.",
+                    "Pemasukan atau pengeluaran yang akan dicatat KRON otomatis. Revert transaksi tidak membatalkan jadwal ini.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 8.dp),
