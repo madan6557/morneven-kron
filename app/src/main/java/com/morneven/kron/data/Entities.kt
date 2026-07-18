@@ -21,6 +21,8 @@ object LedgerType {
     const val IMPORT = "IMPORT"
     const val SYSTEM = "SYSTEM"
     const val UNEXPECTED_EXPENSE = "UNEXPECTED_EXPENSE"
+    const val ARCHIVE = "ARCHIVE"
+    const val RESTORE = "RESTORE"
 }
 
 object BudgetBucket {
@@ -54,6 +56,7 @@ data class AccountEntity(
     val name: String,
     val isActive: Boolean = false,
     val isArchived: Boolean = false,
+    val archivedAt: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),
 )
 
@@ -80,6 +83,8 @@ data class PortfolioEntity(
     val endMode: String,
     val endValue: Long? = null,
     val isPaused: Boolean = false,
+    val isArchived: Boolean = false,
+    val archivedAt: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),
 )
 
@@ -298,6 +303,7 @@ data class RecurringRuleEntity(
     val endEpochDay: Long? = null,
     val remainingOccurrences: Int? = null,
     val isPaused: Boolean = false,
+    val pausedByArchive: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
 )
 
@@ -369,6 +375,7 @@ data class AllocationBalanceRow(
     val periodId: Long,
     val portfolioId: Long,
     val portfolioName: String,
+    val portfolioArchived: Boolean,
     val categoryId: Long,
     val categoryName: String,
     val color: Long,

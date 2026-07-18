@@ -23,11 +23,17 @@ import androidx.compose.material.icons.outlined.RemoveRedEye
 import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -43,7 +49,10 @@ import com.morneven.kron.ui.components.HudCard
 import com.morneven.kron.ui.components.Metric
 import com.morneven.kron.ui.components.SectionHeader
 import com.morneven.kron.ui.components.displayMoney
-import com.morneven.kron.ui.components.displayCompactMoney
+import com.morneven.kron.ui.components.displayPrimaryHomeMoney
+import com.morneven.kron.ui.components.displaySecondaryHomeMoney
+import com.morneven.kron.ui.components.shouldCompactPrimaryHomeMoney
+import com.morneven.kron.ui.components.shouldCompactSecondaryHomeMoney
 import com.morneven.kron.ui.components.signedColor
 import com.morneven.kron.ui.theme.KronBlue
 import com.morneven.kron.ui.theme.KronGold
@@ -65,10 +74,13 @@ fun HomeScreen(
     modifier: Modifier = Modifier,
 ) {
     val visible = state.valuesVisible
+    var exactMoney by remember { mutableStateOf<Pair<String, Long>?>(null) }
     val cashAssets = state.totalCashAssets
     val eBudgetAssets = state.totalEBudgetAssets
-    val negative = state.allocations.filter { it.availableAmount < 0 }
-    val underfunded = state.periods.filter { it.status == PeriodStatus.UNDERFUNDED }
+    val activePortfolioIds = state.portfolios.map { it.id }.toSet()
+    val negative = state.allocations.filter { !it.portfolioArchived && it.availableAmount < 0 }
+    val underfunded = state.periods.filter { it.portfolioId in activePortfolioIds && it.status == PeriodStatus.UNDERFUNDED }
+    val activeRules = state.rules.filterNot { it.isPaused }
 
     LazyColumn(
         modifier = modifier,
@@ -99,31 +111,38 @@ fun HomeScreen(
             HudCard(accent = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)) {
                 Text("POSISI KEUANGAN", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
                 Spacer(Modifier.height(8.dp))
-                Text(displayCompactMoney(state.totalAssets, visible), style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Black, maxLines = 1)
+                Text(
+                    displayPrimaryHomeMoney(state.totalAssets, visible),
+                    modifier = Modifier.clickable(enabled = visible && shouldCompactPrimaryHomeMoney(state.totalAssets)) { exactMoney = "Total aset nyata" to state.totalAssets },
+                    style = MaterialTheme.typography.displaySmall,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 1,
+                )
                 Text("Total aset nyata", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(18.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Metric("Cash", displayCompactMoney(cashAssets, visible), Modifier.weight(1f), KronGold)
-                    Metric("eBudget", displayCompactMoney(eBudgetAssets, visible), Modifier.weight(1f), KronBlue)
+                    Metric("Cash", displaySecondaryHomeMoney(cashAssets, visible), Modifier.weight(1f).clickable(enabled = visible && shouldCompactSecondaryHomeMoney(cashAssets)) { exactMoney = "Total Cash" to cashAssets }, KronGold)
+                    Metric("eBudget", displaySecondaryHomeMoney(eBudgetAssets, visible), Modifier.weight(1f).clickable(enabled = visible && shouldCompactSecondaryHomeMoney(eBudgetAssets)) { exactMoney = "Total eBudget" to eBudgetAssets }, KronBlue)
                 }
                 Spacer(Modifier.height(16.dp))
                 Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f), shape = MaterialTheme.shapes.medium) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Main Vault", style = MaterialTheme.typography.labelLarge)
-                            Text(displayCompactMoney(state.totalVault, visible), style = MaterialTheme.typography.labelLarge, maxLines = 1)
+                            Text(displaySecondaryHomeMoney(state.totalVault, visible), modifier = Modifier.clickable(enabled = visible && shouldCompactSecondaryHomeMoney(state.totalVault)) { exactMoney = "Main Vault" to state.totalVault }, style = MaterialTheme.typography.labelLarge, maxLines = 1)
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { ChannelBadge(FundingChannel.CASH) }
-                            Text(displayCompactMoney(state.vaultCash, visible), style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                            Text(displaySecondaryHomeMoney(state.vaultCash, visible), modifier = Modifier.clickable(enabled = visible && shouldCompactSecondaryHomeMoney(state.vaultCash)) { exactMoney = "Main Vault Cash" to state.vaultCash }, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { ChannelBadge(FundingChannel.EBUDGET) }
-                            Text(displayCompactMoney(state.vaultEBudget, visible), style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                            Text(displaySecondaryHomeMoney(state.vaultEBudget, visible), modifier = Modifier.clickable(enabled = visible && shouldCompactSecondaryHomeMoney(state.vaultEBudget)) { exactMoney = "Main Vault eBudget" to state.vaultEBudget }, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Reserve rollover", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
-                            Text(displayCompactMoney(state.rolloverCash + state.rolloverEBudget, visible), style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                            val rollover = state.rolloverCash + state.rolloverEBudget
+                            Text(displaySecondaryHomeMoney(rollover, visible), modifier = Modifier.clickable(enabled = visible && shouldCompactSecondaryHomeMoney(rollover)) { exactMoney = "Reserve rollover" to rollover }, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
                         }
                     }
                 }
@@ -187,7 +206,7 @@ fun HomeScreen(
             }
         }
 
-        val activeGroups = state.allocations.filter { it.periodStatus == PeriodStatus.ACTIVE || it.periodStatus == PeriodStatus.RESOLUTION_REQUIRED }
+        val activeGroups = state.allocations.filter { !it.portfolioArchived && (it.periodStatus == PeriodStatus.ACTIVE || it.periodStatus == PeriodStatus.RESOLUTION_REQUIRED) }
             .groupBy { it.portfolioId }
             .entries.take(3)
         if (activeGroups.isNotEmpty()) {
@@ -214,7 +233,7 @@ fun HomeScreen(
             }
         }
 
-        if (state.rules.isNotEmpty()) {
+        if (activeRules.isNotEmpty()) {
             item {
                 SectionHeader("Transaksi otomatis berikutnya")
                 Text(
@@ -224,7 +243,7 @@ fun HomeScreen(
                     modifier = Modifier.padding(bottom = 8.dp),
                 )
             }
-            items(state.rules.filterNot { it.isPaused }.take(3), key = { it.id }) { rule ->
+            items(activeRules.take(3), key = { it.id }) { rule ->
                 HudCard {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -261,6 +280,20 @@ fun HomeScreen(
         }
 
         item { Spacer(Modifier.height(72.dp)) }
+    }
+
+    exactMoney?.let { (label, value) ->
+        AlertDialog(
+            onDismissRequest = { exactMoney = null },
+            title = { Text("Nominal lengkap") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(displayMoney(value, true), style = MaterialTheme.typography.titleLarge)
+                }
+            },
+            confirmButton = { TextButton(onClick = { exactMoney = null }) { Text("Tutup") } },
+        )
     }
 }
 

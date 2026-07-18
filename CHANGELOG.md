@@ -1,5 +1,14 @@
 # KRON Changelog
 
+## 1.0.21 - 2026-07-18
+
+- Menambahkan tab Aktif dan Arsip untuk budget serta akun, lengkap dengan pemulihan tanpa menghapus riwayat.
+- Memisahkan tindakan Jeda, Lanjutkan, Arsipkan, Pulihkan, dan Pulihkan lalu Aktifkan.
+- Menyelesaikan sisa budget ke Main Vault sesuai kanal saat arsip dan menolak arsip jika masih ada kategori minus.
+- Menjeda aturan otomatis terkait saat arsip dan hanya melanjutkan aturan yang dijeda oleh proses arsip.
+- Menambahkan migration Room versi 5 yang non-destruktif serta event audit ARCHIVE dan RESTORE.
+- Menggunakan format nominal kata Indonesia adaptif pada Posisi Keuangan dengan dialog nominal lengkap saat diketuk.
+
 ## 1.0.20 - 2026-07-17
 
 - Mengubah satu akun agar selalu memiliki saldo Cash dan eBudget secara terpisah.

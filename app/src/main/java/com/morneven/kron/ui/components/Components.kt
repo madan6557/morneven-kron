@@ -43,6 +43,8 @@ import com.morneven.kron.data.FundingChannel
 import com.morneven.kron.ui.theme.KronBlue
 import com.morneven.kron.ui.theme.KronGold
 import com.morneven.kron.ui.theme.KronGreen
+import java.math.BigDecimal
+import java.math.RoundingMode
 import java.text.NumberFormat
 import java.util.Locale
 import kotlin.math.absoluteValue
@@ -105,12 +107,37 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
     )
 }
 
-fun displayMoney(value: Long, visible: Boolean): String = if (visible) formatIdr(value) else "Rp ••••••"
+private const val MONEY_MASK = "Rp ••••••"
 
-fun displayCompactMoney(value: Long, visible: Boolean): String = when {
-    !visible -> displayMoney(value, false)
-    value.absoluteValue >= 1_000_000 -> compactIdr(value)
+fun displayMoney(value: Long, visible: Boolean): String = if (visible) formatIdr(value) else MONEY_MASK
+
+fun shouldCompactPrimaryHomeMoney(value: Long): Boolean = BigDecimal.valueOf(value).abs() >= BigDecimal.valueOf(1_000_000L)
+
+fun shouldCompactSecondaryHomeMoney(value: Long): Boolean = BigDecimal.valueOf(value).abs() >= BigDecimal.valueOf(1_000_000_000L)
+
+fun displayPrimaryHomeMoney(value: Long, visible: Boolean): String = when {
+    !visible -> MONEY_MASK
+    shouldCompactPrimaryHomeMoney(value) -> wordIdr(value)
     else -> formatIdr(value)
+}
+
+fun displaySecondaryHomeMoney(value: Long, visible: Boolean): String = when {
+    !visible -> MONEY_MASK
+    shouldCompactSecondaryHomeMoney(value) -> wordIdr(value)
+    else -> formatIdr(value)
+}
+
+fun wordIdr(value: Long): String {
+    val absolute = BigDecimal.valueOf(value).abs()
+    val (divisor, unit) = when {
+        absolute >= BigDecimal("1000000000000000000") -> BigDecimal("1000000000000000000") to "kuintiliun"
+        absolute >= BigDecimal("1000000000000000") -> BigDecimal("1000000000000000") to "kuadriliun"
+        absolute >= BigDecimal("1000000000000") -> BigDecimal("1000000000000") to "triliun"
+        absolute >= BigDecimal("1000000000") -> BigDecimal("1000000000") to "miliar"
+        else -> BigDecimal("1000000") to "juta"
+    }
+    val number = absolute.divide(divisor, 2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString().replace('.', ',')
+    return "Rp ${if (value < 0) "-" else ""}$number $unit"
 }
 
 @Composable

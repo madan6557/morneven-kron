@@ -265,7 +265,7 @@ fun PortfolioDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (String
 }
 
 @Composable
-fun BudgetDetailDialog(state: KronUiState, periodId: Long, onDismiss: () -> Unit, onCorrect: (Long, Long, String) -> Unit) {
+fun BudgetDetailDialog(state: KronUiState, periodId: Long, readOnly: Boolean = false, onDismiss: () -> Unit, onCorrect: (Long, Long, String) -> Unit) {
     val rows = state.allocations.filter { it.periodId == periodId }
     var correctionId by remember { mutableStateOf<Long?>(null) }
     var correctedAmount by remember { mutableStateOf("") }
@@ -274,12 +274,13 @@ fun BudgetDetailDialog(state: KronUiState, periodId: Long, onDismiss: () -> Unit
     val validCorrection = selected != null && money(correctedAmount) >= 0 && money(correctedAmount) != selected.plannedAmount && reason.isNotBlank()
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Detail budget") },
+        title = { Text(if (readOnly) "Detail budget arsip" else "Detail budget") },
         text = {
             Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 rows.firstOrNull()?.let { row ->
                     Text(row.portfolioName, style = MaterialTheme.typography.titleLarge)
                     Text("${LocalDate.ofEpochDay(row.startEpochDay)} sampai ${LocalDate.ofEpochDay(row.endEpochDay)} · ${row.periodStatus.replace('_', ' ')}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (readOnly) Text("Mode read-only. Pulihkan portfolio untuk melakukan perubahan.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
                 }
                 rows.forEach { row ->
                     HudCard {
@@ -290,7 +291,7 @@ fun BudgetDetailDialog(state: KronUiState, periodId: Long, onDismiss: () -> Unit
                                 Text("Booking ${displayMoney(row.bookedAmount, state.valuesVisible)} · Terpakai ${displayMoney(row.spentAmount, state.valuesVisible)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Text("Sisa ${displayMoney(row.availableAmount, state.valuesVisible)}", style = MaterialTheme.typography.titleMedium, color = if (row.availableAmount < 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary)
                             }
-                            TextButton(onClick = { correctionId = row.id; correctedAmount = row.plannedAmount.toString() }) { Text("Koreksi") }
+                            if (!readOnly) TextButton(onClick = { correctionId = row.id; correctedAmount = row.plannedAmount.toString() }) { Text("Koreksi") }
                         }
                         if (row.id == correctionId) {
                             Spacer(Modifier.height(10.dp))
@@ -306,7 +307,7 @@ fun BudgetDetailDialog(state: KronUiState, periodId: Long, onDismiss: () -> Unit
             }
         },
         confirmButton = {
-            Button(onClick = { onCorrect(requireNotNull(correctionId), money(correctedAmount), reason); onDismiss() }, enabled = validCorrection) { Text("Simpan koreksi") }
+            if (!readOnly) Button(onClick = { onCorrect(requireNotNull(correctionId), money(correctedAmount), reason); onDismiss() }, enabled = validCorrection) { Text("Simpan koreksi") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Tutup") } },
     )
@@ -437,7 +438,8 @@ fun EditAccountDialog(account: AccountEntity, onDismiss: () -> Unit, onSubmit: (
 @Composable
 fun AuditDialog(event: ActivityRow, state: KronUiState, onDismiss: () -> Unit, onRevert: (String, String) -> Unit) {
     var reason by remember { mutableStateOf("") }
-    FormDialog("Detail audit", onDismiss, confirmText = "Revert", confirmEnabled = event.reversedByEventId == null && event.type != "REVERSAL" && reason.isNotBlank(), onConfirm = { onRevert(event.id, reason) }) {
+    val lifecycleEvent = event.type in setOf("ARCHIVE", "RESTORE")
+    FormDialog("Detail audit", onDismiss, confirmText = "Revert", confirmEnabled = !lifecycleEvent && event.reversedByEventId == null && event.type != "REVERSAL" && reason.isNotBlank(), onConfirm = { onRevert(event.id, reason) }) {
         Text(event.title, style = MaterialTheme.typography.titleLarge)
         Text(event.type.replace('_', ' '), color = MaterialTheme.colorScheme.tertiary)
         Text("Tanggal efektif: ${LocalDate.ofEpochDay(event.effectiveEpochDay)}")
@@ -446,7 +448,8 @@ fun AuditDialog(event: ActivityRow, state: KronUiState, onDismiss: () -> Unit, o
         Text("Dampak Vault: ${displayMoney(event.vaultImpact, state.valuesVisible)}")
         Text("Dampak kategori: ${displayMoney(event.budgetImpact, state.valuesVisible)}")
         if (event.note.isNotBlank()) Text("Catatan: ${event.note}")
-        if (event.reversedByEventId != null) Text("Event sudah direvert", color = MaterialTheme.colorScheme.error)
+        if (lifecycleEvent) Text("Event lifecycle bersifat read-only. Gunakan tab Arsip untuk memulihkan atau mengarsipkan kembali.", color = MaterialTheme.colorScheme.tertiary)
+        else if (event.reversedByEventId != null) Text("Event sudah direvert", color = MaterialTheme.colorScheme.error)
         else OutlinedTextField(reason, { reason = it }, label = { Text("Alasan revert") }, modifier = Modifier.fillMaxWidth())
     }
 }

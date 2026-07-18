@@ -73,9 +73,11 @@ class KronRepository @Inject constructor(
     private val dao = database.kronDao()
 
     val accounts = dao.observeAccounts()
+    val archivedAccounts = dao.observeArchivedAccounts()
     val accountBalances = dao.observeAccountBalances()
     val categories = dao.observeCategories()
     val portfolios = dao.observePortfolios()
+    val archivedPortfolios = dao.observeArchivedPortfolios()
     val periods = dao.observePeriods()
     val allocations = dao.observeAllocationBalances()
     val activities = dao.observeActivities()
@@ -165,11 +167,26 @@ class KronRepository @Inject constructor(
         val account = requireNotNull(dao.accountById(accountId)) { "Akun tidak ditemukan" }
         require(!account.isArchived) { "Akun sudah diarsipkan" }
         require(!account.isActive) { "Aktifkan akun lain sebelum mengarsipkan akun ini" }
-        require(dao.accountBalance(accountId) == 0L) { "Saldo Cash dan eBudget harus Rp 0 sebelum diarsipkan" }
+        require(
+            dao.accountBalance(accountId, FundingChannel.CASH) == 0L &&
+                dao.accountBalance(accountId, FundingChannel.EBUDGET) == 0L,
+        ) { "Saldo Cash dan eBudget harus Rp 0 sebelum diarsipkan" }
         val eventId = UUID.randomUUID().toString()
-        dao.updateAccount(account.copy(isArchived = true))
-        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.SYSTEM, "Akun diarsipkan", reason, "USER", LocalDate.now().toEpochDay()))
-        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = reason, beforeJson = "{\"accountId\":$accountId,\"archived\":false}", afterJson = "{\"accountId\":$accountId,\"archived\":true}"))
+        val archivedAt = System.currentTimeMillis()
+        dao.updateAccount(account.copy(isArchived = true, archivedAt = archivedAt))
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.ARCHIVE, "Akun diarsipkan", reason, "USER", LocalDate.now().toEpochDay()))
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = reason, beforeJson = "{\"accountId\":$accountId,\"archived\":false}", afterJson = "{\"accountId\":$accountId,\"archived\":true,\"archivedAt\":$archivedAt}"))
+        assertInvariant()
+    }
+
+    suspend fun restoreAccount(accountId: Long, reason: String) = database.withTransaction {
+        require(reason.isNotBlank()) { "Alasan wajib diisi" }
+        val account = requireNotNull(dao.accountById(accountId)) { "Akun tidak ditemukan" }
+        require(account.isArchived) { "Akun tidak berada di arsip" }
+        val eventId = UUID.randomUUID().toString()
+        dao.updateAccount(account.copy(isArchived = false, isActive = false, archivedAt = null))
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.RESTORE, "Akun dipulihkan", reason, "USER", LocalDate.now().toEpochDay()))
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = reason, beforeJson = "{\"accountId\":$accountId,\"archived\":true}", afterJson = "{\"accountId\":$accountId,\"archived\":false,\"active\":false}"))
         assertInvariant()
     }
 
@@ -656,6 +673,7 @@ class KronRepository @Inject constructor(
         val original = requireNotNull(dao.eventById(originalEventId))
         require(original.reversedByEventId == null) { "Event sudah dibalik" }
         require(original.type != LedgerType.REVERSAL) { "Reversal tidak dapat dibalik langsung" }
+        require(original.type !in setOf(LedgerType.ARCHIVE, LedgerType.RESTORE)) { "Gunakan tindakan Pulihkan atau Arsipkan dari halaman terkait" }
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(
             id = eventId,
@@ -692,14 +710,110 @@ class KronRepository @Inject constructor(
         dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = reason, beforeJson = "{\"ruleId\":\"$ruleId\",\"paused\":false}", afterJson = "{\"ruleId\":\"$ruleId\",\"paused\":true}"))
     }
 
-    suspend fun pausePortfolio(portfolioId: Long, reason: String = "Portfolio dihentikan pengguna") = database.withTransaction {
+    suspend fun pausePortfolio(portfolioId: Long, reason: String = "Portfolio dijeda pengguna") = database.withTransaction {
         val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == portfolioId })
+        require(!portfolio.isArchived) { "Pulihkan portfolio sebelum menjedanya" }
         if (portfolio.isPaused) return@withTransaction
         dao.updatePortfolio(portfolio.copy(isPaused = true))
         val eventId = UUID.randomUUID().toString()
-        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.SYSTEM, "Portfolio dihentikan", reason, "USER", LocalDate.now().toEpochDay()))
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.SYSTEM, "Portfolio dijeda", reason, "USER", LocalDate.now().toEpochDay()))
         dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = reason, beforeJson = "{\"portfolioId\":$portfolioId,\"paused\":false}", afterJson = "{\"portfolioId\":$portfolioId,\"paused\":true}"))
         assertInvariant()
+    }
+
+    suspend fun resumePortfolio(portfolioId: Long, reason: String) {
+        database.withTransaction {
+            require(reason.isNotBlank()) { "Alasan wajib diisi" }
+            val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == portfolioId })
+            require(!portfolio.isArchived) { "Pulihkan portfolio terlebih dahulu" }
+            if (!portfolio.isPaused) return@withTransaction
+            val eventId = UUID.randomUUID().toString()
+            dao.updatePortfolio(portfolio.copy(isPaused = false))
+            val resumedRuleCount = resumeRulesPausedByArchive(portfolioId, LocalDate.now())
+            dao.insertEvent(ActivityEventEntity(eventId, LedgerType.RESTORE, "Portfolio dilanjutkan", reason, "USER", LocalDate.now().toEpochDay()))
+            dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = reason, beforeJson = "{\"portfolioId\":$portfolioId,\"paused\":true}", afterJson = "{\"portfolioId\":$portfolioId,\"paused\":false,\"resumedRules\":$resumedRuleCount}"))
+            assertInvariant()
+        }
+        reconcilePortfolios()
+    }
+
+    suspend fun archivePortfolio(portfolioId: Long, reason: String) = database.withTransaction {
+        require(reason.isNotBlank()) { "Alasan wajib diisi" }
+        val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == portfolioId })
+        require(!portfolio.isArchived) { "Portfolio sudah diarsipkan" }
+        val periods = dao.periodsForPortfolio(portfolioId)
+        val allocations = periods.flatMap { dao.allocationsForPeriod(it.id) }
+        val available = allocations.map { it to dao.allocationAvailable(it.id) }
+        require(available.none { it.second < 0 }) { "Selesaikan seluruh kategori minus sebelum mengarsipkan" }
+
+        val eventId = UUID.randomUUID().toString()
+        val positive = available.filter { it.second > 0 }
+        val releasedByChannel = positive.groupBy { it.first.fundingChannel }
+            .mapValues { (_, rows) -> rows.sumOf { it.second } }
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.ARCHIVE, "Portfolio diarsipkan", reason, "USER", LocalDate.now().toEpochDay()))
+        if (positive.isNotEmpty()) {
+            dao.insertBudgetLines(
+                positive.map { (allocation, amount) ->
+                    BudgetJournalLineEntity(eventId = eventId, allocationId = allocation.id, fundingChannel = allocation.fundingChannel, amount = -amount)
+                } + releasedByChannel.map { (channel, amount) ->
+                    BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = channel, amount = amount)
+                },
+            )
+        }
+        periods.filter { it.status != PeriodStatus.CLOSED }.forEach { dao.updatePeriod(it.copy(status = PeriodStatus.CLOSED)) }
+
+        val allocationIds = allocations.map { it.id }.toSet()
+        var pausedRuleCount = 0
+        dao.allRules().filter { it.allocationId in allocationIds }.forEach { rule ->
+            if (!rule.isPaused) {
+                dao.updateRule(rule.copy(isPaused = true, pausedByArchive = true))
+                pausedRuleCount++
+            }
+        }
+        val archivedAt = System.currentTimeMillis()
+        dao.updatePortfolio(portfolio.copy(isPaused = true, isArchived = true, archivedAt = archivedAt))
+        dao.insertAudit(AuditSnapshotEntity(
+            eventId = eventId,
+            reason = reason,
+            beforeJson = "{\"portfolioId\":$portfolioId,\"archived\":false}",
+            afterJson = "{\"portfolioId\":$portfolioId,\"archived\":true,\"archivedAt\":$archivedAt,\"releasedCash\":${releasedByChannel[FundingChannel.CASH] ?: 0},\"releasedEBudget\":${releasedByChannel[FundingChannel.EBUDGET] ?: 0},\"pausedRules\":$pausedRuleCount}",
+        ))
+        assertInvariant()
+    }
+
+    suspend fun restorePortfolio(portfolioId: Long, activate: Boolean, reason: String) {
+        database.withTransaction {
+            require(reason.isNotBlank()) { "Alasan wajib diisi" }
+            val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == portfolioId })
+            require(portfolio.isArchived) { "Portfolio tidak berada di arsip" }
+            val eventId = UUID.randomUUID().toString()
+            dao.updatePortfolio(portfolio.copy(isArchived = false, archivedAt = null, isPaused = !activate))
+            val resumedRuleCount = if (activate) resumeRulesPausedByArchive(portfolioId, LocalDate.now()) else 0
+            dao.insertEvent(ActivityEventEntity(eventId, LedgerType.RESTORE, if (activate) "Portfolio dipulihkan dan diaktifkan" else "Portfolio dipulihkan", reason, "USER", LocalDate.now().toEpochDay()))
+            dao.insertAudit(AuditSnapshotEntity(
+                eventId = eventId,
+                reason = reason,
+                beforeJson = "{\"portfolioId\":$portfolioId,\"archived\":true}",
+                afterJson = "{\"portfolioId\":$portfolioId,\"archived\":false,\"paused\":${!activate},\"resumedRules\":$resumedRuleCount}",
+            ))
+            assertInvariant()
+        }
+        if (activate) reconcilePortfolios()
+    }
+
+    private suspend fun resumeRulesPausedByArchive(portfolioId: Long, today: LocalDate): Int {
+        var resumedRuleCount = 0
+        dao.allRules().filter { it.pausedByArchive }.forEach { rule ->
+            val allocation = rule.allocationId?.let { dao.allocationById(it) }
+            val period = allocation?.let { dao.periodById(it.periodId) }
+            if (period?.portfolioId == portfolioId) {
+                val next = ScheduleCalculator.firstAfter(LocalDate.ofEpochDay(rule.startEpochDay), today, rule.cadence, rule.intervalCount)
+                val ended = rule.endEpochDay != null && next.toEpochDay() > rule.endEpochDay
+                dao.updateRule(rule.copy(nextEpochDay = next.toEpochDay(), isPaused = ended, pausedByArchive = false))
+                if (!ended) resumedRuleCount++
+            }
+        }
+        return resumedRuleCount
     }
 
     suspend fun processDueRules(today: LocalDate = LocalDate.now(), direction: String? = null) {
@@ -733,13 +847,13 @@ class KronRepository @Inject constructor(
     }
 
     suspend fun reconcilePortfolios(today: LocalDate = LocalDate.now()) = database.withTransaction {
-        dao.allPortfolios().filterNot { it.isPaused }.forEach { portfolio ->
+        dao.allPortfolios().filter { !it.isPaused && !it.isArchived }.forEach { portfolio ->
             val periods = dao.periodsForPortfolio(portfolio.id)
-            val current = periods.firstOrNull { today.toEpochDay() in it.startEpochDay..it.endEpochDay }
+            val current = periods.firstOrNull { it.status != PeriodStatus.CLOSED && today.toEpochDay() in it.startEpochDay..it.endEpochDay }
             val firstPeriod = periods.minByOrNull { it.startEpochDay }
             if (firstPeriod != null && today.isBefore(LocalDate.ofEpochDay(firstPeriod.startEpochDay))) return@forEach
             if (current != null) {
-                if (current.status == PeriodStatus.DRAFT) {
+                if (current.status == PeriodStatus.DRAFT || current.status == PeriodStatus.UNDERFUNDED) {
                     val previous = periods.filter { it.endEpochDay < current.startEpochDay }.maxByOrNull { it.endEpochDay }
                     val previousHasDeficit = previous?.let { period -> dao.allocationIdsForPeriod(period.id).any { dao.allocationAvailable(it) < 0 } } == true
                     if (!previousHasDeficit && canFundPeriod(current.id)) fundUnderfundedPeriod(current.id)

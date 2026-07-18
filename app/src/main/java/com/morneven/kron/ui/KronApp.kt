@@ -33,7 +33,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
-import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Assessment
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Fingerprint
@@ -41,7 +40,6 @@ import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -226,7 +224,7 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
     val snackbar = remember { SnackbarHostState() }
     var dialog by remember { mutableStateOf<ActionDialog?>(null) }
     var auditId by remember { mutableStateOf<String?>(null) }
-    var detailPeriodId by remember { mutableStateOf<Long?>(null) }
+    var detailPeriod by remember { mutableStateOf<Pair<Long, Boolean>?>(null) }
     var passwordMode by remember { mutableStateOf<String?>(null) }
     var criticalAction by remember { mutableStateOf<CriticalAction?>(null) }
     var criticalReason by remember { mutableStateOf("") }
@@ -265,9 +263,6 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
                 }
             }
         },
-        floatingActionButton = {
-            Unit
-        },
         contentWindowInsets = WindowInsets.systemBars,
     ) { padding ->
         NavHost(
@@ -304,7 +299,49 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
                 )
             }
             composable("budget") {
-                BudgetScreen(state, { dialog = ActionDialog.PORTFOLIO }, { dialog = ActionDialog.RESOLVE }, viewModel::fundPeriod, { dialog = ActionDialog.CHANNEL_TRANSFER }, viewModel::releaseRolloverToVault, { detailPeriodId = it }, { portfolioId -> criticalAction = CriticalAction("Hentikan portfolio", "Periode baru tidak akan dibuat. Jurnal dan periode lama tetap tersimpan.") { viewModel.pausePortfolio(portfolioId, it) }; criticalReason = "" })
+                BudgetScreen(
+                    state = state,
+                    onCreate = { dialog = ActionDialog.PORTFOLIO },
+                    onResolve = { dialog = ActionDialog.RESOLVE },
+                    onFund = viewModel::fundPeriod,
+                    onChannelTransfer = { dialog = ActionDialog.CHANNEL_TRANSFER },
+                    onReleaseRollover = viewModel::releaseRolloverToVault,
+                    onDetail = { periodId, readOnly -> detailPeriod = periodId to readOnly },
+                    onPause = { portfolioId ->
+                        criticalAction = CriticalAction("Jeda portfolio", "Periode baru tidak akan dibuat sampai portfolio dilanjutkan. Riwayat tetap tersimpan.") { viewModel.pausePortfolio(portfolioId, it) }
+                        criticalReason = ""
+                    },
+                    onResume = { portfolioId ->
+                        criticalAction = CriticalAction("Lanjutkan portfolio", "KRON akan kembali membuat periode berikutnya sesuai jadwal portfolio.") { viewModel.resumePortfolio(portfolioId, it) }
+                        criticalReason = ""
+                    },
+                    onArchive = { portfolioId ->
+                        val rows = state.allocations.filter { it.portfolioId == portfolioId }
+                        val allocationIds = rows.map { it.id }.toSet()
+                        val releaseCash = rows.filter { it.fundingChannel == "CASH" && it.availableAmount > 0 }.sumOf { it.availableAmount }
+                        val releaseEBudget = rows.filter { it.fundingChannel == "EBUDGET" && it.availableAmount > 0 }.sumOf { it.availableAmount }
+                        val rules = state.rules.count { it.allocationId in allocationIds && !it.isPaused }
+                        criticalAction = CriticalAction(
+                            "Arsipkan portfolio",
+                            "Sisa Cash ${com.morneven.kron.ui.components.displayMoney(releaseCash, state.valuesVisible)} dan eBudget ${com.morneven.kron.ui.components.displayMoney(releaseEBudget, state.valuesVisible)} akan kembali ke Main Vault. Periode terbuka ditutup dan $rules jadwal terkait dijeda.",
+                        ) { viewModel.archivePortfolio(portfolioId, it) }
+                        criticalReason = ""
+                    },
+                    onRestore = { portfolioId, activate ->
+                        val portfolio = state.archivedPortfolios.firstOrNull { it.id == portfolioId }
+                        val rows = state.allocations.filter { it.portfolioId == portfolioId }
+                        val latestRows = rows.groupBy { it.periodId }.maxByOrNull { (_, values) -> values.maxOf { it.startEpochDay } }?.value.orEmpty()
+                        val cashNeed = latestRows.filter { it.fundingChannel == "CASH" }.sumOf { it.plannedAmount }
+                        val eBudgetNeed = latestRows.filter { it.fundingChannel == "EBUDGET" }.sumOf { it.plannedAmount }
+                        val summary = if (activate) {
+                            "${portfolio?.name ?: "Portfolio"} kembali ke tab Aktif. Periode valid berikutnya memerlukan Cash ${com.morneven.kron.ui.components.displayMoney(cashNeed, state.valuesVisible)} dan eBudget ${com.morneven.kron.ui.components.displayMoney(eBudgetNeed, state.valuesVisible)}. Jika Vault belum cukup, status menjadi UNDERFUNDED."
+                        } else {
+                            "${portfolio?.name ?: "Portfolio"} kembali ke tab Aktif dalam keadaan dijeda. Periode historis tidak berubah."
+                        }
+                        criticalAction = CriticalAction(if (activate) "Pulihkan dan aktifkan" else "Pulihkan portfolio", summary) { viewModel.restorePortfolio(portfolioId, activate, it) }
+                        criticalReason = ""
+                    },
+                )
             }
             composable("activity") { ActivityScreen(state, { auditId = it }) }
             composable("reports") { ReportsScreen(state, onExport = { reportLauncher.launch("KRON-laporan-${LocalDate.now()}.csv") }) }
@@ -314,7 +351,9 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
                     { dialog = ActionDialog.ACCOUNT },
                     { editAccount = it },
                     { account -> criticalAction = CriticalAction("Arsipkan akun", "Riwayat akun tetap tersimpan. Akun hanya disembunyikan dari daftar aktif.") { reason -> viewModel.archiveAccount(account.id, reason) }; criticalReason = "" },
+                    { account -> criticalAction = CriticalAction("Pulihkan akun", "Akun kembali ke tab Aktif sebagai akun tidak aktif. Pilih Jadikan akun aktif secara terpisah.") { reason -> viewModel.restoreAccount(account.id, reason) }; criticalReason = "" },
                     { account -> viewModel.activateAccount(account.id) },
+                    { navController.navigate("activity") },
                     viewModel::setRememberVisibility,
                     viewModel::setAppLock,
                     viewModel::setTheme,
@@ -341,7 +380,7 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
         null -> Unit
     }
     auditId?.let { id -> state.activities.firstOrNull { it.id == id }?.let { event -> AuditDialog(event, state, { auditId = null }) { eventId, reason -> auditId = null; viewModel.reverseEvent(eventId, reason) } } }
-    detailPeriodId?.let { periodId -> BudgetDetailDialog(state, periodId, { detailPeriodId = null }, viewModel::correctAllocation) }
+    detailPeriod?.let { (periodId, readOnly) -> BudgetDetailDialog(state, periodId, readOnly, { detailPeriod = null }, viewModel::correctAllocation) }
     passwordMode?.let { mode ->
         PasswordDialog(mode == "BACKUP", { passwordMode = null }) { password ->
             passwordMode = null

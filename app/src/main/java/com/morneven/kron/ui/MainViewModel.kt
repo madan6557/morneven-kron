@@ -37,9 +37,11 @@ import kotlinx.coroutines.launch
 
 data class KronUiState(
     val accounts: List<AccountEntity> = emptyList(),
+    val archivedAccounts: List<AccountEntity> = emptyList(),
     val accountBalances: List<AccountBalanceRow> = emptyList(),
     val categories: List<CategoryEntity> = emptyList(),
     val portfolios: List<PortfolioEntity> = emptyList(),
+    val archivedPortfolios: List<PortfolioEntity> = emptyList(),
     val periods: List<BudgetPeriodEntity> = emptyList(),
     val allocations: List<AllocationBalanceRow> = emptyList(),
     val activities: List<ActivityRow> = emptyList(),
@@ -66,8 +68,8 @@ data class KronUiState(
     val totalCashAssets: Long get() = accountBalances.sumOf { it.cashBalance }
     val totalEBudgetAssets: Long get() = accountBalances.sumOf { it.eBudgetBalance }
     val totalVault: Long get() = vaultCash + vaultEBudget
-    val bookedCash: Long get() = allocations.filter { it.fundingChannel == FundingChannel.CASH }.sumOf { it.bookedAmount }
-    val bookedEBudget: Long get() = allocations.filter { it.fundingChannel == FundingChannel.EBUDGET }.sumOf { it.bookedAmount }
+    val bookedCash: Long get() = allocations.filter { !it.portfolioArchived && it.fundingChannel == FundingChannel.CASH }.sumOf { it.bookedAmount }
+    val bookedEBudget: Long get() = allocations.filter { !it.portfolioArchived && it.fundingChannel == FundingChannel.EBUDGET }.sumOf { it.bookedAmount }
     val unresolvedTotal: Long get() = unallocatedCash + unallocatedEBudget
 }
 
@@ -82,8 +84,10 @@ data class KronUiState(
 
 private data class MetadataSlice(
     val accounts: List<AccountEntity>,
+    val archivedAccounts: List<AccountEntity> = emptyList(),
     val categories: List<CategoryEntity>,
     val portfolios: List<PortfolioEntity>,
+    val archivedPortfolios: List<PortfolioEntity> = emptyList(),
     val periods: List<BudgetPeriodEntity>,
     val unallocated: Map<String, Long>,
 )
@@ -131,7 +135,17 @@ class MainViewModel @Inject constructor(
         repository.periods,
         repository.unallocatedByChannel,
     ) { accounts, categories, portfolios, periods, unallocated ->
-        MetadataSlice(accounts, categories, portfolios, periods, unallocated.associate { it.fundingChannel to it.balance })
+        MetadataSlice(
+            accounts = accounts,
+            categories = categories,
+            portfolios = portfolios,
+            periods = periods,
+            unallocated = unallocated.associate { it.fundingChannel to it.balance },
+        )
+    }.combine(repository.archivedAccounts) { metadata, archivedAccounts ->
+        metadata.copy(archivedAccounts = archivedAccounts)
+    }.combine(repository.archivedPortfolios) { metadata, archivedPortfolios ->
+        metadata.copy(archivedPortfolios = archivedPortfolios)
     }
 
     private val visibilityPreference = combine(sessionVisibility, preferences.rememberVisibility, preferences.rememberedVisibility) { session, remember, remembered -> Triple(session, remember, remembered) }
@@ -157,9 +171,11 @@ class MainViewModel @Inject constructor(
     val uiState: StateFlow<KronUiState> = combine(ledger, metadata, cashflow, preferenceState, message) { ledger, metadata, cashflow, prefs, message ->
         KronUiState(
             accounts = metadata.accounts,
+            archivedAccounts = metadata.archivedAccounts,
             accountBalances = ledger.balances,
             categories = metadata.categories,
             portfolios = metadata.portfolios,
+            archivedPortfolios = metadata.archivedPortfolios,
             periods = metadata.periods,
             allocations = ledger.allocations,
             activities = ledger.activities,
@@ -183,7 +199,7 @@ class MainViewModel @Inject constructor(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), KronUiState())
 
     init {
-        viewModelScope.launch { repository.allocations.collect(budgetNotifier::sync) }
+        viewModelScope.launch { repository.allocations.collect { budgetNotifier.sync(it.filterNot(AllocationBalanceRow::portfolioArchived)) } }
         viewModelScope.launch {
             runCatching {
                 repository.seedIfNeeded()
@@ -247,6 +263,10 @@ class MainViewModel @Inject constructor(
 
     fun archiveAccount(accountId: Long, reason: String) = runAction("Akun diarsipkan") {
         repository.archiveAccount(accountId, reason)
+    }
+
+    fun restoreAccount(accountId: Long, reason: String) = runAction("Akun dipulihkan") {
+        repository.restoreAccount(accountId, reason)
     }
 
     fun addIncome(
@@ -352,7 +372,12 @@ class MainViewModel @Inject constructor(
     }
 
     fun fundPeriod(periodId: Long) = runAction("Portfolio aktif") { repository.fundUnderfundedPeriod(periodId) }
-    fun pausePortfolio(portfolioId: Long, reason: String) = runAction("Portfolio dihentikan") { repository.pausePortfolio(portfolioId, reason) }
+    fun pausePortfolio(portfolioId: Long, reason: String) = runAction("Portfolio dijeda") { repository.pausePortfolio(portfolioId, reason) }
+    fun resumePortfolio(portfolioId: Long, reason: String) = runAction("Portfolio dilanjutkan") { repository.resumePortfolio(portfolioId, reason) }
+    fun archivePortfolio(portfolioId: Long, reason: String) = runAction("Portfolio diarsipkan") { repository.archivePortfolio(portfolioId, reason) }
+    fun restorePortfolio(portfolioId: Long, activate: Boolean, reason: String) = runAction(if (activate) "Portfolio dipulihkan dan diaktifkan" else "Portfolio dipulihkan") {
+        repository.restorePortfolio(portfolioId, activate, reason)
+    }
     fun pauseRecurringRule(ruleId: String, reason: String) = runAction("Jadwal transaksi dihentikan") { repository.pauseRecurringRule(ruleId, reason) }
 
     fun resolveFromAllocation(sourceId: Long, targetId: Long, amount: Long, note: String) = runAction("Budget minus berhasil diselesaikan") {

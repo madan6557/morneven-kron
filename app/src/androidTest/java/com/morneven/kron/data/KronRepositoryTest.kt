@@ -7,6 +7,7 @@ import java.time.LocalDate
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -146,6 +147,88 @@ class KronRepositoryTest {
         assertEquals(75L, dao.accountBalance(account.id, FundingChannel.CASH))
         assertEquals(75L, dao.vaultBalance(FundingChannel.CASH))
         assertEquals(dao.cashTotal(), dao.budgetAvailableTotal())
+    }
+
+    @Test
+    fun archivePortfolioReleasesBothChannelsAndClosesOpenPeriod() = runBlocking {
+        val account = dao.activeAccount() ?: error("Akun aktif tidak ditemukan")
+        val category = dao.allCategories().first { it.direction == TransactionDirection.EXPENSE }
+        repository.addIncome(account.id, FundingChannel.CASH, 100, null, "Cash", "")
+        repository.addIncome(account.id, FundingChannel.EBUDGET, 100, null, "eBudget", "")
+        val portfolioId = repository.createPortfolio(
+            "Arsip Uji",
+            "MONTHLY",
+            0,
+            false,
+            listOf(
+                AllocationDraft(category.id, FundingChannel.CASH, 40),
+                AllocationDraft(category.id, FundingChannel.EBUDGET, 30),
+            ),
+        )
+
+        repository.archivePortfolio(portfolioId, "Tidak digunakan lagi")
+
+        assertEquals(100L, dao.vaultBalance(FundingChannel.CASH))
+        assertEquals(100L, dao.vaultBalance(FundingChannel.EBUDGET))
+        assertTrue(dao.allocationsForPeriod(dao.periodsForPortfolio(portfolioId).first().id).all { dao.allocationAvailable(it.id) == 0L })
+        assertTrue(dao.periodsForPortfolio(portfolioId).all { it.status == PeriodStatus.CLOSED })
+        assertTrue(dao.allPortfolios().single { it.id == portfolioId }.isArchived)
+        assertEquals(LedgerType.ARCHIVE, dao.allEvents().last { it.title == "Portfolio diarsipkan" }.type)
+    }
+
+    @Test
+    fun archivePortfolioRejectsAnyUnresolvedDeficit() = runBlocking {
+        val account = dao.activeAccount() ?: error("Akun aktif tidak ditemukan")
+        val category = dao.allCategories().first { it.direction == TransactionDirection.EXPENSE }
+        repository.addIncome(account.id, FundingChannel.CASH, 100, null, "Dana", "")
+        val portfolioId = repository.createPortfolio("Minus", "MONTHLY", 0, false, listOf(AllocationDraft(category.id, FundingChannel.CASH, 40)))
+        val allocation = dao.allAllocations().single()
+        repository.addExpense(account.id, FundingChannel.CASH, 50, listOf(ExpenseSplitInput(category.id, allocation.id, 50)), "Lebih", "")
+
+        val result = runCatching { repository.archivePortfolio(portfolioId, "Arsip") }
+
+        assertTrue(result.isFailure)
+        assertFalse(dao.allPortfolios().single { it.id == portfolioId }.isArchived)
+    }
+
+    @Test
+    fun restorePortfolioOnlyResumesRulesPausedByArchive() = runBlocking {
+        val account = dao.activeAccount() ?: error("Akun aktif tidak ditemukan")
+        val category = dao.allCategories().first { it.direction == TransactionDirection.EXPENSE }
+        repository.addIncome(account.id, FundingChannel.CASH, 200, null, "Dana", "")
+        val portfolioId = repository.createPortfolio("Rutin", "MONTHLY", 0, false, listOf(AllocationDraft(category.id, FundingChannel.CASH, 50)))
+        val allocation = dao.allAllocations().single()
+        val today = LocalDate.now()
+        repository.addRecurringRule(RecurringRuleEntity("archive-rule", "Aktif", TransactionDirection.EXPENSE, 10, account.id, FundingChannel.CASH, category.id, allocation.id, "MONTHLY", 1, today.monthValue, today.dayOfMonth, today.toEpochDay(), today.plusMonths(1).toEpochDay()))
+        repository.addRecurringRule(RecurringRuleEntity("manual-rule", "Manual", TransactionDirection.EXPENSE, 10, account.id, FundingChannel.CASH, category.id, allocation.id, "MONTHLY", 1, today.monthValue, today.dayOfMonth, today.toEpochDay(), today.plusMonths(1).toEpochDay(), isPaused = true))
+
+        repository.archivePortfolio(portfolioId, "Simpan")
+        assertTrue(dao.allRules().single { it.id == "archive-rule" }.pausedByArchive)
+        assertFalse(dao.allRules().single { it.id == "manual-rule" }.pausedByArchive)
+
+        repository.restorePortfolio(portfolioId, activate = true, reason = "Gunakan lagi")
+
+        assertFalse(dao.allPortfolios().single { it.id == portfolioId }.isArchived)
+        assertFalse(dao.allRules().single { it.id == "archive-rule" }.isPaused)
+        assertTrue(dao.allRules().single { it.id == "manual-rule" }.isPaused)
+    }
+
+    @Test
+    fun archivedAccountRestoresAsInactiveWithAuditEvents() = runBlocking {
+        val secondId = repository.addAccount("Cadangan", 0, 0)
+
+        repository.archiveAccount(secondId, "Tidak dipakai")
+        assertTrue(dao.accountById(secondId)?.isArchived == true)
+        assertTrue(dao.accountById(secondId)?.archivedAt != null)
+
+        repository.restoreAccount(secondId, "Dipakai kembali")
+
+        val restored = dao.accountById(secondId) ?: error("Akun hilang")
+        assertFalse(restored.isArchived)
+        assertFalse(restored.isActive)
+        assertEquals(null, restored.archivedAt)
+        assertTrue(dao.allEvents().any { it.type == LedgerType.ARCHIVE && it.title == "Akun diarsipkan" })
+        assertTrue(dao.allEvents().any { it.type == LedgerType.RESTORE && it.title == "Akun dipulihkan" })
     }
 
     @Test

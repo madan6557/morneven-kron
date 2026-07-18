@@ -33,8 +33,10 @@ interface KronDao {
 
     @Query("SELECT COUNT(*) FROM accounts") suspend fun accountCount(): Int
     @Query("SELECT * FROM accounts WHERE isArchived = 0 ORDER BY createdAt") fun observeAccounts(): Flow<List<AccountEntity>>
+    @Query("SELECT * FROM accounts WHERE isArchived = 1 ORDER BY archivedAt DESC, createdAt") fun observeArchivedAccounts(): Flow<List<AccountEntity>>
     @Query("SELECT * FROM categories WHERE isArchived = 0 ORDER BY direction, name") fun observeCategories(): Flow<List<CategoryEntity>>
-    @Query("SELECT * FROM portfolios ORDER BY fundingPriority, createdAt") fun observePortfolios(): Flow<List<PortfolioEntity>>
+    @Query("SELECT * FROM portfolios WHERE isArchived = 0 ORDER BY fundingPriority, createdAt") fun observePortfolios(): Flow<List<PortfolioEntity>>
+    @Query("SELECT * FROM portfolios WHERE isArchived = 1 ORDER BY archivedAt DESC, createdAt") fun observeArchivedPortfolios(): Flow<List<PortfolioEntity>>
     @Query("SELECT * FROM budget_periods ORDER BY startEpochDay DESC") fun observePeriods(): Flow<List<BudgetPeriodEntity>>
     @Query("SELECT * FROM recurring_rules ORDER BY nextEpochDay, createdAt") fun observeRules(): Flow<List<RecurringRuleEntity>>
 
@@ -64,7 +66,7 @@ interface KronDao {
     fun observeUnallocatedByChannel(): Flow<List<ChannelBalanceRow>>
 
     @Query("""
-        SELECT al.id, al.periodId, p.portfolioId, pf.name AS portfolioName,
+        SELECT al.id, al.periodId, p.portfolioId, pf.name AS portfolioName, pf.isArchived AS portfolioArchived,
                al.categoryId, c.name AS categoryName, c.color, al.fundingChannel,
                al.plannedAmount,
                COALESCE(SUM(b.amount), 0) - COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND e.reversedByEventId IS NULL AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS bookedAmount,

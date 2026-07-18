@@ -42,7 +42,7 @@ fun ActivityScreen(state: KronUiState, onEvent: (String) -> Unit, modifier: Modi
             "Budget" -> event.type in setOf("PORTFOLIO_BOOKING", "REALLOCATION", "OVERBUDGET_COVERAGE", "RELEASE", "ROLLOVER")
             "Otomatis" -> event.type == "AUTOMATION"
             "Resolusi" -> event.type in setOf("REALLOCATION", "OVERBUDGET_COVERAGE")
-            "Sistem" -> event.source == "SYSTEM" || event.type == "REVERSAL"
+            "Sistem" -> event.source == "SYSTEM" || event.type in setOf("REVERSAL", "ARCHIVE", "RESTORE")
             else -> true
         }
     }
@@ -74,7 +74,16 @@ fun ActivityScreen(state: KronUiState, onEvent: (String) -> Unit, modifier: Modi
                     Spacer(Modifier.height(8.dp))
                     Text(LocalDate.ofEpochDay(event.effectiveEpochDay).format(DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.forLanguageTag("id-ID"))), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (event.note.isNotBlank()) Text(event.note, style = MaterialTheme.typography.bodySmall)
-                    Text(if (event.reversedByEventId == null) "Ketuk untuk audit dan revert" else "REVERSED", modifier = Modifier.padding(top = 8.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    Text(
+                        when {
+                            event.reversedByEventId != null -> "REVERSED"
+                            event.type in setOf("ARCHIVE", "RESTORE") -> "Ketuk untuk audit"
+                            else -> "Ketuk untuk audit dan revert"
+                        },
+                        modifier = Modifier.padding(top = 8.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
                 }
             }
         }
