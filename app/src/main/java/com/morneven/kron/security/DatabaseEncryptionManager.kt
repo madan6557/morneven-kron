@@ -151,6 +151,7 @@ class DatabaseEncryptionManager @Inject constructor(
         )
         database.use { db ->
             db.rawExecSQL("PRAGMA key = \"x'$keyLiteral'\"")
+            db.rawExecSQL("PRAGMA wal_checkpoint(FULL)")
         }
     }
 
