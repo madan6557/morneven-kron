@@ -166,7 +166,6 @@ fun KronApp(
                 }
                 activity.window.statusBarColor = Color.Transparent.toArgb()
                 activity.window.navigationBarColor = Color.Transparent.toArgb()
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) activity.window.setHideOverlayWindows(true)
             }
         }
         if (!state.onboardingComplete) {

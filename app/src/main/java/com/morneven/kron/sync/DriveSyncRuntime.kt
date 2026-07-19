@@ -327,7 +327,7 @@ class DriveSyncRuntimeFactory @Inject constructor(
         true
     }
 
-    fun isWifiOnly(): Boolean = syncPreferences.getBoolean(KEY_WIFI_ONLY, true)
+    fun isWifiOnly(): Boolean = syncPreferences.getBoolean(KEY_WIFI_ONLY, false)
 
     suspend fun setWifiOnly(value: Boolean) = lifecycleMutex.withLock {
         check(syncPreferences.edit().putBoolean(KEY_WIFI_ONLY, value).commit()) {
