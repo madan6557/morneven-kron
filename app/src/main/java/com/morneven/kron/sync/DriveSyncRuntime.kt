@@ -104,7 +104,7 @@ class DriveSyncRuntime internal constructor(
         authorizationBridge.intentSenderRequest(resolutionId)
 
     suspend fun completeAuthorization(
-        account: GoogleAccountIdentity,
+        account: GoogleAccountIdentity?,
         resolutionId: String,
         resultCode: Int,
         data: Intent?,

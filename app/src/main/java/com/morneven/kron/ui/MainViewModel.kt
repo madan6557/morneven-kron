@@ -296,10 +296,10 @@ class MainViewModel @Inject constructor(
     fun clearMessage() { message.value = null }
     fun showMessage(value: String) { message.value = value }
 
-    fun setPendingDriveAuthorization(account: GoogleAccountIdentity, resolutionId: String) {
-        savedStateHandle[PENDING_DRIVE_SUBJECT] = account.subjectId
-        savedStateHandle[PENDING_DRIVE_EMAIL] = account.email
-        savedStateHandle[PENDING_DRIVE_NAME] = account.displayName
+    fun setPendingDriveAuthorization(account: GoogleAccountIdentity?, resolutionId: String) {
+        savedStateHandle[PENDING_DRIVE_SUBJECT] = account?.subjectId
+        savedStateHandle[PENDING_DRIVE_EMAIL] = account?.email
+        savedStateHandle[PENDING_DRIVE_NAME] = account?.displayName
         savedStateHandle[PENDING_DRIVE_RESOLUTION] = resolutionId
     }
 

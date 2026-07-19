@@ -1,5 +1,10 @@
 # KRON Changelog
 
+## 1.1.3 - 2026-07-19
+
+- Bypass Credential Manager untuk koneksi Drive. Pakai AuthorizationClient langsung dengan account picker bawaan Google Play Services. Tidak perlu koneksi internet ke server Google untuk memilih akun.
+- Ambil email akun dari userinfo API setelah otorisasi selesai.
+
 ## 1.1.2 - 2026-07-19
 
 - Memperbaiki chart mode Saldo agar hanya menampilkan 1 garis (Net).

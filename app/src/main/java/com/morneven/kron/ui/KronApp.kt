@@ -295,21 +295,21 @@ private fun MainScaffold(
         pendingDriveName,
         pendingDriveResolution,
     ) {
-        if (
-            pendingDriveSubject != null &&
-            pendingDriveEmail != null &&
-            pendingDriveResolution != null
-        ) {
+        val resolutionId = pendingDriveResolution ?: return@remember null
+        if (pendingDriveSubject != null && pendingDriveEmail != null) {
             DriveConnectResult.UserActionRequired(
                 account = GoogleAccountIdentity(
-                    subjectId = requireNotNull(pendingDriveSubject),
-                    email = requireNotNull(pendingDriveEmail),
+                    subjectId = pendingDriveSubject!!,
+                    email = pendingDriveEmail!!,
                     displayName = pendingDriveName,
                 ),
-                resolutionId = requireNotNull(pendingDriveResolution),
+                resolutionId = resolutionId,
             )
         } else {
-            null
+            DriveConnectResult.UserActionRequired(
+                account = null,
+                resolutionId = resolutionId,
+            )
         }
     }
     var launchedAuthorizationId by rememberSaveable { mutableStateOf<String?>(null) }

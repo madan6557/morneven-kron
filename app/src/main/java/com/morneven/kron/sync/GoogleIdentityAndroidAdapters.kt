@@ -104,16 +104,18 @@ class PlayServicesAuthorizationClientBridge(
     private val resolutions = ConcurrentHashMap<String, PendingIntent>()
 
     override suspend fun authorize(
-        account: GoogleAccountIdentity,
+        account: GoogleAccountIdentity?,
         requestedScopes: Set<String>,
         interactive: Boolean,
     ): AuthorizationClientResult {
         require(requestedScopes == setOf(DRIVE_APPDATA_SCOPE)) { "KRON hanya mengizinkan scope appDataFolder" }
-        val request = AuthorizationRequest.builder()
-            .setAccount(Account(account.email, GOOGLE_ACCOUNT_TYPE))
+        val builder = AuthorizationRequest.builder()
             .setRequestedScopes(requestedScopes.map(::Scope))
             .setOptOutIncludingGrantedScopes(true)
-            .build()
+        if (account != null) {
+            builder.setAccount(Account(account.email, GOOGLE_ACCOUNT_TYPE))
+        }
+        val request = builder.build()
         return runCatching { client.authorize(request).awaitTask() }
             .fold(
                 onSuccess = { it.toBridgeResult(interactive) },
