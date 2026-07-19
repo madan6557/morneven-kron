@@ -240,7 +240,7 @@ fun ReportsScreen(
                 )
                 ReportMetric("Masuk", money(income), KronGreen)
                 ReportMetric("Keluar", money(expense), MaterialTheme.colorScheme.error)
-                ReportMetric("Net", money(net), signedColor(net))
+                ReportMetric("Net", money(net), KronGold)
                 Spacer(Modifier.height(14.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = !showTable, onClick = { showTable = false }, label = { Text("Grafik") })
@@ -501,7 +501,7 @@ private fun BucketDetails(bucket: CashFlowBucket, money: (Long) -> String) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         ReportValueRow("Masuk", money(bucket.income), KronGreen)
         ReportValueRow("Keluar", money(bucket.expense), MaterialTheme.colorScheme.error)
-        ReportValueRow("Net", money(bucket.net), signedColor(bucket.net))
+        ReportValueRow("Net", money(bucket.net), KronGold)
     }
 }
 

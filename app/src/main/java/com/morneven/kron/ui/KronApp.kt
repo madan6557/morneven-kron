@@ -175,9 +175,8 @@ fun KronApp(
         var locked by rememberSaveable { mutableStateOf(false) }
         var backgroundAt by remember { mutableLongStateOf(0L) }
         var lockError by remember { mutableStateOf<String?>(null) }
-        DisposableEffect(activity, locked, state.valuesVisible) {
-            val protectScreen = locked || state.valuesVisible
-            if (protectScreen) activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        DisposableEffect(activity, locked) {
+            if (locked) activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
             else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
             onDispose {
                 activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
