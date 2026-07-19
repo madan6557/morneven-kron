@@ -150,7 +150,7 @@ class DatabaseEncryptionManager @Inject constructor(
             null,
         )
         database.use { db ->
-            db.rawExecSQL("PRAGMA rekey = \"x'$keyLiteral'\"")
+            db.rawExecSQL("PRAGMA key = x'$keyLiteral'")
         }
     }
 
