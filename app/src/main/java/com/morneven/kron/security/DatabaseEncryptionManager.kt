@@ -134,29 +134,23 @@ class DatabaseEncryptionManager @Inject constructor(
 
     private fun encryptPlaintext(source: File, target: File, passphrase: ByteArray) {
         validatePlaintextHeader(source)
-        val plaintext = SQLiteDatabase.openDatabase(
-            source.absolutePath,
+        source.inputStream().use { input ->
+            target.outputStream().use { output ->
+                input.copyTo(output)
+                output.flush()
+                output.fd.sync()
+            }
+        }
+        val keyLiteral = passphrase.joinToString("") { "%02x".format(it) }
+        val database = SQLiteDatabase.openDatabase(
+            target.absolutePath,
             ByteArray(0),
             null,
             SQLiteDatabase.OPEN_READWRITE,
             null,
         )
-        plaintext.use { database ->
-            val targetPath = sqlString(target.absolutePath)
-            val keyLiteral = passphrase.joinToString("") { "%02x".format(it) }
-            database.rawExecSQL("ATTACH DATABASE '$targetPath' AS encrypted KEY \"x'$keyLiteral'\"")
-            try {
-                database.query("SELECT sqlcipher_export('encrypted')").use { cursor ->
-                    require(cursor.moveToFirst()) { "Database tidak dapat dienkripsi" }
-                }
-                val version = database.query("PRAGMA user_version").use { cursor ->
-                    require(cursor.moveToFirst())
-                    cursor.getInt(0)
-                }
-                database.rawExecSQL("PRAGMA encrypted.user_version = $version")
-            } finally {
-                database.rawExecSQL("DETACH DATABASE encrypted")
-            }
+        database.use { db ->
+            db.rawExecSQL("PRAGMA rekey = \"x'$keyLiteral'\"")
         }
     }
 
