@@ -27,6 +27,7 @@ class HomePrivacyTest {
                     onTransfer = {},
                     onResolve = {},
                     onAllActivities = {},
+                    onPauseRule = {},
                 )
             }
         }
@@ -46,6 +47,7 @@ class HomePrivacyTest {
                     onTransfer = {},
                     onResolve = {},
                     onAllActivities = {},
+                    onPauseRule = {},
                 )
             }
         }
@@ -67,6 +69,7 @@ class HomePrivacyTest {
                     onTransfer = {},
                     onResolve = {},
                     onAllActivities = {},
+                    onPauseRule = {},
                 )
             }
         }

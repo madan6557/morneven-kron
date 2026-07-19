@@ -47,12 +47,20 @@ class BudgetNotifier @Inject constructor(
 
     private fun notify(row: AllocationBalanceRow, threshold: Int) {
         val message = if (threshold == 110) "${row.categoryName} melewati budget dan perlu resolusi" else "${row.categoryName} telah memakai $threshold% budget"
+        val publicVersion = NotificationCompat.Builder(context, AutomationWorker.CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle("Perhatian KRON")
+            .setContentText("Buka KRON untuk melihat detail")
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .build()
         val notification = NotificationCompat.Builder(context, AutomationWorker.CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle("Perhatian budget KRON")
             .setContentText(message)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(publicVersion)
             .setAutoCancel(true)
             .build()
         context.getSystemService(NotificationManager::class.java).notify(key(row), notification)

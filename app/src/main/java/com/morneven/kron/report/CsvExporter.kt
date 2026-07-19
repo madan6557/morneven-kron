@@ -30,7 +30,7 @@ class CsvExporter @Inject constructor(
                     event.vaultImpact,
                     event.budgetImpact,
                     if (event.reversedByEventId == null) "NORMAL" else "REVERSED",
-                ).joinToString(",") { csv(it.toString()) })
+                ).joinToString(",") { csv(it) })
             }
             writer.appendLine()
             writer.appendLine("KRON BUDGET VS ACTUAL")
@@ -45,10 +45,15 @@ class CsvExporter @Inject constructor(
                     row.spentAmount,
                     row.availableAmount,
                     row.periodStatus,
-                ).joinToString(",") { csv(it.toString()) })
+                ).joinToString(",") { csv(it) })
             }
         } ?: error("Tidak dapat membuka file CSV")
     }
 
-    private fun csv(value: String): String = "\"${value.replace("\"", "\"\"")}\""
+    private fun csv(value: Any): String {
+        if (value is Number) return value.toString()
+        val raw = value.toString()
+        val protected = if (raw.firstOrNull() in setOf('=', '+', '-', '@', '\t', '\r')) "'$raw" else raw
+        return "\"${protected.replace("\"", "\"\"")}\""
+    }
 }

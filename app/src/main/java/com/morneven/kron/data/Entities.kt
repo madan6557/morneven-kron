@@ -28,6 +28,7 @@ object LedgerType {
 object BudgetBucket {
     const val VAULT = "VAULT"
     const val UNALLOCATED = "UNALLOCATED"
+    const val UNEXPECTED = "UNEXPECTED"
     const val ROLLOVER = "ROLLOVER"
     const val EXTERNAL = "EXTERNAL"
 }
@@ -351,15 +352,44 @@ data class AuditSnapshotEntity(
         childColumns = ["eventId"],
         onDelete = ForeignKey.RESTRICT,
     )],
-    indices = [Index("eventId")],
+    indices = [Index("eventId"), Index(value = ["storageId"], unique = true)],
 )
 data class ReceiptEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val eventId: String,
     val localPath: String,
+    val storageId: String,
+    val displayName: String,
     val mimeType: String,
+    val byteSize: Long,
+    val sha256: String,
+    val encryptionNonce: String? = null,
+    val encryptionVersion: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
 )
+
+@Entity(tableName = "sync_state")
+data class SyncStateEntity(
+    @PrimaryKey val id: Int = SINGLETON_ID,
+    val datasetId: String,
+    val deviceId: String,
+    val accountSubject: String? = null,
+    val accountEmail: String? = null,
+    val localGeneration: Long = 0,
+    val lastSyncedGeneration: Long = 0,
+    val parentSnapshotId: String? = null,
+    val lastSnapshotId: String? = null,
+    val conflictRemoteFileId: String? = null,
+    val lastSyncedAt: Long? = null,
+    val status: String = "DISCONNECTED",
+    val lastError: String? = null,
+    val disabledDueToBilling: Boolean = false,
+    val updatedAt: Long = System.currentTimeMillis(),
+) {
+    companion object {
+        const val SINGLETON_ID = 1
+    }
+}
 
 data class AccountBalanceRow(
     val id: Long,
@@ -402,6 +432,11 @@ data class ActivityRow(
     val cashImpact: Long,
     val vaultImpact: Long,
     val budgetImpact: Long,
+)
+
+data class EventChannelRow(
+    val eventId: String,
+    val fundingChannel: String,
 )
 
 data class CashflowRow(

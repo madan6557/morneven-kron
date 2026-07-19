@@ -11,19 +11,34 @@ val signingFile = file(System.getProperty("user.home") + "/.android/kron-signing
 val signingValues = Properties().apply {
     if (signingFile.exists()) signingFile.inputStream().use { load(it) }
 }
+val googleConfigFile = file(System.getProperty("user.home") + "/.android/kron-google.properties")
+val googleValues = Properties().apply {
+    if (googleConfigFile.exists()) googleConfigFile.inputStream().use { load(it) }
+}
+val googleWebClientId = googleValues.getProperty("webClientId", "").trim()
+val privacyPolicyUrl = googleValues.getProperty("privacyPolicyUrl", "").trim()
+
+if (gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }) {
+    require(signingFile.exists()) {
+        "Release KRON wajib memakai ~/.android/kron-signing.properties agar signature tetap kompatibel."
+    }
+}
 
 android {
     namespace = "com.morneven.kron"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.morneven.kron"
         minSdk = 26
-        targetSdk = 36
-        versionCode = 21
-        versionName = "1.0.21"
+        targetSdk = 37
+        versionCode = 22
+        versionName = "1.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${googleWebClientId.replace("\"", "\\\"")}\"")
+        buildConfigField("String", "PRIVACY_POLICY_URL", "\"${privacyPolicyUrl.replace("\"", "\\\"")}\"")
+        buildConfigField("boolean", "DRIVE_SYNC_CONFIGURED", (googleWebClientId.isNotBlank() && privacyPolicyUrl.isNotBlank()).toString())
     }
 
     if (signingFile.exists()) {
@@ -43,8 +58,9 @@ android {
             versionNameSuffix = "-debug"
         }
         release {
-            isMinifyEnabled = false
-            isShrinkResources = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            isDebuggable = false
             if (signingFile.exists()) signingConfig = signingConfigs.getByName("release")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
@@ -65,12 +81,16 @@ android {
     testOptions {
         unitTests.isIncludeAndroidResources = true
     }
+
+    sourceSets {
+        getByName("androidTest").assets.srcDir("$projectDir/schemas")
+    }
 }
 
 androidComponents {
     onVariants(selector().withBuildType("release")) { variant ->
         variant.outputs.forEach { output ->
-        output.outputFileName.set("KRON-1.0.21.apk")
+        output.outputFileName.set("KRON-1.1.0-LTS.apk")
         }
     }
 }
@@ -105,6 +125,12 @@ dependencies {
     implementation(libs.androidx.work.runtime)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.biometric)
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services.auth)
+    implementation(libs.google.identity.googleid)
+    implementation(libs.google.play.services.auth)
+    implementation(libs.sqlcipher.android)
+    implementation(libs.androidx.sqlite)
 
     implementation(libs.hilt.android)
     kapt(libs.hilt.compiler)

@@ -1,13 +1,20 @@
 package com.morneven.kron.ui
 
 import android.Manifest
+import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.os.Process
 import android.os.SystemClock
+import android.provider.Settings
+import android.view.WindowManager
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.core.tween
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.BorderStroke
@@ -36,6 +43,8 @@ import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Assessment
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Fingerprint
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
@@ -71,19 +80,24 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.work.WorkManager
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.morneven.kron.R
+import com.morneven.kron.automation.AutomationWorker
 import com.morneven.kron.ui.dialogs.AccountDialog
 import com.morneven.kron.ui.dialogs.EditAccountDialog
 import com.morneven.kron.data.AccountEntity
@@ -101,8 +115,18 @@ import com.morneven.kron.ui.screens.HomeScreen
 import com.morneven.kron.ui.screens.OnboardingScreen
 import com.morneven.kron.ui.screens.ReportsScreen
 import com.morneven.kron.ui.screens.SettingsScreen
+import com.morneven.kron.ui.screens.CloudBackupUiState
+import com.morneven.kron.ui.screens.CloudSyncStatus
+import com.morneven.kron.sync.ConflictResolution
+import com.morneven.kron.sync.DriveConnectResult
+import com.morneven.kron.sync.DriveSyncRuntime
+import com.morneven.kron.sync.GoogleAccountIdentity
+import com.morneven.kron.sync.SyncConflict
+import com.morneven.kron.sync.SyncRunResult
 import com.morneven.kron.ui.theme.KronTheme
 import java.time.LocalDate
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private enum class ActionDialog { INCOME, EXPENSE, TRANSFER, PORTFOLIO, RESOLVE, CHANNEL_TRANSFER, ACCOUNT }
 
@@ -120,14 +144,12 @@ private val destinations = listOf(
 private fun routePosition(route: String?): Int = destinations.indexOfFirst { it.route == route }.takeIf { it >= 0 } ?: 0
 
 @Composable
-fun KronApp(viewModel: MainViewModel, activity: FragmentActivity) {
+fun KronApp(
+    viewModel: MainViewModel,
+    activity: FragmentActivity,
+    driveSyncRuntime: DriveSyncRuntime?,
+) {
     val state by viewModel.uiState.collectAsState()
-    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
-    LaunchedEffect(state.onboardingComplete) {
-        if (state.onboardingComplete && Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
-    }
     KronTheme(state.theme) {
         val view = LocalView.current
         val darkTheme = when (state.theme) {
@@ -144,6 +166,7 @@ fun KronApp(viewModel: MainViewModel, activity: FragmentActivity) {
                 }
                 activity.window.statusBarColor = Color.Transparent.toArgb()
                 activity.window.navigationBarColor = Color.Transparent.toArgb()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) activity.window.setHideOverlayWindows(true)
             }
         }
         if (!state.onboardingComplete) {
@@ -153,15 +176,26 @@ fun KronApp(viewModel: MainViewModel, activity: FragmentActivity) {
         var locked by rememberSaveable { mutableStateOf(false) }
         var backgroundAt by remember { mutableLongStateOf(0L) }
         var lockError by remember { mutableStateOf<String?>(null) }
+        DisposableEffect(activity, locked, state.valuesVisible) {
+            val protectScreen = locked || state.valuesVisible
+            if (protectScreen) activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            onDispose {
+                activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            }
+        }
         val lifecycleOwner = LocalLifecycleOwner.current
-        val authenticate = remember(activity) {
+        val authenticate = remember(activity, state.authLockedUntil, state.authFailures) {
             {
                 if (System.currentTimeMillis() < state.authLockedUntil) {
                     lockError = "Terlalu banyak percobaan. Coba lagi nanti."
                     return@remember
                 }
                 val executor = ContextCompat.getMainExecutor(activity)
-                val prompt = BiometricPrompt(activity, executor, object : BiometricPrompt.AuthenticationCallback() {
+                var currentFailures = state.authFailures
+                var blockedByKron = false
+                lateinit var prompt: BiometricPrompt
+                prompt = BiometricPrompt(activity, executor, object : BiometricPrompt.AuthenticationCallback() {
                     override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                         locked = false
                         lockError = null
@@ -170,12 +204,19 @@ fun KronApp(viewModel: MainViewModel, activity: FragmentActivity) {
                     }
 
                     override fun onAuthenticationFailed() {
+                        currentFailures += 1
                         viewModel.recordAuthFailure()
-                        lockError = "Autentikasi gagal (${state.authFailures + 1}/5)."
+                        if (currentFailures >= 5) {
+                            blockedByKron = true
+                            lockError = "Batas percobaan tercapai. KRON dikunci sementara."
+                            prompt.cancelAuthentication()
+                        } else {
+                            lockError = "Autentikasi gagal. Sisa percobaan: ${5 - currentFailures}."
+                        }
                     }
 
                     override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                        lockError = errString.toString()
+                        if (!blockedByKron) lockError = errString.toString()
                     }
                 })
                 val info = BiometricPrompt.PromptInfo.Builder()
@@ -197,10 +238,19 @@ fun KronApp(viewModel: MainViewModel, activity: FragmentActivity) {
             val observer = LifecycleEventObserver { _, event ->
                 when (event) {
                     Lifecycle.Event.ON_STOP -> backgroundAt = SystemClock.elapsedRealtime()
-                    Lifecycle.Event.ON_START -> if (state.appLockEnabled && backgroundAt > 0 && SystemClock.elapsedRealtime() - backgroundAt >= 60_000) {
-                        locked = true
-                        viewModel.hideValuesForLock()
-                        authenticate()
+                    Lifecycle.Event.ON_START -> {
+                        if (
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                            state.budgetAlertsEnabled &&
+                            ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            viewModel.setBudgetAlertsEnabled(false)
+                        }
+                        if (state.appLockEnabled && backgroundAt > 0 && SystemClock.elapsedRealtime() - backgroundAt >= 60_000) {
+                            locked = true
+                            viewModel.hideValuesForLock()
+                            authenticate()
+                        }
                     }
                     else -> Unit
                 }
@@ -211,13 +261,18 @@ fun KronApp(viewModel: MainViewModel, activity: FragmentActivity) {
         if (locked) {
             LockScreen(lockError, state.authFailures, state.authLockedUntil, authenticate)
         } else {
-            MainScaffold(state, viewModel)
+            MainScaffold(state, viewModel, activity, driveSyncRuntime)
         }
     }
 }
 
 @Composable
-private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
+private fun MainScaffold(
+    state: KronUiState,
+    viewModel: MainViewModel,
+    activity: FragmentActivity,
+    driveSyncRuntime: DriveSyncRuntime?,
+) {
     val navController = rememberNavController()
     val backStack by navController.currentBackStackEntryAsState()
     val current = backStack?.destination?.route ?: "home"
@@ -230,6 +285,96 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
     var criticalReason by remember { mutableStateOf("") }
     var editAccount by remember { mutableStateOf<AccountEntity?>(null) }
     var pendingPassword by remember { mutableStateOf<CharArray?>(null) }
+    var receiptTargetEventId by rememberSaveable { mutableStateOf<String?>(null) }
+    val pendingDriveSubject by viewModel.pendingDriveSubjectId.collectAsState()
+    val pendingDriveEmail by viewModel.pendingDriveEmail.collectAsState()
+    val pendingDriveName by viewModel.pendingDriveDisplayName.collectAsState()
+    val pendingDriveResolution by viewModel.pendingDriveResolutionId.collectAsState()
+    val pendingAuthorization = remember(
+        pendingDriveSubject,
+        pendingDriveEmail,
+        pendingDriveName,
+        pendingDriveResolution,
+    ) {
+        if (
+            pendingDriveSubject != null &&
+            pendingDriveEmail != null &&
+            pendingDriveResolution != null
+        ) {
+            DriveConnectResult.UserActionRequired(
+                account = GoogleAccountIdentity(
+                    subjectId = requireNotNull(pendingDriveSubject),
+                    email = requireNotNull(pendingDriveEmail),
+                    displayName = pendingDriveName,
+                ),
+                resolutionId = requireNotNull(pendingDriveResolution),
+            )
+        } else {
+            null
+        }
+    }
+    var launchedAuthorizationId by rememberSaveable { mutableStateOf<String?>(null) }
+    var cloudConflict by remember { mutableStateOf<SyncConflict?>(null) }
+    var restartRequired by rememberSaveable { mutableStateOf(false) }
+    var cloudWifiOnly by rememberSaveable(driveSyncRuntime) {
+        mutableStateOf(driveSyncRuntime?.isWifiOnly() ?: true)
+    }
+    val scope = rememberCoroutineScope()
+
+    fun handleSyncResult(result: SyncRunResult) {
+        when (result) {
+            is SyncRunResult.Synchronized -> viewModel.showMessage(
+                if (result.uploaded) "Data terenkripsi berhasil dikirim ke Drive" else "Data Drive berhasil diterapkan",
+            )
+            is SyncRunResult.RestartRequired -> {
+                restartRequired = true
+                driveSyncRuntime?.let { runtime ->
+                    scope.launch { runtime.suspendForRestart() }
+                }
+                WorkManager.getInstance(activity).cancelUniqueWork(AutomationWorker.UNIQUE_WORK_NAME)
+            }
+            SyncRunResult.NoChanges -> viewModel.showMessage("Data perangkat dan Drive sudah sama")
+            SyncRunResult.NoData -> viewModel.showMessage("Belum ada data yang perlu disinkronkan")
+            SyncRunResult.Disabled -> viewModel.showMessage("Sinkronisasi Drive dinonaktifkan")
+            SyncRunResult.AuthorizationRequired -> {
+                viewModel.showMessage("Otorisasi Drive perlu diperbarui")
+                driveSyncRuntime?.let { runtime ->
+                    scope.launch {
+                        when (val connection = runtime.reauthorizeCurrent()) {
+                            is DriveConnectResult.Connected -> handleSyncResult(runtime.syncNow())
+                            is DriveConnectResult.UserActionRequired -> {
+                                launchedAuthorizationId = null
+                                viewModel.setPendingDriveAuthorization(connection.account, connection.resolutionId)
+                            }
+                            is DriveConnectResult.Failed -> viewModel.showMessage(connection.message)
+                        }
+                    }
+                }
+            }
+            SyncRunResult.PassphraseRequired -> passwordMode = "DRIVE_UNLOCK"
+            SyncRunResult.FreeOnlyBlocked -> viewModel.showMessage(
+                "Sinkronisasi Drive dihentikan karena layanan meminta billing. Backup manual tetap tersedia.",
+            )
+            is SyncRunResult.Conflict -> cloudConflict = result.value
+            is SyncRunResult.Error -> viewModel.showMessage(result.message)
+        }
+    }
+
+    fun handleConnectResult(result: DriveConnectResult) {
+        when (result) {
+            is DriveConnectResult.Connected -> {
+                viewModel.showMessage("Terhubung ke ${result.account.email}")
+                driveSyncRuntime?.let { runtime ->
+                    scope.launch { handleSyncResult(runtime.syncNow()) }
+                }
+            }
+            is DriveConnectResult.UserActionRequired -> {
+                launchedAuthorizationId = null
+                viewModel.setPendingDriveAuthorization(result.account, result.resolutionId)
+            }
+            is DriveConnectResult.Failed -> viewModel.showMessage(result.message)
+        }
+    }
     val backupLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         val password = pendingPassword
         if (uri != null && password != null) viewModel.exportBackup(uri, password)
@@ -243,10 +388,70 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
     val reportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
         if (uri != null) viewModel.exportCsv(uri)
     }
+    val receiptLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        val eventId = receiptTargetEventId
+        if (uri != null && eventId != null) viewModel.attachReceipt(eventId, uri)
+        receiptTargetEventId = null
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        viewModel.setBudgetAlertsEnabled(granted)
+        if (!granted) viewModel.showMessage("Izin notifikasi tidak diberikan")
+    }
+    val authorizationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result ->
+        val pending = pendingAuthorization
+        viewModel.clearPendingDriveAuthorization()
+        launchedAuthorizationId = null
+        if (pending != null && driveSyncRuntime != null) {
+            scope.launch {
+                runCatching {
+                    driveSyncRuntime.completeAuthorization(
+                        account = pending.account,
+                        resolutionId = pending.resolutionId,
+                        resultCode = result.resultCode,
+                        data = result.data,
+                    )
+                }.onSuccess(::handleConnectResult)
+                    .onFailure {
+                        driveSyncRuntime.cancelAuthorization(pending.resolutionId)
+                        viewModel.showMessage("Persetujuan Drive tidak dapat diselesaikan. Silakan hubungkan ulang.")
+                    }
+            }
+        }
+    }
+    LaunchedEffect(pendingAuthorization?.resolutionId) {
+        val pending = pendingAuthorization ?: return@LaunchedEffect
+        val runtime = driveSyncRuntime ?: return@LaunchedEffect
+        if (launchedAuthorizationId == pending.resolutionId) return@LaunchedEffect
+        launchedAuthorizationId = pending.resolutionId
+        runCatching { runtime.authorizationRequest(pending.resolutionId) }
+            .onSuccess(authorizationLauncher::launch)
+            .onFailure {
+                viewModel.clearPendingDriveAuthorization()
+                launchedAuthorizationId = null
+                runtime.cancelAuthorization(pending.resolutionId)
+                viewModel.showMessage("Permintaan otorisasi Drive sudah tidak berlaku")
+            }
+    }
     LaunchedEffect(state.message) {
         state.message?.let {
             snackbar.showSnackbar(it)
             viewModel.clearMessage()
+        }
+    }
+    val cloudBackupState = cloudBackupUiState(
+        syncState = state.syncState,
+        available = driveSyncRuntime != null,
+        wifiOnly = cloudWifiOnly,
+    )
+    LaunchedEffect(state.syncState?.status) {
+        if (state.syncState?.status == "RESTART_REQUIRED") {
+            restartRequired = true
+            driveSyncRuntime?.suspendForRestart()
+            WorkManager.getInstance(activity).cancelUniqueWork(AutomationWorker.UNIQUE_WORK_NAME)
         }
     }
     Scaffold(
@@ -344,21 +549,102 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
                 )
             }
             composable("activity") { ActivityScreen(state, { auditId = it }) }
-            composable("reports") { ReportsScreen(state, onExport = { reportLauncher.launch("KRON-laporan-${LocalDate.now()}.csv") }) }
+            composable("reports") {
+                ReportsScreen(
+                    state = state,
+                    onExport = { reportLauncher.launch("KRON-laporan-${LocalDate.now()}.csv") },
+                    eventChannels = state.eventChannels,
+                )
+            }
             composable("settings") {
                 SettingsScreen(
-                    state,
-                    { dialog = ActionDialog.ACCOUNT },
-                    { editAccount = it },
-                    { account -> criticalAction = CriticalAction("Arsipkan akun", "Riwayat akun tetap tersimpan. Akun hanya disembunyikan dari daftar aktif.") { reason -> viewModel.archiveAccount(account.id, reason) }; criticalReason = "" },
-                    { account -> criticalAction = CriticalAction("Pulihkan akun", "Akun kembali ke tab Aktif sebagai akun tidak aktif. Pilih Jadikan akun aktif secara terpisah.") { reason -> viewModel.restoreAccount(account.id, reason) }; criticalReason = "" },
-                    { account -> viewModel.activateAccount(account.id) },
-                    { navController.navigate("activity") },
-                    viewModel::setRememberVisibility,
-                    viewModel::setAppLock,
-                    viewModel::setTheme,
-                    { passwordMode = "BACKUP" },
-                    { passwordMode = "RESTORE" },
+                    state = state,
+                    onAddAccount = { dialog = ActionDialog.ACCOUNT },
+                    onEditAccount = { editAccount = it },
+                    onArchiveAccount = { account -> criticalAction = CriticalAction("Arsipkan akun", "Riwayat akun tetap tersimpan. Akun hanya disembunyikan dari daftar aktif.") { reason -> viewModel.archiveAccount(account.id, reason) }; criticalReason = "" },
+                    onRestoreAccount = { account -> criticalAction = CriticalAction("Pulihkan akun", "Akun kembali ke tab Aktif sebagai akun tidak aktif. Pilih Jadikan akun aktif secara terpisah.") { reason -> viewModel.restoreAccount(account.id, reason) }; criticalReason = "" },
+                    onActivateAccount = { account -> viewModel.activateAccount(account.id) },
+                    onViewAudit = { navController.navigate("activity") },
+                    onRememberVisibility = viewModel::setRememberVisibility,
+                    onAppLock = viewModel::setAppLock,
+                    onTheme = viewModel::setTheme,
+                    onBackup = { passwordMode = "BACKUP" },
+                    onRestore = { passwordMode = "RESTORE" },
+                    onPauseRule = { ruleId ->
+                        criticalAction = CriticalAction(
+                            "Jeda jadwal otomatis",
+                            "Occurrence berikutnya tidak akan dibuat. Transaksi dan audit lama tetap tersimpan.",
+                        ) { viewModel.pauseRecurringRule(ruleId, it) }
+                        criticalReason = ""
+                    },
+                    onResumeRule = { ruleId, fromToday ->
+                        criticalAction = CriticalAction(
+                            "Lanjutkan jadwal otomatis",
+                            if (fromToday) {
+                                "Occurrence berikutnya dihitung dari hari ini. Riwayat lama tidak diubah."
+                            } else {
+                                "Occurrence berikutnya dihitung dari anchor jadwal terakhir. Catch-up tetap idempotent."
+                            },
+                        ) { viewModel.resumeRecurringRule(ruleId, fromToday, it) }
+                        criticalReason = ""
+                    },
+                    cloudBackupState = cloudBackupState,
+                    onConnectCloud = if (driveSyncRuntime == null) null else ({ passwordMode = "DRIVE_CONNECT" }),
+                    onSyncNow = if (driveSyncRuntime == null) null else ({
+                        scope.launch { handleSyncResult(driveSyncRuntime.syncNow()) }
+                    }),
+                    onDisconnectCloud = if (driveSyncRuntime == null) null else ({
+                        criticalAction = CriticalAction(
+                            title = "Putuskan Google Drive",
+                            summary = "Sinkronisasi otomatis dihentikan dan izin KRON dicabut. Snapshot terenkripsi yang sudah ada tidak mengubah data lokal.",
+                        ) {
+                            scope.launch {
+                                runCatching { driveSyncRuntime.disconnect() }
+                                    .onSuccess { viewModel.showMessage("Google Drive diputuskan") }
+                                    .onFailure { viewModel.showMessage(it.message ?: "Google Drive gagal diputuskan") }
+                            }
+                        }
+                        criticalReason = ""
+                    }),
+                    onChangeCloudAccount = if (driveSyncRuntime == null) null else ({
+                        criticalAction = CriticalAction(
+                            title = "Ganti akun Google Drive",
+                            summary = "Akun saat ini akan diputuskan. Data dari akun berbeda tidak pernah digabungkan otomatis.",
+                        ) {
+                            scope.launch {
+                                runCatching { driveSyncRuntime.disconnect() }
+                                    .onSuccess { passwordMode = "DRIVE_CONNECT" }
+                                    .onFailure { viewModel.showMessage(it.message ?: "Akun Drive gagal diputuskan") }
+                            }
+                        }
+                        criticalReason = ""
+                    }),
+                    onWifiOnly = if (driveSyncRuntime == null) null else ({ value ->
+                        scope.launch {
+                            runCatching { driveSyncRuntime.setWifiOnly(value) }
+                                .onSuccess { cloudWifiOnly = value }
+                                .onFailure { viewModel.showMessage(it.message ?: "Preferensi jaringan gagal disimpan") }
+                        }
+                    }),
+                    onBudgetAlertsChanged = { enabled ->
+                        if (!enabled) {
+                            viewModel.setBudgetAlertsEnabled(false)
+                        } else if (
+                            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                            ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            viewModel.setBudgetAlertsEnabled(true)
+                        } else {
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                    },
+                    onNotificationSettings = {
+                        activity.startActivity(
+                            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                                putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName)
+                            },
+                        )
+                    },
                 )
             }
         }
@@ -379,14 +665,52 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
         ActionDialog.ACCOUNT -> AccountDialog({ dialog = null }) { name, openingCash, openingEBudget -> dialog = null; viewModel.addAccount(name, openingCash, openingEBudget) }
         null -> Unit
     }
-    auditId?.let { id -> state.activities.firstOrNull { it.id == id }?.let { event -> AuditDialog(event, state, { auditId = null }) { eventId, reason -> auditId = null; viewModel.reverseEvent(eventId, reason) } } }
+    auditId?.let { id ->
+        state.activities.firstOrNull { it.id == id }?.let { event ->
+            AuditDialog(
+                event = event,
+                state = state,
+                onDismiss = { auditId = null },
+                onAddReceipt = { eventId ->
+                    receiptTargetEventId = eventId
+                    receiptLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                },
+                onRevert = { eventId, reason ->
+                    auditId = null
+                    viewModel.reverseEvent(eventId, reason)
+                },
+            )
+        }
+    }
     detailPeriod?.let { (periodId, readOnly) -> BudgetDetailDialog(state, periodId, readOnly, { detailPeriod = null }, viewModel::correctAllocation) }
     passwordMode?.let { mode ->
-        PasswordDialog(mode == "BACKUP", { passwordMode = null }) { password ->
-            passwordMode = null
-            pendingPassword = password.toCharArray()
-            if (mode == "BACKUP") backupLauncher.launch("KRON-${LocalDate.now()}.kronbackup")
-            else restoreLauncher.launch(arrayOf("application/octet-stream", "application/zip", "*/*"))
+        if (mode == "BACKUP" || mode == "RESTORE") {
+            PasswordDialog(mode == "BACKUP", { passwordMode = null }) { password ->
+                passwordMode = null
+                pendingPassword = password.toCharArray()
+                if (mode == "BACKUP") backupLauncher.launch("KRON-${LocalDate.now()}.kronbackup")
+                else restoreLauncher.launch(arrayOf("application/octet-stream", "application/zip", "*/*"))
+            }
+        } else {
+            SyncPassphraseDialog(
+                reconnecting = mode == "DRIVE_UNLOCK",
+                onDismiss = { passwordMode = null },
+            ) { passphrase ->
+                passwordMode = null
+                val runtime = driveSyncRuntime
+                if (runtime == null) {
+                    passphrase.fill('\u0000')
+                    viewModel.showMessage("Konfigurasi OAuth Drive belum tersedia")
+                } else {
+                    scope.launch {
+                        if (mode == "DRIVE_UNLOCK") {
+                            handleSyncResult(runtime.supplyPassphrase(passphrase))
+                        } else {
+                            handleConnectResult(runtime.connect(passphrase))
+                        }
+                    }
+                }
+            }
         }
     }
     criticalAction?.let { action ->
@@ -403,12 +727,87 @@ private fun MainScaffold(state: KronUiState, viewModel: MainViewModel) {
             dismissButton = { TextButton(onClick = { criticalAction = null }) { Text("Batal") } },
         )
     }
+    cloudConflict?.let { conflict ->
+        AlertDialog(
+            onDismissRequest = { cloudConflict = null },
+            title = { Text("Pusat Konflik Drive") },
+            text = {
+                Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)) {
+                    Text(conflictDescription(conflict))
+                    Text(
+                        "Simpan keduanya adalah pilihan paling aman. KRON menyimpan data perangkat sebagai snapshot pemulihan sebelum menerapkan data Drive.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                Column(horizontalAlignment = Alignment.End) {
+                    Button(onClick = {
+                        cloudConflict = null
+                        driveSyncRuntime?.let { runtime ->
+                            scope.launch { handleSyncResult(runtime.resolveConflict(conflict, ConflictResolution.KEEP_BOTH)) }
+                        }
+                    }) { Text("Simpan keduanya") }
+                    TextButton(onClick = {
+                        cloudConflict = null
+                        criticalAction = CriticalAction(
+                            "Gunakan perangkat ini",
+                            "Snapshot aktif Drive akan diganti oleh data perangkat ini. Snapshot pemulihan lama tetap mengikuti kebijakan retensi.",
+                        ) {
+                            driveSyncRuntime?.let { runtime ->
+                                scope.launch { handleSyncResult(runtime.resolveConflict(conflict, ConflictResolution.USE_THIS_DEVICE)) }
+                            }
+                        }
+                        criticalReason = ""
+                    }) { Text("Gunakan perangkat ini") }
+                    TextButton(onClick = {
+                        cloudConflict = null
+                        criticalAction = CriticalAction(
+                            "Pulihkan dari Drive",
+                            "Data lokal saat ini diamankan sebagai snapshot pemulihan, lalu data Drive disiapkan untuk restore setelah KRON dibuka ulang.",
+                        ) {
+                            driveSyncRuntime?.let { runtime ->
+                                scope.launch { handleSyncResult(runtime.resolveConflict(conflict, ConflictResolution.USE_DRIVE)) }
+                            }
+                        }
+                        criticalReason = ""
+                    }) { Text("Pulihkan dari Drive") }
+                }
+            },
+            dismissButton = { TextButton(onClick = { cloudConflict = null }) { Text("Nanti") } },
+        )
+    }
+    if (restartRequired) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Buka ulang KRON") },
+            text = {
+                Text("Snapshot Drive sudah lolos validasi. KRON harus ditutup sebelum database dan lampiran diganti secara aman. Jangan catat transaksi baru sebelum membuka ulang aplikasi.")
+            },
+            confirmButton = {
+                Button(onClick = {
+                    activity.finishAffinity()
+                    Process.killProcess(Process.myPid())
+                }) { Text("Tutup KRON") }
+            },
+            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+        )
+    }
 }
 
 @Composable
 private fun LockScreen(error: String?, failures: Int, lockedUntil: Long, onUnlock: () -> Unit) {
     val primary = MaterialTheme.colorScheme.primary
     val tertiary = MaterialTheme.colorScheme.tertiary
+    var now by remember(lockedUntil) { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(lockedUntil) {
+        while (lockedUntil > now) {
+            delay(1_000)
+            now = System.currentTimeMillis()
+        }
+    }
+    val remainingSeconds = ((lockedUntil - now + 999) / 1_000).coerceAtLeast(0)
     Box(
         Modifier
             .fillMaxSize()
@@ -473,12 +872,15 @@ private fun LockScreen(error: String?, failures: Int, lockedUntil: Long, onUnloc
                         Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center, modifier = Modifier.padding(12.dp))
                     }
                 }
-                if (failures > 0 && lockedUntil <= System.currentTimeMillis()) {
+                if (remainingSeconds > 0) {
+                    Text("Tunggu $remainingSeconds detik sebelum mencoba lagi", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
+                } else if (failures > 0) {
                     Text("Percobaan gagal: $failures/5", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
                 }
                 Spacer(Modifier.height(if (error == null) 22.dp else 14.dp))
                 Button(
                     onClick = onUnlock,
+                    enabled = remainingSeconds == 0L,
                     modifier = Modifier.fillMaxWidth().height(54.dp),
                     shape = RoundedCornerShape(14.dp),
                 ) {
@@ -520,11 +922,153 @@ private fun KronLogoMark() {
 @Composable
 private fun PasswordDialog(isBackup: Boolean, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
     var password by remember { mutableStateOf("") }
+    var confirmation by remember { mutableStateOf("") }
+    var visible by remember { mutableStateOf(false) }
+    val valid = password.length >= 12 && (!isBackup || password == confirmation)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (isBackup) "Enkripsi backup" else "Buka backup") },
-        text = { OutlinedTextField(password, { password = it }, label = { Text("Password minimal 8 karakter") }, modifier = Modifier.fillMaxWidth()) },
-        confirmButton = { Button(onClick = { onConfirm(password) }, enabled = password.length >= 8) { Text(if (isBackup) "Pilih lokasi" else "Pilih file") } },
+        text = {
+            Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    password,
+                    { password = it },
+                    label = { Text("Passphrase minimal 12 karakter") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        androidx.compose.material3.IconButton(onClick = { visible = !visible }) {
+                            Icon(if (visible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, contentDescription = if (visible) "Sembunyikan passphrase" else "Tampilkan passphrase")
+                        }
+                    },
+                )
+                if (isBackup) {
+                    OutlinedTextField(
+                        confirmation,
+                        { confirmation = it },
+                        label = { Text("Ulangi passphrase") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
+                        supportingText = {
+                            if (confirmation.isNotEmpty() && confirmation != password) Text("Passphrase tidak sama", color = MaterialTheme.colorScheme.error)
+                        },
+                    )
+                }
+                Text("Passphrase tidak dapat dipulihkan oleh Google atau KRON.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = { Button(onClick = { onConfirm(password) }, enabled = valid) { Text(if (isBackup) "Pilih lokasi" else "Pilih file") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Batal") } },
     )
+}
+
+@Composable
+private fun SyncPassphraseDialog(
+    reconnecting: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (CharArray) -> Unit,
+) {
+    var password by remember { mutableStateOf("") }
+    var confirmation by remember { mutableStateOf("") }
+    var visible by remember { mutableStateOf(false) }
+    val valid = password.length >= 12 && password == confirmation
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (reconnecting) "Passphrase sinkronisasi" else "Hubungkan Google Drive") },
+        text = {
+            Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)) {
+                Text(
+                    if (reconnecting) {
+                        "Masukkan passphrase dataset Drive yang sama. Google dan KRON tidak dapat memulihkannya."
+                    } else {
+                        "Buat passphrase untuk mengenkripsi data sebelum diunggah. Perangkat lain harus memakai passphrase yang sama."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it.take(1_024) },
+                    label = { Text("Passphrase minimal 12 karakter") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        androidx.compose.material3.IconButton(onClick = { visible = !visible }) {
+                            Icon(
+                                if (visible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                                contentDescription = if (visible) "Sembunyikan passphrase" else "Tampilkan passphrase",
+                            )
+                        }
+                    },
+                )
+                OutlinedTextField(
+                    value = confirmation,
+                    onValueChange = { confirmation = it.take(1_024) },
+                    label = { Text("Ulangi passphrase") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
+                    supportingText = {
+                        if (confirmation.isNotEmpty() && confirmation != password) {
+                            Text("Passphrase tidak sama", color = MaterialTheme.colorScheme.error)
+                        }
+                    },
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val chars = password.toCharArray()
+                    password = ""
+                    confirmation = ""
+                    onConfirm(chars)
+                },
+                enabled = valid,
+            ) { Text(if (reconnecting) "Gunakan passphrase" else "Pilih akun Google") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Batal") } },
+    )
+}
+
+private fun cloudBackupUiState(
+    syncState: com.morneven.kron.data.SyncStateEntity?,
+    available: Boolean,
+    wifiOnly: Boolean,
+): CloudBackupUiState {
+    if (!available) return CloudBackupUiState(status = CloudSyncStatus.UNAVAILABLE, wifiOnly = wifiOnly)
+    val status = when (syncState?.status) {
+        null, "DISCONNECTED", "DISABLED" -> CloudSyncStatus.NOT_CONNECTED
+        "SYNCING" -> CloudSyncStatus.SYNCING
+        "IDLE", "SYNCED" -> if (syncState.accountEmail == null) CloudSyncStatus.NOT_CONNECTED else CloudSyncStatus.SYNCED
+        "WAITING_FOR_NETWORK" -> CloudSyncStatus.WAITING_NETWORK
+        "AUTHORIZATION_REQUIRED", "PASSPHRASE_REQUIRED" -> CloudSyncStatus.NEEDS_AUTHORIZATION
+        "CONFLICT" -> CloudSyncStatus.CONFLICT
+        "RESTART_REQUIRED" -> CloudSyncStatus.RESTART_REQUIRED
+        "FREE_ONLY_BLOCKED" -> CloudSyncStatus.FREE_ONLY_BLOCKED
+        else -> CloudSyncStatus.FAILED
+    }
+    return CloudBackupUiState(
+        status = status,
+        accountLabel = syncState?.accountEmail,
+        lastSyncedAt = syncState?.lastSyncedAt,
+        wifiOnly = wifiOnly,
+        detail = syncState?.lastError,
+    )
+}
+
+private fun conflictDescription(conflict: SyncConflict): String = when (conflict.reason) {
+    com.morneven.kron.sync.SyncConflictReason.FIRST_CONNECTION_WITH_TWO_DATASETS ->
+        "Perangkat dan Drive memiliki dataset berbeda pada sambungan pertama."
+    com.morneven.kron.sync.SyncConflictReason.BOTH_SIDES_CHANGED ->
+        "Data perangkat dan Drive sama-sama berubah sejak sinkronisasi terakhir."
+    com.morneven.kron.sync.SyncConflictReason.ACCOUNT_CHANGED ->
+        "Akun Google yang dipilih berbeda dari akun sinkronisasi sebelumnya."
+    com.morneven.kron.sync.SyncConflictReason.DATASET_MISMATCH ->
+        "Dataset Drive tidak sama dengan dataset aktif pada perangkat."
+    com.morneven.kron.sync.SyncConflictReason.REMOTE_CHANGED_DURING_RESOLUTION ->
+        "Snapshot Drive berubah ketika konflik sedang diselesaikan. Muat ulang sebelum memilih tindakan."
 }

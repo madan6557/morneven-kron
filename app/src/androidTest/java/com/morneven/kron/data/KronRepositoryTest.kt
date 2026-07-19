@@ -129,7 +129,7 @@ class KronRepositoryTest {
     }
 
     @Test
-    fun unexpectedExpenseUsesCashVaultWithoutReducingBudget() = runBlocking {
+    fun unexpectedExpenseUsesSeparateCashBucketWithoutReducingBudget() = runBlocking {
         val account = dao.activeAccount() ?: error("Akun aktif tidak ditemukan")
         val category = dao.allCategories().first { it.direction == TransactionDirection.EXPENSE }
         repository.addIncome(account.id, FundingChannel.CASH, 100, null, "Dana", "")
@@ -145,7 +145,8 @@ class KronRepositoryTest {
         )
 
         assertEquals(75L, dao.accountBalance(account.id, FundingChannel.CASH))
-        assertEquals(75L, dao.vaultBalance(FundingChannel.CASH))
+        assertEquals(100L, dao.vaultBalance(FundingChannel.CASH))
+        assertEquals(-25L, dao.budgetBucketBalance(BudgetBucket.UNEXPECTED, FundingChannel.CASH))
         assertEquals(dao.cashTotal(), dao.budgetAvailableTotal())
     }
 

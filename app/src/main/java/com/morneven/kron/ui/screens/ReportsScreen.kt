@@ -32,80 +32,98 @@ import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.morneven.kron.data.ActivityRow
 import com.morneven.kron.data.FundingChannel
 import com.morneven.kron.ui.KronUiState
 import com.morneven.kron.ui.components.ChannelBadge
 import com.morneven.kron.ui.components.HudCard
-import com.morneven.kron.ui.components.Metric
 import com.morneven.kron.ui.components.SectionHeader
-import com.morneven.kron.ui.components.compactIdr
 import com.morneven.kron.ui.components.displayMoney
 import com.morneven.kron.ui.components.signedColor
 import com.morneven.kron.ui.theme.KronGold
 import com.morneven.kron.ui.theme.KronGreen
 import java.time.Instant
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
-@Composable
-fun ReportsScreen(state: KronUiState, onExport: () -> Unit, modifier: Modifier = Modifier) {
-    val visible = state.valuesVisible
-    var range by remember { mutableStateOf("30 hari") }
-    var flowFilter by remember { mutableStateOf("Semua") }
-    var selectedPoint by remember { mutableIntStateOf(-1) }
-    var expandedPeriod by remember { mutableStateOf<Long?>(null) }
-    var customStart by remember { mutableStateOf(LocalDate.now().minusDays(29)) }
-    var customEnd by remember { mutableStateOf(LocalDate.now()) }
-    var pickingStart by remember { mutableStateOf(true) }
-    var showDatePicker by remember { mutableStateOf(false) }
+/**
+ * Optional per-event channel metadata supplied by a journal projection.
+ * Empty metadata keeps cash flow honest and limits the channel filter to assets and budgets.
+ */
+typealias ReportEventChannels = Map<String, Set<String>>
 
-    val end = if (range == "Custom") customEnd else LocalDate.now()
-    val dayCount = when (range) {
-        "7 hari" -> 7
-        "90 hari" -> 90
-        "1 tahun" -> 365
-        "Custom" -> (customEnd.toEpochDay() - customStart.toEpochDay() + 1).toInt().coerceIn(1, 3_650)
-        else -> 30
-    }
-    val start = if (range == "Custom") customStart else end.minusDays((dayCount - 1).toLong())
-    val events = remember(state.activities, start, end, flowFilter) {
+@Composable
+fun ReportsScreen(
+    state: KronUiState,
+    onExport: () -> Unit,
+    modifier: Modifier = Modifier,
+    eventChannels: ReportEventChannels = emptyMap(),
+) {
+    val visible = state.valuesVisible
+    var range by rememberSaveable { mutableStateOf(ReportRange.THIRTY_DAYS) }
+    var series by rememberSaveable { mutableStateOf(ReportSeries.ALL) }
+    var channel by rememberSaveable { mutableStateOf(ReportChannel.ALL) }
+    var selectedPoint by rememberSaveable { mutableIntStateOf(-1) }
+    var expandedPeriod by rememberSaveable { mutableStateOf<Long?>(null) }
+    var customStartDay by rememberSaveable { mutableLongStateOf(LocalDate.now().minusDays(29).toEpochDay()) }
+    var customEndDay by rememberSaveable { mutableLongStateOf(LocalDate.now().toEpochDay()) }
+    var pickingStart by rememberSaveable { mutableStateOf(true) }
+    var showDatePicker by rememberSaveable { mutableStateOf(false) }
+    var showTable by rememberSaveable { mutableStateOf(false) }
+
+    val today = LocalDate.now()
+    val customStart = LocalDate.ofEpochDay(customStartDay)
+    val customEnd = LocalDate.ofEpochDay(customEndDay)
+    val end = if (range == ReportRange.CUSTOM) customEnd else today
+    val start = if (range == ReportRange.CUSTOM) customStart else end.minusDays((range.days - 1).toLong())
+    val channelAware = eventChannels.isNotEmpty()
+    val cashFlowEvents = remember(state.activities, start, end, channel, eventChannels) {
         state.activities.filter { event ->
             val date = LocalDate.ofEpochDay(event.effectiveEpochDay)
-            val typeMatches = when (flowFilter) {
-                "Masuk" -> event.type in setOf("INCOME", "OPENING_BALANCE")
-                "Keluar" -> event.type in setOf("EXPENSE", "UNEXPECTED_EXPENSE")
-                else -> event.type in setOf("INCOME", "OPENING_BALANCE", "EXPENSE", "UNEXPECTED_EXPENSE", "AUTOMATION")
-            }
-            !date.isBefore(start) && !date.isAfter(end) && typeMatches && event.reversedByEventId == null
+            val channelMatches = channel == ReportChannel.ALL || !channelAware || eventChannels[event.id]?.contains(channel.value) == true
+            !date.isBefore(start) &&
+                !date.isAfter(end) &&
+                event.reversedByEventId == null &&
+                event.isCashFlowEvent() &&
+                channelMatches
         }
     }
-    val points = remember(events, start, dayCount) {
-        (0 until dayCount).map { offset ->
-            val date = start.plusDays(offset.toLong())
-            events.filter { LocalDate.ofEpochDay(it.effectiveEpochDay) == date }.sumOf { event ->
-                if (event.cashImpact >= 0) event.cashImpact else event.cashImpact
-            }
-        }
-    }
-    val income = events.filter { it.cashImpact > 0 }.sumOf { it.cashImpact }
-    val expense = -events.filter { it.cashImpact < 0 }.sumOf { it.cashImpact }
+    val buckets = remember(cashFlowEvents, start, end) { aggregateCashFlow(cashFlowEvents, start, end) }
+    val income = cashFlowEvents.sumOf { event -> event.cashImpact.coerceAtLeast(0L) }
+    val expense = cashFlowEvents.sumOf { event -> (-event.cashImpact).coerceAtLeast(0L) }
     val net = income - expense
-    val periods = state.allocations.groupBy { it.periodId }.entries.sortedByDescending { it.value.firstOrNull()?.startEpochDay ?: 0L }
-    val unexpectedTotal = events.filter { it.type == "UNEXPECTED_EXPENSE" }.sumOf { -it.cashImpact }
-    val money: (Long) -> String = { value -> if (visible) compactIdr(value) else displayMoney(value, false) }
+    val selectedChannel = channel.value
+    val filteredAllocations = remember(state.allocations, selectedChannel) {
+        state.allocations.filter { selectedChannel == null || it.fundingChannel == selectedChannel }
+    }
+    val periods = remember(filteredAllocations) {
+        filteredAllocations
+            .groupBy { it.periodId }
+            .entries
+            .sortedByDescending { it.value.firstOrNull()?.startEpochDay ?: 0L }
+    }
+    val unexpectedTotal = cashFlowEvents.filter { it.type == "UNEXPECTED_EXPENSE" }.sumOf { (-it.cashImpact).coerceAtLeast(0L) }
+    val money: (Long) -> String = { value -> displayMoney(value, visible) }
+    val rangeLabel = if (range == ReportRange.CUSTOM) "${shortDate(start)} sampai ${shortDate(end)}" else range.label.lowercase()
 
     LazyColumn(
         modifier = modifier,
@@ -113,10 +131,14 @@ fun ReportsScreen(state: KronUiState, onExport: () -> Unit, modifier: Modifier =
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
                 Column(Modifier.weight(1f)) {
                     Text("LAPORAN", style = MaterialTheme.typography.headlineMedium)
-                    Text("Ringkasan jurnal dan budget", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Ringkasan yang direkonstruksi dari jurnal", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Button(onClick = onExport) {
                     Icon(Icons.Outlined.FileDownload, contentDescription = null)
@@ -124,56 +146,132 @@ fun ReportsScreen(state: KronUiState, onExport: () -> Unit, modifier: Modifier =
                 }
             }
         }
+
         item {
             SectionHeader("Rentang analitik")
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(end = 12.dp)) {
-                items(listOf("7 hari", "30 hari", "90 hari", "1 tahun", "Custom")) { item ->
-                    FilterChip(selected = range == item, onClick = { range = item; selectedPoint = -1 }, label = { Text(item) })
+                items(ReportRange.entries, key = { it.name }) { item ->
+                    FilterChip(
+                        selected = range == item,
+                        onClick = {
+                            range = item
+                            selectedPoint = -1
+                        },
+                        label = { Text(item.label) },
+                    )
                 }
             }
-            if (range == "Custom") {
+            if (range == ReportRange.CUSTOM) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = { pickingStart = true; showDatePicker = true }, modifier = Modifier.weight(1f)) { Text("Mulai\n${shortDate(customStart)}") }
-                    TextButton(onClick = { pickingStart = false; showDatePicker = true }, modifier = Modifier.weight(1f)) { Text("Sampai\n${shortDate(customEnd)}") }
+                    TextButton(
+                        onClick = {
+                            pickingStart = true
+                            showDatePicker = true
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Mulai\n${shortDate(customStart)}") }
+                    TextButton(
+                        onClick = {
+                            pickingStart = false
+                            showDatePicker = true
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Sampai\n${shortDate(customEnd)}") }
                 }
             }
+            Text("Seri cash flow", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(end = 12.dp)) {
-                items(listOf("Semua", "Masuk", "Keluar")) { item ->
-                    FilterChip(selected = flowFilter == item, onClick = { flowFilter = item; selectedPoint = -1 }, label = { Text(item) })
+                items(ReportSeries.entries, key = { it.name }) { item ->
+                    FilterChip(
+                        selected = series == item,
+                        onClick = {
+                            series = item
+                            selectedPoint = -1
+                        },
+                        label = { Text(item.label) },
+                    )
                 }
+            }
+            Text("Kanal aset dan budget", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(end = 12.dp)) {
+                items(ReportChannel.entries, key = { it.name }) { item ->
+                    FilterChip(
+                        selected = channel == item,
+                        onClick = {
+                            channel = item
+                            selectedPoint = -1
+                        },
+                        label = { Text(item.label) },
+                    )
+                }
+            }
+            if (!channelAware && channel != ReportChannel.ALL) {
+                Text(
+                    "Filter kanal diterapkan pada aset dan budget. Cash flow tetap mencakup semua kanal sampai rincian kanal tersedia pada jurnal.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
+
         item {
             HudCard {
-                SectionHeader("Cash flow $range")
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Metric("Masuk", money(income), Modifier.weight(1f), KronGreen)
-                    Metric("Keluar", money(expense), Modifier.weight(1f), MaterialTheme.colorScheme.error)
-                    Metric("Net", money(net), Modifier.weight(1f), signedColor(net))
+                SectionHeader("Cash flow $rangeLabel")
+                ReportMetric("Masuk", money(income), KronGreen)
+                ReportMetric("Keluar", money(expense), MaterialTheme.colorScheme.error)
+                ReportMetric("Net", money(net), signedColor(net))
+                Spacer(Modifier.height(14.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = !showTable, onClick = { showTable = false }, label = { Text("Grafik") })
+                    FilterChip(selected = showTable, onClick = { showTable = true }, label = { Text("Tabel") })
                 }
-                Spacer(Modifier.height(18.dp))
-                FlowChart(points, selectedPoint, onSelect = { selectedPoint = it })
-                Spacer(Modifier.height(8.dp))
-                if (selectedPoint >= 0) {
-                    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.small) {
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(shortDate(start.plusDays(selectedPoint.toLong())), style = MaterialTheme.typography.bodySmall)
-                            Text(money(points[selectedPoint]), style = MaterialTheme.typography.labelLarge, color = signedColor(points[selectedPoint]))
-                        }
+                if (!showTable) {
+                    ChartLegend(series)
+                    Spacer(Modifier.height(8.dp))
+                    CashFlowChart(
+                        buckets = buckets,
+                        series = series,
+                        selected = selectedPoint,
+                        valuesVisible = visible,
+                        onSelect = { selectedPoint = it },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    if (selectedPoint in buckets.indices) {
+                        BucketDetails(buckets[selectedPoint], money)
+                    } else {
+                        Text(
+                            if (buckets.isEmpty()) "Belum ada cash flow pada rentang ini" else "Tekan grafik untuk melihat rincian periode",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
-                } else {
-                    Text("Tekan titik grafik untuk melihat detail", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
+
+        if (showTable) {
+            items(buckets, key = { it.key }) { bucket ->
+                HudCard {
+                    Text(bucket.label, style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    BucketDetails(bucket, money)
+                }
+            }
+        }
+
         item {
             HudCard {
                 SectionHeader("Komposisi aset")
-                AssetRow(FundingChannel.CASH, state.totalCashAssets, money)
-                Spacer(Modifier.height(12.dp))
-                AssetRow(FundingChannel.EBUDGET, state.totalEBudgetAssets, money)
+                if (channel in setOf(ReportChannel.ALL, ReportChannel.CASH)) {
+                    AssetRow(FundingChannel.CASH, state.totalCashAssets, money)
+                }
+                if (channel == ReportChannel.ALL) Spacer(Modifier.height(12.dp))
+                if (channel in setOf(ReportChannel.ALL, ReportChannel.EBUDGET)) {
+                    AssetRow(FundingChannel.EBUDGET, state.totalEBudgetAssets, money)
+                }
             }
         }
+
         if (periods.isNotEmpty()) item { SectionHeader("Aktual per budget") }
         items(periods, key = { it.key }) { (periodId, rows) ->
             val planned = rows.sumOf { it.plannedAmount }
@@ -181,42 +279,64 @@ fun ReportsScreen(state: KronUiState, onExport: () -> Unit, modifier: Modifier =
             val spent = rows.sumOf { it.spentAmount }
             val available = rows.sumOf { it.availableAmount }
             val expanded = expandedPeriod == periodId
-            HudCard(modifier = Modifier.fillMaxWidth().clickable { expandedPeriod = if (expanded) null else periodId }) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            HudCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expandedPeriod = if (expanded) null else periodId }
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = "${rows.first().portfolioName}, tersedia ${money(available)}, ${if (expanded) "rincian terbuka" else "ketuk untuk rincian"}"
+                    },
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Column(Modifier.weight(1f)) {
-                        Text(rows.first().portfolioName, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text("${shortDate(LocalDate.ofEpochDay(rows.first().startEpochDay))} sampai ${shortDate(LocalDate.ofEpochDay(rows.first().endEpochDay))}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(rows.first().portfolioName, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            "${shortDate(LocalDate.ofEpochDay(rows.first().startEpochDay))} sampai ${shortDate(LocalDate.ofEpochDay(rows.first().endEpochDay))}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
-                    Text(money(available), style = MaterialTheme.typography.labelLarge, color = signedColor(available))
-                    Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, contentDescription = if (expanded) "Tutup rincian" else "Lihat rincian")
+                    Icon(
+                        if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                        contentDescription = if (expanded) "Tutup rincian" else "Lihat rincian",
+                    )
                 }
+                Text(money(available), style = MaterialTheme.typography.titleLarge, color = signedColor(available))
+                Text("Tersedia", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(12.dp))
                 LinearProgressIndicator(
                     progress = { if (booked <= 0) 0f else (spent.toFloat() / booked).coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth().height(6.dp),
                     color = if (available < 0) MaterialTheme.colorScheme.error else KronGold,
                 )
-                Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                Column(Modifier.fillMaxWidth().padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Rencana ${money(planned)}", style = MaterialTheme.typography.bodySmall)
+                    Text("Booking ${money(booked)}", style = MaterialTheme.typography.bodySmall)
                     Text("Terpakai ${money(spent)}", style = MaterialTheme.typography.bodySmall)
                 }
                 if (expanded) {
                     Spacer(Modifier.height(12.dp))
                     rows.forEach { row ->
-                        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(row.categoryName, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Column(Modifier.fillMaxWidth().padding(vertical = 7.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(row.categoryName, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 ChannelBadge(row.fundingChannel)
                             }
-                            Column(horizontalAlignment = Alignment.End) {
-                                Text(money(row.spentAmount), style = MaterialTheme.typography.labelLarge)
-                                Text("dari ${money(row.plannedAmount)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
+                            Text(
+                                "Terpakai ${money(row.spentAmount)} dari rencana ${money(row.plannedAmount)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 }
             }
         }
+
         if (unexpectedTotal > 0) item {
             HudCard(accent = MaterialTheme.colorScheme.error) {
                 Text("Pengeluaran tak terduga", style = MaterialTheme.typography.titleMedium)
@@ -229,15 +349,22 @@ fun ReportsScreen(state: KronUiState, onExport: () -> Unit, modifier: Modifier =
 
     if (showDatePicker) {
         val selectedDate = if (pickingStart) customStart else customEnd
-        val picker = rememberDatePickerState(initialSelectedDateMillis = selectedDate.atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli())
+        val picker = rememberDatePickerState(
+            initialSelectedDateMillis = selectedDate.atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli(),
+        )
         DatePickerDialog(
             onDismissRequest = { showDatePicker = false },
             confirmButton = {
                 TextButton(onClick = {
                     picker.selectedDateMillis?.let { millis ->
                         val date = Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate()
-                        if (pickingStart) customStart = minOf(date, customEnd) else customEnd = maxOf(date, customStart)
+                        if (pickingStart) {
+                            customStartDay = minOf(date, customEnd).toEpochDay()
+                        } else {
+                            customEndDay = maxOf(date, customStart).toEpochDay()
+                        }
                     }
+                    selectedPoint = -1
                     showDatePicker = false
                 }) { Text("Pilih") }
             },
@@ -246,26 +373,171 @@ fun ReportsScreen(state: KronUiState, onExport: () -> Unit, modifier: Modifier =
     }
 }
 
-@Composable
-private fun AssetRow(channel: String, value: Long, money: (Long) -> String) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        ChannelBadge(channel)
-        Text(money(value), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 12.dp))
+private enum class ReportRange(val label: String, val days: Int) {
+    SEVEN_DAYS("7 hari", 7),
+    THIRTY_DAYS("30 hari", 30),
+    NINETY_DAYS("90 hari", 90),
+    ONE_YEAR("1 tahun", 365),
+    CUSTOM("Custom", 30),
+}
+
+private enum class ReportSeries(val label: String) {
+    ALL("Semua"),
+    INCOME("Masuk"),
+    EXPENSE("Keluar"),
+    NET("Net"),
+}
+
+private enum class ReportChannel(val label: String, val value: String?) {
+    ALL("Semua kanal", null),
+    CASH("Cash", FundingChannel.CASH),
+    EBUDGET("eBudget", FundingChannel.EBUDGET),
+}
+
+private data class CashFlowBucket(
+    val key: String,
+    val label: String,
+    val income: Long,
+    val expense: Long,
+) {
+    val net: Long get() = income - expense
+}
+
+private fun ActivityRow.isCashFlowEvent(): Boolean = when (type) {
+    "INCOME", "OPENING_BALANCE", "EXPENSE", "UNEXPECTED_EXPENSE", "AUTOMATION" -> cashImpact != 0L
+    else -> false
+}
+
+private fun aggregateCashFlow(events: List<ActivityRow>, start: LocalDate, end: LocalDate): List<CashFlowBucket> {
+    val dayCount = end.toEpochDay() - start.toEpochDay() + 1L
+    return if (dayCount <= 90L) {
+        val byDay = events.groupBy { it.effectiveEpochDay }
+        generateSequence(start) { current -> current.plusDays(1).takeUnless { it.isAfter(end) } }
+            .map { date ->
+                val rows = byDay[date.toEpochDay()].orEmpty()
+                CashFlowBucket(
+                    key = "D:${date.toEpochDay()}",
+                    label = shortDate(date),
+                    income = rows.sumOf { it.cashImpact.coerceAtLeast(0L) },
+                    expense = rows.sumOf { (-it.cashImpact).coerceAtLeast(0L) },
+                )
+            }
+            .toList()
+    } else {
+        val firstMonth = YearMonth.from(start)
+        val lastMonth = YearMonth.from(end)
+        val byMonth = events.groupBy { YearMonth.from(LocalDate.ofEpochDay(it.effectiveEpochDay)) }
+        generateSequence(firstMonth) { current -> current.plusMonths(1).takeUnless { it.isAfter(lastMonth) } }
+            .map { month ->
+                val rows = byMonth[month].orEmpty()
+                CashFlowBucket(
+                    key = "M:$month",
+                    label = month.format(monthFormat),
+                    income = rows.sumOf { it.cashImpact.coerceAtLeast(0L) },
+                    expense = rows.sumOf { (-it.cashImpact).coerceAtLeast(0L) },
+                )
+            }
+            .toList()
     }
 }
 
 @Composable
-private fun FlowChart(points: List<Long>, selected: Int, onSelect: (Int) -> Unit) {
-    val maxMagnitude = points.maxOfOrNull { kotlin.math.abs(it) }?.coerceAtLeast(1L) ?: 1L
-    val gold = KronGold
-    val grid = MaterialTheme.colorScheme.outline.copy(alpha = 0.16f)
+private fun ReportMetric(label: String, value: String, color: Color) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f),
+        shape = MaterialTheme.shapes.small,
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, style = MaterialTheme.typography.titleLarge, color = color, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun BucketDetails(bucket: CashFlowBucket, money: (Long) -> String) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        ReportValueRow("Masuk", money(bucket.income), KronGreen)
+        ReportValueRow("Keluar", money(bucket.expense), MaterialTheme.colorScheme.error)
+        ReportValueRow("Net", money(bucket.net), signedColor(bucket.net))
+    }
+}
+
+@Composable
+private fun ReportValueRow(label: String, value: String, color: Color) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+        Text(value, style = MaterialTheme.typography.labelLarge, color = color, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun ChartLegend(series: ReportSeries) {
+    val entries = when (series) {
+        ReportSeries.ALL -> listOf("Masuk" to KronGreen, "Keluar" to MaterialTheme.colorScheme.error, "Net" to KronGold)
+        ReportSeries.INCOME -> listOf("Masuk" to KronGreen)
+        ReportSeries.EXPENSE -> listOf("Keluar" to MaterialTheme.colorScheme.error)
+        ReportSeries.NET -> listOf("Net" to KronGold)
+    }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        entries.forEach { (label, color) ->
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                Surface(color = color, shape = MaterialTheme.shapes.extraSmall, modifier = Modifier.height(6.dp).fillMaxWidth(0.035f)) {}
+                Text(label, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AssetRow(channel: String, value: Long, money: (Long) -> String) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        ChannelBadge(channel)
+        Text(money(value), style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun CashFlowChart(
+    buckets: List<CashFlowBucket>,
+    series: ReportSeries,
+    selected: Int,
+    valuesVisible: Boolean,
+    onSelect: (Int) -> Unit,
+) {
+    val visibleSeries = when (series) {
+        ReportSeries.ALL -> listOf(
+            buckets.map { it.income } to KronGreen,
+            buckets.map { it.expense } to MaterialTheme.colorScheme.error,
+            buckets.map { it.net } to KronGold,
+        )
+        ReportSeries.INCOME -> listOf(buckets.map { it.income } to KronGreen)
+        ReportSeries.EXPENSE -> listOf(buckets.map { it.expense } to MaterialTheme.colorScheme.error)
+        ReportSeries.NET -> listOf(buckets.map { it.net } to KronGold)
+    }
+    val values = visibleSeries.flatMap { it.first }
+    val minimum = minOf(0L, values.minOrNull() ?: 0L)
+    val maximum = maxOf(0L, values.maxOrNull() ?: 0L)
+    val span = (maximum - minimum).coerceAtLeast(1L)
+    val grid = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
+    val selectedColor = MaterialTheme.colorScheme.onSurface
+    val accessibilityLabel = if (valuesVisible) {
+        "Grafik cash flow dengan ${buckets.size} periode. Gunakan tampilan tabel untuk membaca seluruh nilai."
+    } else {
+        "Grafik cash flow dengan nilai disembunyikan."
+    }
     Canvas(
         Modifier
             .fillMaxWidth()
-            .height(164.dp)
-            .pointerInput(points) {
+            .height(180.dp)
+            .semantics { contentDescription = accessibilityLabel }
+            .pointerInput(buckets) {
                 detectTapGestures { offset ->
-                    if (points.isNotEmpty()) onSelect(((offset.x / size.width) * points.lastIndex).roundToInt().coerceIn(0, points.lastIndex))
+                    if (buckets.isNotEmpty()) {
+                        val denominator = size.width.coerceAtLeast(1)
+                        onSelect(((offset.x / denominator) * buckets.lastIndex).roundToInt().coerceIn(0, buckets.lastIndex))
+                    }
                 }
             },
     ) {
@@ -273,16 +545,27 @@ private fun FlowChart(points: List<Long>, selected: Int, onSelect: (Int) -> Unit
             val y = size.height * index / 3f
             drawLine(grid, Offset(0f, y), Offset(size.width, y), 1f)
         }
-        if (points.isEmpty()) return@Canvas
-        val step = if (points.size == 1) size.width else size.width / points.lastIndex
-        val coordinates = points.mapIndexed { index, value ->
-            Offset(index * step, size.height / 2f - (value.toFloat() / maxMagnitude) * (size.height / 2f - 10f))
-        }
-        coordinates.zipWithNext().forEach { (start, end) -> drawLine(gold, start, end, 3.5f) }
-        coordinates.forEachIndexed { index, point ->
-            if (points.size <= 90 || index == selected) drawCircle(if (index == selected) Color.White else gold, if (index == selected) 7f else 3.5f, point)
+        val zeroY = size.height - ((0L - minimum).toFloat() / span.toFloat()) * size.height
+        drawLine(grid.copy(alpha = 0.45f), Offset(0f, zeroY), Offset(size.width, zeroY), 2f)
+        if (buckets.isEmpty()) return@Canvas
+        val step = if (buckets.size == 1) size.width else size.width / buckets.lastIndex
+        visibleSeries.forEach { (seriesValues, color) ->
+            val coordinates = seriesValues.mapIndexed { index, value ->
+                Offset(
+                    x = index * step,
+                    y = size.height - ((value - minimum).toFloat() / span.toFloat()) * size.height,
+                )
+            }
+            coordinates.zipWithNext().forEach { (lineStart, lineEnd) -> drawLine(color, lineStart, lineEnd, 3.2f) }
+            coordinates.forEachIndexed { index, point ->
+                if (buckets.size <= 31 || index == selected) {
+                    drawCircle(if (index == selected) selectedColor else color, if (index == selected) 6.5f else 3f, point)
+                }
+            }
         }
     }
 }
 
-private fun shortDate(date: LocalDate): String = date.format(DateTimeFormatter.ofPattern("d MMM yyyy", Locale.forLanguageTag("id-ID")))
+private val monthFormat = DateTimeFormatter.ofPattern("MMM yyyy", Locale.forLanguageTag("id-ID"))
+private val dateFormat = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.forLanguageTag("id-ID"))
+private fun shortDate(date: LocalDate): String = date.format(dateFormat)

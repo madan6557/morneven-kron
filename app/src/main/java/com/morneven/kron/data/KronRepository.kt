@@ -81,7 +81,10 @@ class KronRepository @Inject constructor(
     val periods = dao.observePeriods()
     val allocations = dao.observeAllocationBalances()
     val activities = dao.observeActivities()
+    val eventChannels = dao.observeEventChannels()
     val rules = dao.observeRules()
+    val receipts = dao.observeReceipts()
+    val syncState = dao.observeSyncState()
     val vault = dao.observeVaultBalance()
     val vaultByChannel = dao.observeVaultByChannel()
     val unallocated = dao.observeUnallocatedBalance()
@@ -91,6 +94,14 @@ class KronRepository @Inject constructor(
     fun cashflow(start: LocalDate, end: LocalDate) = dao.observeCashflow(start.toEpochDay(), end.toEpochDay())
 
     suspend fun seedIfNeeded() = database.withTransaction {
+        if (dao.syncState() == null) {
+            dao.upsertSyncState(
+                SyncStateEntity(
+                    datasetId = UUID.randomUUID().toString(),
+                    deviceId = UUID.randomUUID().toString(),
+                ),
+            )
+        }
         if (dao.accountCount() > 0) return@withTransaction
         dao.insertAccount(AccountEntity(name = "Akun Utama", isActive = true))
         listOf(
@@ -302,7 +313,7 @@ class KronRepository @Inject constructor(
         dao.insertCashLines(listOf(CashJournalLineEntity(eventId = eventId, accountId = accountId, fundingChannel = fundingChannel, amount = -amount)))
         val budgetLines = if (unexpected) {
             listOf(
-                BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.CASH, amount = -amount),
+                BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.UNEXPECTED, fundingChannel = FundingChannel.CASH, amount = -amount),
                 BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.EXTERNAL, fundingChannel = FundingChannel.CASH, amount = amount),
             )
         } else {
@@ -702,12 +713,54 @@ class KronRepository @Inject constructor(
     }
 
     suspend fun pauseRecurringRule(ruleId: String, reason: String = "Jadwal transaksi dihentikan pengguna") = database.withTransaction {
+        require(reason.isNotBlank()) { "Alasan wajib diisi" }
         val rule = requireNotNull(dao.allRules().firstOrNull { it.id == ruleId })
         if (rule.isPaused) return@withTransaction
         dao.updateRule(rule.copy(isPaused = true))
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(eventId, LedgerType.SYSTEM, "Jadwal transaksi dihentikan", reason, "USER", LocalDate.now().toEpochDay()))
         dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = reason, beforeJson = "{\"ruleId\":\"$ruleId\",\"paused\":false}", afterJson = "{\"ruleId\":\"$ruleId\",\"paused\":true}"))
+    }
+
+    suspend fun resumeRecurringRule(
+        ruleId: String,
+        fromToday: Boolean,
+        reason: String,
+    ) = database.withTransaction {
+        require(reason.isNotBlank()) { "Alasan wajib diisi" }
+        val rule = requireNotNull(dao.allRules().firstOrNull { it.id == ruleId })
+        require(rule.isPaused) { "Jadwal sudah aktif" }
+        require(!rule.pausedByArchive) { "Pulihkan portfolio terkait sebelum melanjutkan jadwal ini" }
+        val today = LocalDate.now()
+        val start = LocalDate.ofEpochDay(rule.startEpochDay)
+        val next = if (fromToday) {
+            ScheduleCalculator.firstAfter(start, today.minusDays(1), rule.cadence, rule.intervalCount)
+        } else {
+            LocalDate.ofEpochDay(rule.nextEpochDay)
+        }
+        val end = rule.endEpochDay?.let(LocalDate::ofEpochDay)
+        require(end == null || !next.isAfter(end)) { "Jadwal sudah melewati tanggal akhir" }
+        dao.updateRule(rule.copy(nextEpochDay = next.toEpochDay(), isPaused = false))
+        val eventId = UUID.randomUUID().toString()
+        dao.insertEvent(
+            ActivityEventEntity(
+                eventId,
+                LedgerType.SYSTEM,
+                "Jadwal transaksi dilanjutkan",
+                reason,
+                "USER",
+                today.toEpochDay(),
+            ),
+        )
+        dao.insertAudit(
+            AuditSnapshotEntity(
+                eventId = eventId,
+                reason = reason,
+                beforeJson = "{\"ruleId\":\"$ruleId\",\"paused\":true,\"nextEpochDay\":${rule.nextEpochDay}}",
+                afterJson = "{\"ruleId\":\"$ruleId\",\"paused\":false,\"nextEpochDay\":${next.toEpochDay()},\"fromToday\":$fromToday}",
+            ),
+        )
+        assertInvariant()
     }
 
     suspend fun pausePortfolio(portfolioId: Long, reason: String = "Portfolio dijeda pengguna") = database.withTransaction {

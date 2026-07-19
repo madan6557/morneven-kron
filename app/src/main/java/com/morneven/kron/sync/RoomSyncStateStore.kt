@@ -1,0 +1,67 @@
+package com.morneven.kron.sync
+
+import androidx.room.withTransaction
+import com.morneven.kron.data.KronDatabase
+import com.morneven.kron.data.SyncStateEntity
+import java.util.UUID
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+class RoomSyncStateStore(
+    private val database: KronDatabase,
+    private val initialDatasetId: String = UUID.randomUUID().toString(),
+    private val initialDeviceId: String = UUID.randomUUID().toString(),
+) : SyncStateStore {
+    private val mutex = Mutex()
+
+    override suspend fun read(): SyncState = mutex.withLock {
+        database.withTransaction { readOrCreate().toModel() }
+    }
+
+    override suspend fun update(transform: (SyncState) -> SyncState): SyncState = mutex.withLock {
+        database.withTransaction {
+            val updated = transform(readOrCreate().toModel())
+            database.kronDao().upsertSyncState(updated.toEntity())
+            updated
+        }
+    }
+
+    private suspend fun readOrCreate(): SyncStateEntity = database.kronDao().syncState() ?: SyncStateEntity(
+        datasetId = initialDatasetId,
+        deviceId = initialDeviceId,
+        lastSyncedGeneration = -1,
+    ).also { database.kronDao().upsertSyncState(it) }
+
+    private fun SyncStateEntity.toModel() = SyncState(
+        datasetId = datasetId,
+        deviceId = deviceId,
+        localGeneration = localGeneration,
+        lastSyncedGeneration = lastSyncedGeneration,
+        parentSnapshotId = parentSnapshotId,
+        lastSnapshotId = lastSnapshotId,
+        lastSyncedAtEpochMillis = lastSyncedAt,
+        status = runCatching { SyncStatus.valueOf(status) }.getOrDefault(SyncStatus.ERROR),
+        lastError = lastError,
+        accountSubject = accountSubject,
+        accountEmail = accountEmail,
+        disabledDueToBilling = disabledDueToBilling,
+        conflictRemoteFileId = conflictRemoteFileId,
+    )
+
+    private fun SyncState.toEntity() = SyncStateEntity(
+        datasetId = datasetId,
+        deviceId = deviceId,
+        accountSubject = accountSubject,
+        accountEmail = accountEmail,
+        localGeneration = localGeneration,
+        lastSyncedGeneration = lastSyncedGeneration,
+        parentSnapshotId = parentSnapshotId,
+        lastSnapshotId = lastSnapshotId,
+        conflictRemoteFileId = conflictRemoteFileId,
+        lastSyncedAt = lastSyncedAtEpochMillis,
+        status = status.name,
+        lastError = lastError,
+        disabledDueToBilling = disabledDueToBilling,
+        updatedAt = System.currentTimeMillis(),
+    )
+}

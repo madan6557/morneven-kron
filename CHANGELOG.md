@@ -1,5 +1,16 @@
 # KRON Changelog
 
+## 1.1.0 LTS - 2026-07-18
+
+- Menetapkan KRON 1.1.0 sebagai Full Release LTS dengan baseline kompatibilitas data mulai 1.0.21.
+- Menambahkan Room schema 6, migration 5 ke 6, rekonstruksi migration 3 ke 4, exported schema, dan gate migration non-destruktif.
+- Mengenkripsi database menggunakan SQLCipher dengan data key 256-bit yang dibungkus Android Keystore serta rollback bila upgrade gagal.
+- Menambahkan `.kronbackup` v2 dengan lampiran, checksum, batas ukuran, perlindungan ZIP berbahaya, staging, dan importer backup v1.
+- Menambahkan penyimpanan foto bukti terenkripsi, proteksi screenshot dan overlay, notifikasi privat, larangan cleartext, R8, serta ekspor CSV yang aman dari formula injection.
+- Menambahkan fondasi sinkronisasi Google Drive opsional pada `appDataFolder` akun pilihan, enkripsi end-to-end, retention sepuluh snapshot, status, retry, dan Conflict Center tanpa silent overwrite.
+- Merapikan form layar penuh, pencarian dan filter timeline, laporan adaptif, grafik interaktif, tabel aksesibel, Pengaturan, empty state, dan tampilan font besar.
+- Menampilkan `KRON 1.1.0 Full Release LTS` secara dinamis pada aplikasi.
+
 ## 1.0.21 - 2026-07-18
 
 - Menambahkan tab Aktif dan Arsip untuk budget serta akun, lengkap dengan pemulihan tanpa menghapus riwayat.

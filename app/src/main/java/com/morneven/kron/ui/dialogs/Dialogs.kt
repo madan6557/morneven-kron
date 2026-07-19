@@ -5,13 +5,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AddAPhoto
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -28,6 +31,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
@@ -41,6 +45,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.morneven.kron.data.AccountEntity
 import com.morneven.kron.data.ActivityRow
 import com.morneven.kron.data.AllocationBalanceRow
@@ -82,7 +88,12 @@ fun IncomeDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Str
         ChannelSelector(channel) { channel = it }
         MoneyField(amount, { amount = it }, "Nominal")
         ChoiceField("Kategori", categoryId, categories, { it.id }, { it.name }) { categoryId = it }
-        ChoiceFieldNullable("Target budget (opsional)", targetAllocationId, state.allocations.filter { it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") }, { it.id }, { "${it.portfolioName} · ${it.categoryName}" }, "Tanpa target") { targetAllocationId = it }
+        ChoiceFieldNullable("Tujuan budget (opsional)", targetAllocationId, state.allocations.filter { it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") }, { it.id }, { "${it.portfolioName} · ${it.categoryName}" }, "Pemasukan insidental tanpa tujuan") { targetAllocationId = it }
+        Text(
+            "Tujuan hanya menjadi penanda. Dana masuk ke akun nyata dan Main Vault, lalu dibooking melalui tindakan budget terpisah.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         OutlinedTextField(title, { title = it }, label = { Text("Judul") }, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(note, { note = it }, label = { Text("Catatan") }, modifier = Modifier.fillMaxWidth())
         RecurrencePicker(recurring) { recurring = it }
@@ -90,7 +101,12 @@ fun IncomeDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Str
     }
 }
 
-private data class SplitDraft(var categoryId: Long?, var allocationId: Long?, var amount: String)
+private data class SplitDraft(
+    var periodId: Long?,
+    var categoryId: Long?,
+    var allocationId: Long?,
+    var amount: String,
+)
 private data class BudgetCategoryDraft(var name: String, var amount: String, var cashPercentage: Int = 50)
 
 @Composable
@@ -106,26 +122,48 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, St
     var intervalCount by remember { mutableIntStateOf(1) }
     var recordNow by remember { mutableStateOf(true) }
     var unexpected by remember { mutableStateOf(false) }
-    val splits = remember { mutableStateListOf(SplitDraft(null, null, "")) }
+    val splits = remember { mutableStateListOf(SplitDraft(null, null, null, "")) }
     val accountRow = state.accountBalances.firstOrNull { it.id == account?.id }
     val accountBalance = if (channel == FundingChannel.CASH) accountRow?.cashBalance ?: 0L else accountRow?.eBudgetBalance ?: 0L
     val splitTotal = splits.sumOf { money(it.amount) }
     val activeAllocations = state.allocations.filter { it.fundingChannel == channel && it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") }
-    val validBudgetSplits = unexpected || splits.all { it.allocationId != null && it.categoryId != null }
+    val activeAllocationIds = activeAllocations.mapTo(mutableSetOf()) { it.id }
+    val validBudgetSplits = unexpected || splits.all { it.allocationId in activeAllocationIds && it.categoryId != null }
     val enoughBalance = splitTotal <= accountBalance
     FormDialog("Catat pengeluaran", onDismiss, confirmEnabled = account != null && splitTotal > 0 && enoughBalance && splits.all { money(it.amount) > 0 } && validBudgetSplits && intervalCount > 0 && (endDate == null || !endDate!!.isBefore(startDate)), onConfirm = {
         onSubmit(requireNotNull(account).id, channel, splitTotal, splits.map { ExpenseSplitInput(it.categoryId, if (unexpected) null else it.allocationId, money(it.amount)) }, title, note, unexpected, recurring, startDate, endDate, intervalCount, recordNow)
     }) {
         Text("Akun aktif: ${account?.name ?: "Belum ada"}", style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = !unexpected, onClick = { unexpected = false }, label = { Text("Untuk budget") })
-            FilterChip(selected = unexpected, onClick = { unexpected = true; channel = FundingChannel.CASH }, label = { Text("Tak terduga") })
+            FilterChip(
+                selected = !unexpected,
+                onClick = {
+                    unexpected = false
+                    splits.indices.forEach { index ->
+                        splits[index] = splits[index].copy(periodId = null, allocationId = null, categoryId = null)
+                    }
+                },
+                label = { Text("Untuk budget") },
+            )
+            FilterChip(
+                selected = unexpected,
+                onClick = {
+                    unexpected = true
+                    channel = FundingChannel.CASH
+                    splits.indices.forEach { index ->
+                        splits[index] = splits[index].copy(periodId = null, allocationId = null)
+                    }
+                },
+                label = { Text("Tak terduga") },
+            )
         }
         if (!unexpected) {
             Text("Kanal pembayaran", style = MaterialTheme.typography.labelLarge)
             ChannelSelector(channel) { value ->
                 channel = value
-                splits.indices.forEach { index -> splits[index] = splits[index].copy(allocationId = null, categoryId = null) }
+                splits.indices.forEach { index ->
+                    splits[index] = splits[index].copy(periodId = null, allocationId = null, categoryId = null)
+                }
             }
         } else ChannelBadge(FundingChannel.CASH)
         Text(if (unexpected) "Langsung mengurangi Cash dan tidak mengurangi budget." else "Pilih alokasi budget terlebih dahulu, lalu kategori yang terhubung.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
@@ -137,21 +175,38 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, St
                     if (splits.size > 1) IconButton(onClick = { splits.removeAt(index) }) { Icon(Icons.Outlined.DeleteOutline, contentDescription = "Hapus split") }
                 }
                 if (!unexpected) {
-                    ChoiceFieldNullable("Alokasi budget", split.allocationId, activeAllocations, { it.id }, { it.portfolioName }, "Pilih alokasi") { value ->
-                        val allocation = activeAllocations.firstOrNull { it.id == value }
-                        splits[index] = split.copy(allocationId = value, categoryId = allocation?.categoryId)
+                    val budgetChoices = activeAllocations.distinctBy { it.periodId }
+                    ChoiceFieldNullable(
+                        "Budget",
+                        split.periodId,
+                        budgetChoices,
+                        { it.periodId },
+                        { "${it.portfolioName} (${LocalDate.ofEpochDay(it.startEpochDay)} sampai ${LocalDate.ofEpochDay(it.endEpochDay)})" },
+                        "Pilih budget",
+                    ) { value ->
+                        splits[index] = split.copy(periodId = value, allocationId = null, categoryId = null)
                     }
-                }
-                val visibleCategories = if (!unexpected && split.allocationId != null) categories.filter { it.id == split.categoryId } else categories
-                ChoiceField("Kategori", split.categoryId, visibleCategories, { it.id }, { it.name }) { value -> splits[index] = split.copy(categoryId = value) }
-                if (!unexpected && activeAllocations.isEmpty()) {
-                    val allocations = state.allocations.filter { it.categoryId == split.categoryId && it.fundingChannel == channel && it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") }
-                ChoiceFieldNullable("Budget", split.allocationId, allocations, { it.id }, { "${it.portfolioName} · ${displayMoney(it.availableAmount, state.valuesVisible)}" }, "Belum teralokasi") { value -> splits[index] = split.copy(allocationId = value) }
+                    val categoryChoices = activeAllocations.filter { it.periodId == split.periodId }
+                    ChoiceFieldNullable(
+                        "Kategori budget",
+                        split.allocationId,
+                        categoryChoices,
+                        { it.id },
+                        { "${it.categoryName} · sisa ${displayMoney(it.availableAmount, state.valuesVisible)}" },
+                        if (split.periodId == null) "Pilih budget terlebih dahulu" else "Pilih kategori",
+                    ) { allocationId ->
+                        val allocation = categoryChoices.firstOrNull { it.id == allocationId }
+                        splits[index] = split.copy(allocationId = allocationId, categoryId = allocation?.categoryId)
+                    }
+                } else {
+                    ChoiceField("Kategori", split.categoryId, categories, { it.id }, { it.name }) { value ->
+                        splits[index] = split.copy(categoryId = value)
+                    }
                 }
                 MoneyField(split.amount, { value -> splits[index] = split.copy(amount = value) }, "Nominal bagian")
             }
         }
-        TextButton(onClick = { splits.add(SplitDraft(null, null, "")) }) {
+        TextButton(onClick = { splits.add(SplitDraft(null, null, null, "")) }) {
             Icon(Icons.Outlined.Add, contentDescription = null)
             Text("Tambah split")
         }
@@ -230,8 +285,8 @@ fun PortfolioDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (String
             FilterChip(selected = cadence == "YEARLY", onClick = { cadence = "YEARLY" }, label = { Text("Tahunan") })
         }
         ScheduleFields(startDate, { startDate = it }, endDate, { endDate = it }, intervalCount, { intervalCount = it }, cadence, null, null)
-        MoneyField(plannedIncome, { plannedIncome = it }, "Target pemasukan periode (opsional)")
-        Text("Target pemasukan adalah perkiraan pemasukan untuk periode ini, bukan total budget.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        MoneyField(plannedIncome, { plannedIncome = it }, "Proyeksi hasil RAB (opsional)")
+        Text("Isi hanya jika RAB ini diharapkan menghasilkan pemasukan, misalnya kegiatan bisnis. Nilai ini bukan total budget dan tidak menambah saldo.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text("Total budget kategori: ${displayMoney(totalBudget, state.valuesVisible)}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.tertiary)
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -436,9 +491,16 @@ fun EditAccountDialog(account: AccountEntity, onDismiss: () -> Unit, onSubmit: (
 }
 
 @Composable
-fun AuditDialog(event: ActivityRow, state: KronUiState, onDismiss: () -> Unit, onRevert: (String, String) -> Unit) {
+fun AuditDialog(
+    event: ActivityRow,
+    state: KronUiState,
+    onDismiss: () -> Unit,
+    onAddReceipt: (String) -> Unit,
+    onRevert: (String, String) -> Unit,
+) {
     var reason by remember { mutableStateOf("") }
     val lifecycleEvent = event.type in setOf("ARCHIVE", "RESTORE")
+    val receipts = state.receipts.filter { it.eventId == event.id }
     FormDialog("Detail audit", onDismiss, confirmText = "Revert", confirmEnabled = !lifecycleEvent && event.reversedByEventId == null && event.type != "REVERSAL" && reason.isNotBlank(), onConfirm = { onRevert(event.id, reason) }) {
         Text(event.title, style = MaterialTheme.typography.titleLarge)
         Text(event.type.replace('_', ' '), color = MaterialTheme.colorScheme.tertiary)
@@ -448,6 +510,27 @@ fun AuditDialog(event: ActivityRow, state: KronUiState, onDismiss: () -> Unit, o
         Text("Dampak Vault: ${displayMoney(event.vaultImpact, state.valuesVisible)}")
         Text("Dampak kategori: ${displayMoney(event.budgetImpact, state.valuesVisible)}")
         if (event.note.isNotBlank()) Text("Catatan: ${event.note}")
+        HorizontalDivider()
+        Text("Foto bukti (${receipts.size})", style = MaterialTheme.typography.titleMedium)
+        if (receipts.isEmpty()) {
+            Text("Belum ada foto bukti untuk event ini.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            receipts.forEach { receipt ->
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(receipt.displayName, style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "${receipt.mimeType} · ${receipt.byteSize.coerceAtLeast(0) / 1024} KB",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        OutlinedButton(onClick = { onAddReceipt(event.id) }, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Outlined.AddAPhoto, contentDescription = null)
+            Text(" Tambahkan foto bukti")
+        }
+        Text("Foto disalin ke penyimpanan privat dan dienkripsi.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (lifecycleEvent) Text("Event lifecycle bersifat read-only. Gunakan tab Arsip untuk memulihkan atau mengarsipkan kembali.", color = MaterialTheme.colorScheme.tertiary)
         else if (event.reversedByEventId != null) Text("Event sudah direvert", color = MaterialTheme.colorScheme.error)
         else OutlinedTextField(reason, { reason = it }, label = { Text("Alasan revert") }, modifier = Modifier.fillMaxWidth())
@@ -456,13 +539,37 @@ fun AuditDialog(event: ActivityRow, state: KronUiState, onDismiss: () -> Unit, o
 
 @Composable
 private fun FormDialog(title: String, onDismiss: () -> Unit, confirmText: String = "Simpan", confirmEnabled: Boolean, onConfirm: () -> Unit, content: @Composable () -> Unit) {
-    AlertDialog(
+    Dialog(
         onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = { Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) { content() } },
-        confirmButton = { Button(onClick = onConfirm, enabled = confirmEnabled) { Text(confirmText) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Batal") } },
-    )
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    ) {
+        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.fillMaxSize().systemBarsPadding()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(title, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                    TextButton(onClick = onDismiss) { Text("Batal") }
+                }
+                HorizontalDivider()
+                Column(
+                    Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    content()
+                    Spacer(Modifier.height(24.dp))
+                }
+                HorizontalDivider()
+                Button(
+                    onClick = onConfirm,
+                    enabled = confirmEnabled,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp).height(52.dp),
+                ) { Text(confirmText) }
+            }
+        }
+    }
 }
 
 @Composable
