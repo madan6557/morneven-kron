@@ -93,6 +93,8 @@ class KronRepository @Inject constructor(
 
     fun cashflow(start: LocalDate, end: LocalDate) = dao.observeCashflow(start.toEpochDay(), end.toEpochDay())
 
+    suspend fun isFirstInstall(): Boolean = dao.accountCount() == 0
+
     suspend fun seedIfNeeded() = database.withTransaction {
         if (dao.syncState() == null) {
             dao.upsertSyncState(

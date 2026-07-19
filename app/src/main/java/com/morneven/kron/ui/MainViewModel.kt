@@ -255,7 +255,11 @@ class MainViewModel @Inject constructor(
         }
         viewModelScope.launch {
             runCatching {
+                val firstInstall = repository.isFirstInstall()
                 repository.seedIfNeeded()
+                if (!preferences.onboardingComplete.first() && !firstInstall) {
+                    preferences.completeOnboarding()
+                }
                 repository.processDueRules(direction = TransactionDirection.INCOME)
                 repository.reconcilePortfolios()
                 repository.processDueRules(direction = TransactionDirection.EXPENSE)
