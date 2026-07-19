@@ -1,5 +1,10 @@
 # KRON Changelog
 
+## 1.1.2 - 2026-07-19
+
+- Memperbaiki chart mode Saldo agar hanya menampilkan 1 garis (Net).
+- Menampilkan toggle "Hanya jaringan tanpa meter" sebelum Drive terhubung.
+
 ## 1.1.1 - 2026-07-19
 
 - Memperbaiki pemilih akun Google OAuth yang tidak muncul di jaringan seluler (timeout 30 detik, logging error, pesan error eksplisit).

@@ -32,8 +32,8 @@ android {
         applicationId = "com.morneven.kron"
         minSdk = 26
         targetSdk = 37
-versionCode = 23
-versionName = "1.1.1"
+versionCode = 24
+versionName = "1.1.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${googleWebClientId.replace("\"", "\\\"")}\"")
@@ -90,7 +90,7 @@ versionName = "1.1.1"
 androidComponents {
     onVariants(selector().withBuildType("release")) { variant ->
         variant.outputs.forEach { output ->
-        output.outputFileName.set("KRON-1.1.1-LTS.apk")
+        output.outputFileName.set("KRON-1.1.2-LTS.apk")
         }
     }
 }
