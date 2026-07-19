@@ -43,10 +43,11 @@ abstract class KronDatabase : RoomDatabase() {
             instance ?: run {
                 val appContext = context.applicationContext
                 val encryption = DatabaseEncryptionManager(appContext, DatabaseKeyManager(appContext))
+                val dbPath = appContext.getDatabasePath(DATABASE_NAME).absolutePath
                 val guard = encryption.preparePrimaryDatabase(appContext.getDatabasePath(DATABASE_NAME))
                 try {
                     val opened = Room.databaseBuilder(appContext, KronDatabase::class.java, DATABASE_NAME)
-                        .openHelperFactory(encryption.openHelperFactory())
+                        .openHelperFactory(encryption.openHelperFactory(dbPath))
                         .addMigrations(*ALL_MIGRATIONS)
                         .addCallback(SYNC_TRIGGER_CALLBACK)
                         .build()

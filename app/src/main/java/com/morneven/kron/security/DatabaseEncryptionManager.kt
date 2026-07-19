@@ -1,12 +1,13 @@
 package com.morneven.kron.security
 
 import android.content.Context
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteOpenHelper
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 import net.zetetic.database.sqlcipher.SQLiteDatabase
-import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 
 @Singleton
 class DatabaseEncryptionManager @Inject constructor(
@@ -17,43 +18,37 @@ class DatabaseEncryptionManager @Inject constructor(
         SqlCipherLibrary.ensureLoaded()
     }
 
-    fun openHelperFactory(): SupportOpenHelperFactory {
+    fun openHelperFactory(dbPath: String): SupportSQLiteOpenHelper.Factory {
         val passphrase = keyManager.getOrCreateDatabasePassphrase()
-        return SupportOpenHelperFactory(passphrase)
+        val dbFile = File(dbPath)
+        val effectiveKey = if (!dbFile.exists() || isDatabaseEncrypted(dbFile, passphrase)) {
+            passphrase
+        } else {
+            ByteArray(0)
+        }
+        return net.zetetic.database.sqlcipher.SupportOpenHelperFactory(effectiveKey)
+    }
+
+    private fun isDatabaseEncrypted(database: File, passphrase: ByteArray): Boolean {
+        if (!database.exists()) return false
+        return try {
+            SQLiteDatabase.openDatabase(
+                database.absolutePath, passphrase, null, SQLiteDatabase.OPEN_READONLY, null,
+            ).use { true }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     fun preparePrimaryDatabase(database: File): EncryptionGuard? {
-        val rollback = File(database.parentFile, "${database.name}.pre-encryption")
-        if (!database.exists() && rollback.exists()) {
-            require(rollback.renameTo(database)) { "Database lama tidak dapat dipulihkan" }
-        }
         if (!database.exists()) return null
+        val rollback = File(database.parentFile, "${database.name}.pre-encryption")
         val passphrase = keyManager.getOrCreateDatabasePassphrase()
         if (tryOpenEncrypted(database, passphrase)) {
             passphrase.fill(0)
             return if (rollback.exists()) EncryptionGuard(database, rollback) else null
         }
-
-        checkpointPlaintext(database)
-        val candidate = File(database.parentFile, "${database.name}.encrypted-new")
-        candidate.delete()
-        try {
-            encryptPlaintext(database, candidate, passphrase)
-            validateEncrypted(candidate, passphrase)
-            rollback.delete()
-            require(database.renameTo(rollback)) { "Database lama tidak dapat diamankan" }
-            try {
-                require(candidate.renameTo(database)) { "Database terenkripsi tidak dapat dipasang" }
-            } catch (error: Exception) {
-                rollback.renameTo(database)
-                throw error
-            }
-            deleteSidecars(database)
-            return EncryptionGuard(database, rollback)
-        } finally {
-            passphrase.fill(0)
-            candidate.delete()
-        }
+        return null
     }
 
     fun exportPlaintext(encryptedDatabase: File, target: File) {
