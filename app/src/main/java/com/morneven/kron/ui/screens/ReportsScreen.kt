@@ -30,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -80,6 +81,7 @@ fun ReportsScreen(
 ) {
     val visible = state.valuesVisible
     var range by rememberSaveable { mutableStateOf(ReportRange.THIRTY_DAYS) }
+    var mode by rememberSaveable { mutableStateOf(ReportMode.CUMULATIVE) }
     var series by rememberSaveable { mutableStateOf(ReportSeries.ALL) }
     var channel by rememberSaveable { mutableStateOf(ReportChannel.ALL) }
     var selectedPoint by rememberSaveable { mutableIntStateOf(-1) }
@@ -107,7 +109,16 @@ fun ReportsScreen(
                 channelMatches
         }
     }
-    val buckets = remember(cashFlowEvents, start, end) { aggregateCashFlow(cashFlowEvents, start, end) }
+    val rawBuckets = remember(cashFlowEvents, start, end) { aggregateCashFlow(cashFlowEvents, start, end) }
+    val buckets = remember(rawBuckets, mode) {
+        if (mode == ReportMode.CUMULATIVE) rawBuckets.toCumulative() else rawBuckets
+    }
+    LaunchedEffect(mode) {
+        series = when (mode) {
+            ReportMode.CUMULATIVE -> ReportSeries.NET
+            ReportMode.CASH_FLOW -> ReportSeries.ALL
+        }
+    }
     val income = cashFlowEvents.sumOf { event -> event.cashImpact.coerceAtLeast(0L) }
     val expense = cashFlowEvents.sumOf { event -> (-event.cashImpact).coerceAtLeast(0L) }
     val net = income - expense
@@ -179,7 +190,17 @@ fun ReportsScreen(
                     ) { Text("Sampai\n${shortDate(customEnd)}") }
                 }
             }
-            Text("Seri cash flow", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Mode laporan", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(end = 12.dp)) {
+                items(ReportMode.entries, key = { it.name }) { item ->
+                    FilterChip(
+                        selected = mode == item,
+                        onClick = { mode = item; selectedPoint = -1 },
+                        label = { Text(item.label) },
+                    )
+                }
+            }
+            Text("Seri", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(end = 12.dp)) {
                 items(ReportSeries.entries, key = { it.name }) { item ->
                     FilterChip(
@@ -216,7 +237,9 @@ fun ReportsScreen(
 
         item {
             HudCard {
-                SectionHeader("Cash flow $rangeLabel")
+                SectionHeader(
+                    if (mode == ReportMode.CUMULATIVE) "Saldo $rangeLabel" else "Cash flow $rangeLabel"
+                )
                 ReportMetric("Masuk", money(income), KronGreen)
                 ReportMetric("Keluar", money(expense), MaterialTheme.colorScheme.error)
                 ReportMetric("Net", money(net), signedColor(net))
@@ -373,6 +396,11 @@ fun ReportsScreen(
     }
 }
 
+private enum class ReportMode(val label: String) {
+    CUMULATIVE("Saldo"),
+    CASH_FLOW("Arus kas"),
+}
+
 private enum class ReportRange(val label: String, val days: Int) {
     SEVEN_DAYS("7 hari", 7),
     THIRTY_DAYS("30 hari", 30),
@@ -438,6 +466,21 @@ private fun aggregateCashFlow(events: List<ActivityRow>, start: LocalDate, end: 
                 )
             }
             .toList()
+    }
+}
+
+private fun List<CashFlowBucket>.toCumulative(): List<CashFlowBucket> {
+    var runningIncome = 0L
+    var runningExpense = 0L
+    return map { bucket ->
+        runningIncome += bucket.income
+        runningExpense += bucket.expense
+        CashFlowBucket(
+            key = bucket.key,
+            label = bucket.label,
+            income = runningIncome,
+            expense = runningExpense,
+        )
     }
 }
 

@@ -5,10 +5,12 @@ import android.app.Activity
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import androidx.activity.result.IntentSenderRequest
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
@@ -19,13 +21,14 @@ import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.auth.api.identity.RevokeAccessRequest
 import com.google.android.gms.common.api.Scope
 import com.google.android.gms.tasks.Task
-import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeout
 
 class AndroidCredentialManagerAccountSelector(
     private val activity: Activity,
@@ -46,17 +49,29 @@ class AndroidCredentialManagerAccountSelector(
             .addCredentialOption(googleOption)
             .build()
         val credential = try {
-            credentialManager.getCredential(activity, request).credential
+            withTimeout(30_000L) {
+                credentialManager.getCredential(activity, request).credential
+            }
+        } catch (error: TimeoutCancellationException) {
+            Log.w(TAG, "CredentialManager.getCredential() timed out after 30s")
+            throw IllegalStateException(
+                "Pemilihan akun Google tidak merespon. Coba gunakan WiFi lalu sambungkan Drive.",
+                error,
+            )
         } catch (error: NoCredentialException) {
+            Log.w(TAG, "NoCredentialException: ${error.message}")
             throw IllegalStateException(
                 "Tidak ada akun Google yang tersedia. Tambahkan akun Google di perangkat lalu coba lagi.",
                 error,
             )
         } catch (error: GetCredentialCancellationException) {
+            Log.w(TAG, "GetCredentialCancellationException: ${error.message}")
             throw IllegalStateException("Pemilihan akun Google dibatalkan", error)
         } catch (error: GetCredentialException) {
+            Log.w(TAG, "GetCredentialException type=${error.type} message=${error.message}")
             throw IllegalStateException(
-                "Pemilih akun Google tidak tersedia. Perbarui Google Play Services lalu coba lagi.",
+                "Pemilih akun Google tidak tersedia (${error.type}). " +
+                    "Perbarui Google Play Services atau gunakan WiFi lalu coba lagi.",
                 error,
             )
         }
@@ -70,6 +85,10 @@ class AndroidCredentialManagerAccountSelector(
             ?: error("Identitas akun Google kosong")
         val email = google.email?.takeIf(String::isNotBlank) ?: error("Email akun Google kosong")
         return GoogleAccountIdentity(subject, email, google.displayName)
+    }
+
+    companion object {
+        private const val TAG = "KronAccountSelector"
     }
 }
 

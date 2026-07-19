@@ -1,5 +1,12 @@
 # KRON Changelog
 
+## 1.1.1 - 2026-07-19
+
+- Memperbaiki pemilih akun Google OAuth yang tidak muncul di jaringan seluler (timeout 30 detik, logging error, pesan error eksplisit).
+- Menambahkan mode laporan akumulatif (Saldo) sebagai default dengan toggle Arus Kas/Saldo.
+- Memperbaiki propagasi error IllegalStateException dari account selector agar tidak ditelan catch generik.
+- Menambahkan logging untuk diagnosis kegagalan Credential Manager.
+
 ## 1.1.0 LTS - 2026-07-18
 
 - Menetapkan KRON 1.1.0 sebagai Full Release LTS dengan baseline kompatibilitas data mulai 1.0.21.

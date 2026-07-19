@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.util.Log
 import androidx.activity.result.IntentSenderRequest
 import com.morneven.kron.BuildConfig
 import com.morneven.kron.backup.BackupManager
@@ -54,6 +55,13 @@ class DriveSyncRuntime internal constructor(
             } catch (cancelled: CancellationException) {
                 discardUncommittedPassphrase()
                 throw cancelled
+            } catch (error: IllegalStateException) {
+                discardUncommittedPassphrase()
+                Log.w(TAG, "authorization.connect() gagal: ${error.message}", error)
+                return DriveConnectResult.Failed(
+                    error.message ?: "Akun Google tidak dapat dihubungkan",
+                    retryable = false,
+                )
             } catch (_: Exception) {
                 discardUncommittedPassphrase()
                 return DriveConnectResult.Failed(
@@ -403,8 +411,10 @@ class DriveSyncRuntimeFactory @Inject constructor(
         val status: String,
     )
 
-    private companion object {
+    companion object {
         const val SYNC_PREFERENCES = "kron_drive_sync_settings"
         const val KEY_WIFI_ONLY = "wifi_only"
     }
 }
+
+private const val TAG = "KronDriveSync"
