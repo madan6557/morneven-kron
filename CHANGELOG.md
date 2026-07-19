@@ -1,5 +1,10 @@
 # KRON Changelog
 
+## 1.1.5 - 2026-07-19
+
+- Hapus FLAG_SECURE saat valuesVisible (screenshot bebas di layar laporan).
+- Warna nominal Net di laporan jadi KronGold (emas) sesuai warna grafik.
+
 ## 1.1.4 - 2026-07-19
 
 - Hapus network check dari connect() dan reauthorizeCurrent() -- koneksi Drive tidak lagi diblokir oleh jaringan metered atau koneksi internet apapun.
