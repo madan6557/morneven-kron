@@ -44,10 +44,6 @@ class DriveSyncRuntime internal constructor(
             passphrase.fill('\u0000')
             return DriveConnectResult.Failed("Konfigurasi OAuth Drive belum tersedia", retryable = false)
         }
-        factory.networkBlockMessage()?.let { message ->
-            passphrase.fill('\u0000')
-            return DriveConnectResult.Failed(message, retryable = true)
-        }
         return try {
             passphraseOperationMutex.withLock { secretStore.stage(passphrase) }
             val result = try {
@@ -90,7 +86,6 @@ class DriveSyncRuntime internal constructor(
     }
 
     suspend fun reauthorizeCurrent(): DriveConnectResult {
-        factory.networkBlockMessage()?.let { return DriveConnectResult.Failed(it, retryable = true) }
         return authorization.reauthorizeCurrent().also { result ->
             when (result) {
                 is DriveConnectResult.Connected -> factory.activateAfterConnection()

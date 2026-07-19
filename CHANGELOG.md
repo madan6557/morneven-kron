@@ -1,5 +1,9 @@
 # KRON Changelog
 
+## 1.1.4 - 2026-07-19
+
+- Hapus network check dari connect() dan reauthorizeCurrent() -- koneksi Drive tidak lagi diblokir oleh jaringan metered atau koneksi internet apapun.
+
 ## 1.1.3 - 2026-07-19
 
 - Bypass Credential Manager untuk koneksi Drive. Pakai AuthorizationClient langsung dengan account picker bawaan Google Play Services. Tidak perlu koneksi internet ke server Google untuk memilih akun.
