@@ -43,7 +43,8 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         val databaseError = runCatching { KronDatabase.getInstance(this) }.exceptionOrNull()
         if (databaseError != null) {
-            setContent { DatabaseRecoveryScreen(::restartApplication) }
+            android.util.Log.e("KRON_DB", "Gagal membuka database", databaseError)
+            setContent { DatabaseRecoveryScreen(databaseError, ::restartApplication) }
             return
         }
         driveSyncRuntime = if (BuildConfig.DRIVE_SYNC_CONFIGURED) {
@@ -67,7 +68,7 @@ class MainActivity : FragmentActivity() {
 }
 
 @Composable
-private fun DatabaseRecoveryScreen(onRestart: () -> Unit) {
+private fun DatabaseRecoveryScreen(error: Throwable? = null, onRestart: () -> Unit) {
     KronTheme("DARK") {
         Column(
             modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp),
@@ -92,6 +93,15 @@ private fun DatabaseRecoveryScreen(onRestart: () -> Unit) {
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(top = 12.dp, bottom = 24.dp),
             )
+            error?.let {
+                Text(
+                    "${it.javaClass.simpleName}: ${it.message}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(bottom = 24.dp),
+                )
+            }
             Button(onClick = onRestart) { Text("Mulai ulang KRON") }
         }
     }
