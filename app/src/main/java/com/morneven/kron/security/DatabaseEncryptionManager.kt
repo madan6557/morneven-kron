@@ -55,23 +55,14 @@ class DatabaseEncryptionManager @Inject constructor(
         target.delete()
         val passphrase = keyManager.getOrCreateDatabasePassphrase()
         try {
-            val source = try {
-                SQLiteDatabase.openDatabase(
-                    encryptedDatabase.absolutePath,
-                    passphrase,
-                    null,
-                    SQLiteDatabase.OPEN_READWRITE,
-                    null,
-                )
-            } catch (_: Exception) {
-                SQLiteDatabase.openDatabase(
-                    encryptedDatabase.absolutePath,
-                    ByteArray(0),
-                    null,
-                    SQLiteDatabase.OPEN_READWRITE,
-                    null,
-                )
-            }
+            val key = if (isDatabaseEncrypted(encryptedDatabase, passphrase)) passphrase else ByteArray(0)
+            val source = SQLiteDatabase.openDatabase(
+                encryptedDatabase.absolutePath,
+                key,
+                null,
+                SQLiteDatabase.OPEN_READWRITE,
+                null,
+            )
             source.use { database ->
                 val targetPath = sqlString(target.absolutePath)
                 database.rawExecSQL("ATTACH DATABASE '$targetPath' AS portable KEY ''")
