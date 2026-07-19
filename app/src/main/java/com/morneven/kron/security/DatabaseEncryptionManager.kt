@@ -28,14 +28,15 @@ class DatabaseEncryptionManager @Inject constructor(
             require(rollback.renameTo(database)) { "Database lama tidak dapat dipulihkan" }
         }
         if (!database.exists()) return null
-        if (isEncrypted(database)) {
+        val passphrase = keyManager.getOrCreateDatabasePassphrase()
+        if (tryOpenEncrypted(database, passphrase)) {
+            passphrase.fill(0)
             return if (rollback.exists()) EncryptionGuard(database, rollback) else null
         }
 
         checkpointPlaintext(database)
         val candidate = File(database.parentFile, "${database.name}.encrypted-new")
         candidate.delete()
-        val passphrase = keyManager.getOrCreateDatabasePassphrase()
         try {
             encryptPlaintext(database, candidate, passphrase)
             validateEncrypted(candidate, passphrase)
@@ -109,10 +110,17 @@ class DatabaseEncryptionManager @Inject constructor(
         }
     }
 
-    fun isEncrypted(database: File): Boolean {
+    private fun tryOpenEncrypted(database: File, passphrase: ByteArray): Boolean {
         if (!database.exists() || database.length() < SQLITE_HEADER.size) return false
-        val header = database.inputStream().use { input -> ByteArray(SQLITE_HEADER.size).also(input::read) }
-        return !header.contentEquals(SQLITE_HEADER)
+        return try {
+            val header = database.inputStream().use { input -> ByteArray(SQLITE_HEADER.size).also(input::read) }
+            if (!header.contentEquals(SQLITE_HEADER)) return true
+            SQLiteDatabase.openDatabase(
+                database.absolutePath, passphrase, null, SQLiteDatabase.OPEN_READONLY, null,
+            ).use { true }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun checkpointPlaintext(database: File) {
@@ -153,7 +161,6 @@ class DatabaseEncryptionManager @Inject constructor(
     }
 
     private fun validateEncrypted(file: File, passphrase: ByteArray) {
-        require(isEncrypted(file)) { "Database belum terenkripsi" }
         val database = SQLiteDatabase.openDatabase(
             file.absolutePath,
             passphrase,
