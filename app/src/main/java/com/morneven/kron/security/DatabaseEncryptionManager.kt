@@ -119,7 +119,17 @@ class DatabaseEncryptionManager @Inject constructor(
                 database.absolutePath, passphrase, null, SQLiteDatabase.OPEN_READONLY, null,
             ).use { true }
         } catch (_: Exception) {
-            false
+            try {
+                SQLiteDatabase.openDatabase(
+                    database.absolutePath, ByteArray(0), null, SQLiteDatabase.OPEN_READONLY, null,
+                ).use { /* plaintext */ }
+                false
+            } catch (_: Exception) {
+                throw IllegalStateException(
+                    "Database KRON terenkripsi dengan kunci yang tidak dikenal. " +
+                    "Hapus atau pulihkan database dari cadangan."
+                )
+            }
         }
     }
 
