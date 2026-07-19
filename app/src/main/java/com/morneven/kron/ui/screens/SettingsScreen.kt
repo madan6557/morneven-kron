@@ -495,7 +495,7 @@ private fun CloudSyncCard(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 8.dp),
         )
-        if (connected && onWifiOnly != null) {
+        if (onWifiOnly != null) {
             ToggleRow(Icons.Outlined.Sync, "Hanya jaringan tanpa meter", "Berlaku untuk sinkronisasi otomatis dan manual", state.wifiOnly, onWifiOnly)
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {

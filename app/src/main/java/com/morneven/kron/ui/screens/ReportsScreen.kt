@@ -113,11 +113,9 @@ fun ReportsScreen(
     val buckets = remember(rawBuckets, mode) {
         if (mode == ReportMode.CUMULATIVE) rawBuckets.toCumulative() else rawBuckets
     }
-    LaunchedEffect(mode) {
-        series = when (mode) {
-            ReportMode.CUMULATIVE -> ReportSeries.NET
-            ReportMode.CASH_FLOW -> ReportSeries.ALL
-        }
+    val effectiveSeries = when (mode) {
+        ReportMode.CUMULATIVE -> ReportSeries.NET
+        ReportMode.CASH_FLOW -> series
     }
     val income = cashFlowEvents.sumOf { event -> event.cashImpact.coerceAtLeast(0L) }
     val expense = cashFlowEvents.sumOf { event -> (-event.cashImpact).coerceAtLeast(0L) }
@@ -249,11 +247,11 @@ fun ReportsScreen(
                     FilterChip(selected = showTable, onClick = { showTable = true }, label = { Text("Tabel") })
                 }
                 if (!showTable) {
-                    ChartLegend(series)
+                    ChartLegend(effectiveSeries)
                     Spacer(Modifier.height(8.dp))
                     CashFlowChart(
                         buckets = buckets,
-                        series = series,
+                        series = effectiveSeries,
                         selected = selectedPoint,
                         valuesVisible = visible,
                         onSelect = { selectedPoint = it },
