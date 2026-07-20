@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -239,7 +240,12 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, St
                     splits[index] = splits[index].copy(periodId = null, allocationId = null, categoryId = null)
                 }
             }
-        } else ChannelBadge(FundingChannel.CASH)
+        } else {
+            Text("Kanal pembayaran", style = MaterialTheme.typography.labelLarge)
+            ChannelSelector(channel) { value ->
+                channel = value
+            }
+        }
         Text(if (unexpected) "Langsung mengurangi Cash dan tidak mengurangi budget." else "Pilih alokasi budget terlebih dahulu, lalu kategori yang terhubung.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
         Text("SPLIT TRANSAKSI", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
         splits.forEachIndexed { index, split ->
@@ -641,7 +647,7 @@ private fun FormDialog(title: String, onDismiss: () -> Unit, confirmText: String
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(Modifier.fillMaxSize().systemBarsPadding()) {
+            Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,

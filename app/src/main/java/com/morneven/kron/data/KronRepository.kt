@@ -294,7 +294,6 @@ class KronRepository @Inject constructor(
         val account = requireNotNull(dao.accountById(accountId))
         require(account.isActive) { "Pilih akun ini sebagai akun aktif terlebih dahulu" }
         require(dao.accountBalance(accountId, fundingChannel) >= amount) { "Saldo ${if (fundingChannel == FundingChannel.CASH) "Cash" else "eBudget"} tidak mencukupi" }
-        if (unexpected) require(fundingChannel == FundingChannel.CASH) { "Pengeluaran tak terduga hanya memakai Cash" }
         val effectiveSplits = splits.map { split ->
             val allocation = split.allocationId?.let { dao.allocationById(it) }
             val period = allocation?.let { dao.periodById(it.periodId) }
@@ -315,8 +314,8 @@ class KronRepository @Inject constructor(
         dao.insertCashLines(listOf(CashJournalLineEntity(eventId = eventId, accountId = accountId, fundingChannel = fundingChannel, amount = -amount)))
         val budgetLines = if (unexpected) {
             listOf(
-                BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.UNEXPECTED, fundingChannel = FundingChannel.CASH, amount = -amount),
-                BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.EXTERNAL, fundingChannel = FundingChannel.CASH, amount = amount),
+                BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.UNEXPECTED, fundingChannel = fundingChannel, amount = -amount),
+                BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.EXTERNAL, fundingChannel = fundingChannel, amount = amount),
             )
         } else {
             effectiveSplits.map { split ->

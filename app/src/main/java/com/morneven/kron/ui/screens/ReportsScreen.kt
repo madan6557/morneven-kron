@@ -106,19 +106,13 @@ private fun ChangeIndicator(
     val percentStr = String.format(Locale.ROOT, "%+.1f%%", percentage)
     val nominalStr = compactMoney(delta)
 
-    val (icon, color) = when (type) {
-        ComparisonType.INCOME -> {
-            if (delta >= 0) "+^" to KronGreen else "-v" to MaterialTheme.colorScheme.error
-        }
-        ComparisonType.EXPENSE -> {
-            if (delta >= 0) "+^" to MaterialTheme.colorScheme.error else "-v" to KronGreen
-        }
-        ComparisonType.NET -> {
-            if (delta >= 0) "+" to KronGreen else "-" to MaterialTheme.colorScheme.error
-        }
+    val color = when (type) {
+        ComparisonType.INCOME -> if (delta >= 0) KronGreen else MaterialTheme.colorScheme.error
+        ComparisonType.EXPENSE -> if (delta >= 0) MaterialTheme.colorScheme.error else KronGreen
+        ComparisonType.NET -> if (delta >= 0) KronGreen else MaterialTheme.colorScheme.error
     }
 
-    Text("$icon $nominalStr ($percentStr)", style = MaterialTheme.typography.bodySmall, color = color)
+    Text("$nominalStr ($percentStr)", style = MaterialTheme.typography.bodySmall, color = color)
 }
 
 @Composable
@@ -343,9 +337,10 @@ fun ReportsScreen(
         }
 
         if (showTable) {
-            items(buckets, key = { it.key }) { bucket ->
-                val index = buckets.indexOf(bucket)
-                val prevBucket = if (index > 0) buckets[index - 1] else null
+            val reversedBuckets = buckets.reversed()
+            items(reversedBuckets, key = { it.key }) { bucket ->
+                val originalIndex = buckets.indexOf(bucket)
+                val prevBucket = if (originalIndex > 0) buckets[originalIndex - 1] else null
                 HudCard {
                     Text(bucket.label, style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(8.dp))

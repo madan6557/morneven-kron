@@ -1,10 +1,14 @@
 # KRON Changelog
 
-## 1.2.0 - 2026-07-20
+## 1.2.1 - 2026-07-20
 
-- F1: Indikator perubahan (+^/-v) di ringkasan laporan dan mode Tabel. Bandingkan periode sebelumnya dengan durasi sama. Nominal compact + persentase. Edge cases: "Baru" (hijau) untuk kategori baru, sembunyi jika sama, mask jika valuesHidden.
-- F4: Kategori pengeluaran tak terduga hanya menampilkan 7 kategori seed EXPENSE (Belanja, Makanan, Transportasi, Tagihan, Kesehatan, Hiburan, Lainnya) tanpa campuran kategori portfolio. Opsi "Buat kategori custom..." menyimpan nama di catatan transaksi.
-- F6: Tata letak ulang BudgetDetailDialog: badge di baris terpisah, nama kategori full width, Rencana/Terpakai/Sisa dalam format label-value, divider sebelum Sisa, compactIdr untuk nominal besar.
+- F1: Indikator perubahan (nominal + persentase) di ringkasan laporan dan mode Tabel. Bandingkan periode sebelumnya dengan durasi sama. Warna hijau/merah sesuai arah. Edge cases: "Baru" untuk kategori baru, sembunyi jika sama.
+- F1: Mode Tabel urutan baru ke lama (terbalik dari sebelumnya).
+- F4: Kategori pengeluaran tak terduga hanya menampilkan 7 kategori seed EXPENSE tanpa campuran portfolio. Opsi "Buat kategori custom..." di catatan transaksi.
+- F4: Pengeluaran tak terduga kini bisa memilih kanal Cash atau eBudget.
+- F6: Tata letak ulang BudgetDetailDialog: badge baris terpisah, nama kategori full width, Rencana/Terpakai/Sisa label-value, compactIdr.
+- Form dialog: tambah `imePadding()` agar kolom input tidak tertutup keyboard.
+- Fix: Nama file APK release otomatis mengikuti versi.
 
 ## 1.1.5 - 2026-07-19
 
