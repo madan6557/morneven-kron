@@ -22,6 +22,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -53,7 +54,9 @@ import com.morneven.kron.ui.KronUiState
 import com.morneven.kron.ui.components.ChannelBadge
 import com.morneven.kron.ui.components.HudCard
 import com.morneven.kron.ui.components.SectionHeader
+import com.morneven.kron.ui.components.compactIdr
 import com.morneven.kron.ui.components.displayMoney
+import com.morneven.kron.ui.components.formatIdr
 import com.morneven.kron.ui.components.signedColor
 import com.morneven.kron.ui.theme.KronGold
 import com.morneven.kron.ui.theme.KronGreen
@@ -71,6 +74,52 @@ import kotlin.math.roundToInt
  * Empty metadata keeps cash flow honest and limits the channel filter to assets and budgets.
  */
 typealias ReportEventChannels = Map<String, Set<String>>
+
+private enum class ComparisonType { INCOME, EXPENSE, NET }
+
+private fun compactChange(value: Long): String {
+    return if (abs(value) >= 1_000_000) compactIdr(value) else formatIdr(value)
+}
+
+@Composable
+private fun ChangeIndicator(
+    current: Long,
+    previous: Long?,
+    type: ComparisonType,
+    visible: Boolean,
+    compactMoney: (Long) -> String,
+) {
+    if (previous == null || (previous == 0L && current == 0L) || (previous != 0L && current == previous)) return
+
+    if (!visible) {
+        Text("Rp ***", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        return
+    }
+
+    if (previous == 0L) {
+        Text("Baru", style = MaterialTheme.typography.bodySmall, color = KronGreen)
+        return
+    }
+
+    val delta = current - previous
+    val percentage = (delta.toFloat() / abs(previous).toFloat()) * 100f
+    val percentStr = String.format(Locale.ROOT, "%+.1f%%", percentage)
+    val nominalStr = compactMoney(delta)
+
+    val (icon, color) = when (type) {
+        ComparisonType.INCOME -> {
+            if (delta >= 0) "+^" to KronGreen else "-v" to MaterialTheme.colorScheme.error
+        }
+        ComparisonType.EXPENSE -> {
+            if (delta >= 0) "+^" to MaterialTheme.colorScheme.error else "-v" to KronGreen
+        }
+        ComparisonType.NET -> {
+            if (delta >= 0) "+" to KronGreen else "-" to MaterialTheme.colorScheme.error
+        }
+    }
+
+    Text("$icon $nominalStr ($percentStr)", style = MaterialTheme.typography.bodySmall, color = color)
+}
 
 @Composable
 fun ReportsScreen(
@@ -120,6 +169,23 @@ fun ReportsScreen(
     val income = cashFlowEvents.sumOf { event -> event.cashImpact.coerceAtLeast(0L) }
     val expense = cashFlowEvents.sumOf { event -> (-event.cashImpact).coerceAtLeast(0L) }
     val net = income - expense
+    val prevDays = if (range == ReportRange.CUSTOM) {
+        (end.toEpochDay() - start.toEpochDay() + 1L).toInt()
+    } else {
+        range.days
+    }
+    val prevStart = start.minusDays(prevDays.toLong())
+    val prevEnd = start.minusDays(1)
+    val prevCashFlowEvents = remember(state.activities, prevStart, prevEnd, channel, eventChannels) {
+        state.activities.filter { event ->
+            val date = LocalDate.ofEpochDay(event.effectiveEpochDay)
+            val channelMatches = channel == ReportChannel.ALL || !channelAware || eventChannels[event.id]?.contains(channel.value) == true
+            !date.isBefore(prevStart) && !date.isAfter(prevEnd) && event.reversedByEventId == null && event.isCashFlowEvent() && channelMatches
+        }
+    }
+    val prevIncome = prevCashFlowEvents.sumOf { it.cashImpact.coerceAtLeast(0L) }
+    val prevExpense = prevCashFlowEvents.sumOf { (-it.cashImpact).coerceAtLeast(0L) }
+    val prevNet = prevIncome - prevExpense
     val selectedChannel = channel.value
     val filteredAllocations = remember(state.allocations, selectedChannel) {
         state.allocations.filter { selectedChannel == null || it.fundingChannel == selectedChannel }
@@ -238,9 +304,15 @@ fun ReportsScreen(
                 SectionHeader(
                     if (mode == ReportMode.CUMULATIVE) "Saldo $rangeLabel" else "Cash flow $rangeLabel"
                 )
-                ReportMetric("Masuk", money(income), KronGreen)
-                ReportMetric("Keluar", money(expense), MaterialTheme.colorScheme.error)
-                ReportMetric("Net", money(net), KronGold)
+                ReportMetric("Masuk", money(income), KronGreen) {
+                    ChangeIndicator(income, prevIncome, ComparisonType.INCOME, visible, ::compactChange)
+                }
+                ReportMetric("Keluar", money(expense), MaterialTheme.colorScheme.error) {
+                    ChangeIndicator(expense, prevExpense, ComparisonType.EXPENSE, visible, ::compactChange)
+                }
+                ReportMetric("Net", money(net), KronGold) {
+                    ChangeIndicator(net, prevNet, ComparisonType.NET, visible, ::compactChange)
+                }
                 Spacer(Modifier.height(14.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = !showTable, onClick = { showTable = false }, label = { Text("Grafik") })
@@ -272,10 +344,12 @@ fun ReportsScreen(
 
         if (showTable) {
             items(buckets, key = { it.key }) { bucket ->
+                val index = buckets.indexOf(bucket)
+                val prevBucket = if (index > 0) buckets[index - 1] else null
                 HudCard {
                     Text(bucket.label, style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(8.dp))
-                    BucketDetails(bucket, money)
+                    BucketDetails(bucket, money, prevBucket, visible)
                 }
             }
         }
@@ -483,7 +557,7 @@ private fun List<CashFlowBucket>.toCumulative(): List<CashFlowBucket> {
 }
 
 @Composable
-private fun ReportMetric(label: String, value: String, color: Color) {
+private fun ReportMetric(label: String, value: String, color: Color, indicator: (@Composable () -> Unit)? = null) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f),
         shape = MaterialTheme.shapes.small,
@@ -492,16 +566,32 @@ private fun ReportMetric(label: String, value: String, color: Color) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(value, style = MaterialTheme.typography.titleLarge, color = color, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (indicator != null) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                )
+                indicator()
+            }
         }
     }
 }
 
 @Composable
-private fun BucketDetails(bucket: CashFlowBucket, money: (Long) -> String) {
+private fun BucketDetails(bucket: CashFlowBucket, money: (Long) -> String, previousBucket: CashFlowBucket? = null, visible: Boolean = true) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         ReportValueRow("Masuk", money(bucket.income), KronGreen)
+        if (previousBucket != null) {
+            ChangeIndicator(bucket.income, previousBucket.income, ComparisonType.INCOME, visible, ::compactChange)
+        }
         ReportValueRow("Keluar", money(bucket.expense), MaterialTheme.colorScheme.error)
+        if (previousBucket != null) {
+            ChangeIndicator(bucket.expense, previousBucket.expense, ComparisonType.EXPENSE, visible, ::compactChange)
+        }
         ReportValueRow("Net", money(bucket.net), KronGold)
+        if (previousBucket != null) {
+            ChangeIndicator(bucket.net, previousBucket.net, ComparisonType.NET, visible, ::compactChange)
+        }
     }
 }
 

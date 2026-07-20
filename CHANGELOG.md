@@ -1,5 +1,11 @@
 # KRON Changelog
 
+## 1.2.0 - 2026-07-20
+
+- F1: Indikator perubahan (+^/-v) di ringkasan laporan dan mode Tabel. Bandingkan periode sebelumnya dengan durasi sama. Nominal compact + persentase. Edge cases: "Baru" (hijau) untuk kategori baru, sembunyi jika sama, mask jika valuesHidden.
+- F4: Kategori pengeluaran tak terduga hanya menampilkan 7 kategori seed EXPENSE (Belanja, Makanan, Transportasi, Tagihan, Kesehatan, Hiburan, Lainnya) tanpa campuran kategori portfolio. Opsi "Buat kategori custom..." menyimpan nama di catatan transaksi.
+- F6: Tata letak ulang BudgetDetailDialog: badge di baris terpisah, nama kategori full width, Rencana/Terpakai/Sisa dalam format label-value, divider sebelum Sisa, compactIdr untuk nominal besar.
+
 ## 1.1.5 - 2026-07-19
 
 - Hapus FLAG_SECURE saat valuesVisible (screenshot bebas di layar laporan).

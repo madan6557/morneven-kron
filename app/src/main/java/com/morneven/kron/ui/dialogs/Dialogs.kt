@@ -44,6 +44,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -55,15 +56,19 @@ import com.morneven.kron.data.CategoryEntity
 import com.morneven.kron.data.ExpenseSplitInput
 import com.morneven.kron.data.FundingChannel
 import com.morneven.kron.data.TransactionDirection
+import com.morneven.kron.ui.theme.KronGold
 import com.morneven.kron.ui.KronUiState
 import com.morneven.kron.ui.components.ChannelBadge
 import com.morneven.kron.ui.components.HudCard
+import com.morneven.kron.ui.components.compactIdr
 import com.morneven.kron.ui.components.displayMoney
+import com.morneven.kron.ui.components.formatIdr
 import com.morneven.kron.ui.components.MoneyField
 import com.morneven.kron.ui.components.parseMoneyInput
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
+import kotlin.math.abs
 
 @Composable
 fun IncomeDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, String, Long, Long?, Long?, String, String, String?, LocalDate, LocalDate?, Int, Boolean) -> Unit) {
@@ -106,7 +111,73 @@ private data class SplitDraft(
     var categoryId: Long?,
     var allocationId: Long?,
     var amount: String,
+    var customCategoryName: String = "",
 )
+
+private val seedExpenseNames = setOf("Belanja", "Makanan", "Transportasi", "Tagihan", "Kesehatan", "Hiburan", "Lainnya")
+
+@Composable
+private fun UnexpectedCategorySelector(
+    split: SplitDraft,
+    categories: List<CategoryEntity>,
+    onUpdate: (SplitDraft) -> Unit,
+) {
+    val seedCategories = remember(categories) { categories.filter { it.name in seedExpenseNames } }
+    var showCustomField by remember { mutableStateOf(false) }
+    var customName by remember { mutableStateOf("") }
+
+    if (showCustomField) {
+        OutlinedTextField(
+            value = customName,
+            onValueChange = { customName = it },
+            label = { Text("Nama kategori custom") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = {
+                val trimmed = customName.trim()
+                if (trimmed.isNotBlank()) {
+                    onUpdate(split.copy(customCategoryName = trimmed, categoryId = null))
+                    showCustomField = false
+                    customName = ""
+                }
+            }) { Text("Gunakan") }
+            TextButton(onClick = { showCustomField = false; customName = "" }) { Text("Batal") }
+        }
+    } else {
+        var expanded by remember { mutableStateOf(false) }
+        Column {
+            OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+                val label = if (split.customCategoryName.isNotBlank()) {
+                    split.customCategoryName
+                } else {
+                    seedCategories.firstOrNull { it.id == split.categoryId }?.name ?: "Pilih kategori"
+                }
+                Text(label, modifier = Modifier.weight(1f))
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                seedCategories.forEach { category ->
+                    DropdownMenuItem(
+                        text = { Text(category.name) },
+                        onClick = {
+                            onUpdate(split.copy(categoryId = category.id, customCategoryName = ""))
+                            expanded = false
+                        },
+                    )
+                }
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("Buat kategori custom...") },
+                    onClick = {
+                        showCustomField = true
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
 private data class BudgetCategoryDraft(var name: String, var amount: String, var cashPercentage: Int = 50)
 
 @Composable
@@ -131,7 +202,10 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, St
     val validBudgetSplits = unexpected || splits.all { it.allocationId in activeAllocationIds && it.categoryId != null }
     val enoughBalance = splitTotal <= accountBalance
     FormDialog("Catat pengeluaran", onDismiss, confirmEnabled = account != null && splitTotal > 0 && enoughBalance && splits.all { money(it.amount) > 0 } && validBudgetSplits && intervalCount > 0 && (endDate == null || !endDate!!.isBefore(startDate)), onConfirm = {
-        onSubmit(requireNotNull(account).id, channel, splitTotal, splits.map { ExpenseSplitInput(it.categoryId, if (unexpected) null else it.allocationId, money(it.amount)) }, title, note, unexpected, recurring, startDate, endDate, intervalCount, recordNow)
+        val customNote = splits.fold(note) { acc, split ->
+            if (split.customCategoryName.isNotBlank()) "$acc [Kategori: ${split.customCategoryName}]" else acc
+        }
+        onSubmit(requireNotNull(account).id, channel, splitTotal, splits.map { ExpenseSplitInput(it.categoryId, if (unexpected) null else it.allocationId, money(it.amount)) }, title, customNote, unexpected, recurring, startDate, endDate, intervalCount, recordNow)
     }) {
         Text("Akun aktif: ${account?.name ?: "Belum ada"}", style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -199,9 +273,11 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, St
                         splits[index] = split.copy(allocationId = allocationId, categoryId = allocation?.categoryId)
                     }
                 } else {
-                    ChoiceField("Kategori", split.categoryId, categories, { it.id }, { it.name }) { value ->
-                        splits[index] = split.copy(categoryId = value)
-                    }
+                    UnexpectedCategorySelector(
+                        split = split,
+                        categories = categories,
+                        onUpdate = { updated -> splits[index] = updated },
+                    )
                 }
                 MoneyField(split.amount, { value -> splits[index] = split.copy(amount = value) }, "Nominal bagian")
             }
@@ -337,16 +413,37 @@ fun BudgetDetailDialog(state: KronUiState, periodId: Long, readOnly: Boolean = f
                     Text("${LocalDate.ofEpochDay(row.startEpochDay)} sampai ${LocalDate.ofEpochDay(row.endEpochDay)} · ${row.periodStatus.replace('_', ' ')}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (readOnly) Text("Mode read-only. Pulihkan portfolio untuk melakukan perubahan.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
                 }
+                val budgetMoney: (Long) -> String = { value ->
+                    if (!state.valuesVisible) "Rp ***"
+                    else if (abs(value) >= 1_000_000) compactIdr(value)
+                    else formatIdr(value)
+                }
                 rows.forEach { row ->
                     HudCard {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
-                            Column(Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) { ChannelBadge(row.fundingChannel); Text(row.categoryName) }
-                                Text("Rencana ${displayMoney(row.plannedAmount, state.valuesVisible)}", style = MaterialTheme.typography.bodySmall)
-                                Text("Booking ${displayMoney(row.bookedAmount, state.valuesVisible)} · Terpakai ${displayMoney(row.spentAmount, state.valuesVisible)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("Sisa ${displayMoney(row.availableAmount, state.valuesVisible)}", style = MaterialTheme.typography.titleMedium, color = if (row.availableAmount < 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary)
+                        Column(Modifier.fillMaxWidth()) {
+                            ChannelBadge(row.fundingChannel)
+                            Text(row.categoryName, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Spacer(Modifier.height(8.dp))
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Rencana", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(budgetMoney(row.plannedAmount), style = MaterialTheme.typography.bodyMedium)
                             }
-                            if (!readOnly) TextButton(onClick = { correctionId = row.id; correctedAmount = row.plannedAmount.toString() }) { Text("Koreksi") }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Terpakai", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(budgetMoney(row.spentAmount), style = MaterialTheme.typography.bodyMedium)
+                            }
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f))
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("Sisa", style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    budgetMoney(row.availableAmount),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = if (row.availableAmount < 0) MaterialTheme.colorScheme.error
+                                    else if (row.availableAmount > 0) KronGold
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                if (!readOnly) TextButton(onClick = { correctionId = row.id; correctedAmount = row.plannedAmount.toString() }) { Text("Koreksi") }
+                            }
                         }
                         if (row.id == correctionId) {
                             Spacer(Modifier.height(10.dp))
