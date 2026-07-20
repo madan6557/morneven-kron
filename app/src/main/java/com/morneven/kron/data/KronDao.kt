@@ -105,7 +105,7 @@ interface KronDao {
     @Query("""
         SELECT
             COALESCE(SUM(CASE WHEN e.type IN ('INCOME','OPENING_BALANCE','AUTOMATION') AND c.amount > 0 THEN c.amount ELSE 0 END), 0) AS income,
-            -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND c.amount < 0 THEN c.amount ELSE 0 END), 0) AS expense
+            -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','UNEXPECTED_EXPENSE','AUTOMATION') AND c.amount < 0 THEN c.amount ELSE 0 END), 0) AS expense
         FROM activity_events e
         JOIN cash_journal_lines c ON c.eventId = e.id
         WHERE e.effectiveEpochDay BETWEEN :startDay AND :endDay AND e.reversedByEventId IS NULL

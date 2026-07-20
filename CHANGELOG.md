@@ -1,5 +1,9 @@
 # KRON Changelog
 
+## 1.2.2 - 2026-07-20
+
+- Fix: Pengeluaran tak terduga tidak terhitung di HomeScreen karena query `observeCashflow()` tidak menyertakan tipe `UNEXPECTED_EXPENSE`.
+
 ## 1.2.1 - 2026-07-20
 
 - F1: Indikator perubahan (nominal + persentase) di ringkasan laporan dan mode Tabel. Bandingkan periode sebelumnya dengan durasi sama. Warna hijau/merah sesuai arah. Edge cases: "Baru" untuk kategori baru, sembunyi jika sama.
