@@ -1,5 +1,9 @@
 # KRON Changelog
 
+## 1.3.15 - 2026-07-21
+
+- Fix: Tombol foto bukti hanya muncul untuk transaksi INCOME dan EXPENSE di dialog audit. Transfer, portfolio booking, resolve, dan jenis lainnya tidak perlu lampiran foto.
+
 ## 1.3.14 - 2026-07-21
 
 - Fix: Ganti intent-based camera dengan CameraX (preview + capture). Kamera tidak lagi force close.

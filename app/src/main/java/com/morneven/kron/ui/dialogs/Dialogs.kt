@@ -659,17 +659,19 @@ fun AuditDialog(
                 }
             }
         }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { onCameraCapture(event.id) }, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Outlined.CameraAlt, contentDescription = null)
-                Text(" Ambil foto")
+        if (event.type in setOf("INCOME", "EXPENSE", "UNEXPECTED_EXPENSE")) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { onCameraCapture(event.id) }, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Outlined.CameraAlt, contentDescription = null)
+                    Text(" Ambil foto")
+                }
+                OutlinedButton(onClick = { onGalleryPick(event.id) }, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Outlined.PhotoLibrary, contentDescription = null)
+                    Text(" Pilih galeri")
+                }
             }
-            OutlinedButton(onClick = { onGalleryPick(event.id) }, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Outlined.PhotoLibrary, contentDescription = null)
-                Text(" Pilih galeri")
-            }
+            Text("Foto disalin ke penyimpanan privat dan dienkripsi.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Text("Foto disalin ke penyimpanan privat dan dienkripsi.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (lifecycleEvent) Text("Event lifecycle bersifat read-only. Gunakan tab Arsip untuk memulihkan atau mengarsipkan kembali.", color = MaterialTheme.colorScheme.tertiary)
         else if (event.reversedByEventId != null) Text("Event sudah direvert", color = MaterialTheme.colorScheme.error)
         else OutlinedTextField(reason, { reason = it }, label = { Text("Alasan revert") }, modifier = Modifier.fillMaxWidth())
