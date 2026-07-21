@@ -2,6 +2,7 @@ package com.morneven.kron.ui.dialogs
 
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -48,6 +50,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -61,6 +65,8 @@ import com.morneven.kron.data.ExpenseSplitInput
 import com.morneven.kron.data.FundingChannel
 import com.morneven.kron.data.TransactionDirection
 import com.morneven.kron.ui.theme.KronGold
+import com.morneven.kron.ui.theme.KronGreen
+import com.morneven.kron.ui.theme.KronRed
 import com.morneven.kron.ui.KronUiState
 import com.morneven.kron.ui.components.ChannelBadge
 import com.morneven.kron.ui.components.HudCard
@@ -521,9 +527,28 @@ fun BudgetHistoryDialog(
         else if (abs(value) >= 1_000_000) compactIdr(value)
         else formatIdr(value)
     }
+    val monthNames = listOf("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
+    val chartData = remember(periods, periodAllocations) {
+        periods.sortedBy { it.startEpochDay }.map { period ->
+            val d = LocalDate.ofEpochDay(period.startEpochDay)
+            val rows = periodAllocations.filter { it.periodId == period.id }
+            PeriodChartData(
+                label = "${monthNames[d.monthValue - 1]} ${d.year % 100}",
+                planned = rows.sumOf { it.plannedAmount },
+                spent = rows.sumOf { it.spentAmount },
+            )
+        }
+    }
     FormDialog("Riwayat ${portfolio.name}", onDismiss, "Tutup", true, onDismiss) {
         Text("Semua periode ${portfolio.name}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(4.dp))
+        if (chartData.isNotEmpty() && state.valuesVisible) {
+            Spacer(Modifier.height(8.dp))
+            BudgetBarChart(
+                data = chartData,
+                modifier = Modifier.fillMaxWidth().height(180.dp),
+            )
+            Spacer(Modifier.height(4.dp))
+        }
         periods.forEach { period ->
             val rows = periodAllocations.filter { it.periodId == period.id }
             val totalPlanned = rows.sumOf { it.plannedAmount }
@@ -562,6 +587,54 @@ fun BudgetHistoryDialog(
                 }
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f))
                 TextButton(onClick = { onDetail(period.id) }) { Text("Detail periode ini") }
+            }
+        }
+    }
+}
+
+private data class PeriodChartData(val label: String, val planned: Long, val spent: Long)
+
+@Composable
+private fun BudgetBarChart(data: List<PeriodChartData>, modifier: Modifier) {
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val grid = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)
+    val maxValue = data.maxOf { maxOf(it.planned, it.spent) }.coerceAtLeast(1)
+    val barCount = data.size
+    Column(modifier) {
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            Canvas(Modifier.fillMaxSize()) {
+                val chartH = size.height * 0.88f
+                val groupW = size.width / barCount
+                val barW = (groupW * 0.35f).coerceAtMost(32f)
+                val gap = (groupW - barW * 2) / 3f
+                repeat(4) { i ->
+                    val y = size.height * (0.06f + 0.88f * i / 3f)
+                    drawLine(grid, Offset(0f, y), Offset(size.width, y), 1f)
+                }
+                data.forEachIndexed { idx, item ->
+                    val cx = idx * groupW
+                    val plannedH = (item.planned.toFloat() / maxValue) * chartH
+                    val spentH = (item.spent.toFloat() / maxValue) * chartH
+                    val spentColor = if (item.spent <= item.planned) KronGreen else KronRed
+                    drawRect(
+                        color = primaryColor.copy(alpha = 0.25f),
+                        topLeft = Offset(cx + gap, size.height * 0.06f + chartH - plannedH),
+                        size = Size(barW, plannedH),
+                    )
+                    drawRect(
+                        color = spentColor,
+                        topLeft = Offset(cx + gap * 2 + barW, size.height * 0.06f + chartH - spentH),
+                        size = Size(barW, spentH),
+                    )
+                }
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(top = 2.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            data.forEach { item ->
+                Text(item.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

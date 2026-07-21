@@ -1,5 +1,10 @@
 # KRON Changelog
 
+## 1.3.18 - 2026-07-21
+
+- UI: BudgetHistoryDialog -- tambah grafik batang planned vs spent per periode.
+- Grafik: bar terang = rencana, bar warna = terpakai (hijau jika sesuai, merah jika overspent).
+
 ## 1.3.17 - 2026-07-21
 
 - Fitur: Riwayat budget per portfolio -- semua periode tercatat dengan planned, spent, remaining.
