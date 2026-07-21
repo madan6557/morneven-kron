@@ -87,6 +87,7 @@ data class PortfolioEntity(
     val isArchived: Boolean = false,
     val archivedAt: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),
+    val accountId: Long = 0,
 )
 
 @Entity(
@@ -175,6 +176,7 @@ data class ActivityEventEntity(
     val relatedEventId: String? = null,
     val reversedByEventId: String? = null,
     val targetAllocationId: Long? = null,
+    val accountId: Long = 0,
 )
 
 @Entity(
@@ -228,6 +230,7 @@ data class BudgetJournalLineEntity(
     val bucket: String? = null,
     val fundingChannel: String,
     val amount: Long,
+    val accountId: Long = 0,
 )
 
 @Entity(
@@ -366,6 +369,9 @@ data class ReceiptEntity(
     val encryptionNonce: String? = null,
     val encryptionVersion: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
+    val capturedAt: Long? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
 )
 
 @Entity(tableName = "sync_state")
@@ -429,6 +435,7 @@ data class ActivityRow(
     val createdAt: Long,
     val relatedEventId: String?,
     val reversedByEventId: String?,
+    val accountId: Long,
     val cashImpact: Long,
     val vaultImpact: Long,
     val budgetImpact: Long,

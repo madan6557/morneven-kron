@@ -1,5 +1,47 @@
 # KRON Changelog
 
+## 1.3.14 - 2026-07-21
+
+- Fix: Ganti intent-based camera dengan CameraX (preview + capture). Kamera tidak lagi force close.
+- Breaking change: Izin CAMERA diperlukan untuk mengambil foto.
+
+## 1.3.13 - 2026-07-21
+
+- Fix: Force close kamera -- ganti ActivityResultContracts.TakePicture dengan StartActivityForResult + MediaStore.ACTION_IMAGE_CAPTURE. Lebih kompatibel antar perangkat.
+
+## 1.3.12 - 2026-07-21
+
+- F3: Tombol kamera (TakePicture) dan galeri (PickVisualMedia) di dialog input Pengeluaran dan Pemasukan.
+- F3: Foto langsung dikompresi (resize 1920px + JPEG80 + EXIF) dan dienkripsi setelah transaksi tercatat.
+- Fix: Force close kamera -- pindahkan ActivityResultLauncher ke KronApp level (konflik dua launcher).
+- Fix: Ganti ActivityResultContracts.TakePicture dengan StartActivityForResult + MediaStore.ACTION_IMAGE_CAPTURE.
+- Fix: FileProvider path -- simpan file kamera di subdirektori receipts/ sesuai file_paths.xml.
+
+## 1.3.11 - 2026-07-21
+
+## 1.3.10 - 2026-07-21
+
+- Fix: Unexpected expense now reduces vault (uses VAULT bucket instead of UNEXPECTED).
+- Fix: Flow chain resilience - add retry(Long.MAX_VALUE) on uiState combine to prevent silent crash on account switch.
+- Fix: Migration 10->11 resets accountId=0 for migrated data -- existing data from v1.1.5 is visible in all accounts.
+- Fix: DAO queries use accountId IN (0, :accountId) and repository filters include `accountId == 0L` untuk mencegah data hilang saat upgrade dari versi lama.
+
+## 1.3.7 - 2026-07-21
+
+- F2: Akun terpisah penuh untuk portfolio, aktivitas, vault, unallocated, rollover, dan report.
+- F3: Kamera ambil foto bukti via TakePicture (delegasi, tanpa izin CAMERA).
+- F3: Kompresi resize 1920px + JPEG80 + EXIF (DateTimeOriginal, GPS) via ImageCompressor.
+- F3: Gallery via PickVisualMedia, kamera via TakePicture, dua tombol di AuditDialog.
+- F7: accountId ditambahkan ke ActivityEventEntity, PortfolioEntity, BudgetJournalLineEntity.
+- Migration 6->7 (ALTER receipts: capturedAt, latitude, longitude).
+- Migration 7->8 (ALTER 3 tabel: accountId INTEGER NOT NULL DEFAULT 0).
+- Migration 8->9 (Backfill accountId dari cash_journal_lines dan portfolio chain).
+- Migration 9->10 (Backfill budget_journal_lines tersisa dari activity_events).
+- Isolasi data: semua DAO read query difilter oleh akun aktif via flatMapLatest.
+- Fix: totalCashAssets/totalEBudgetAssets di KronUiState pakai activeAccountBalance.
+- Fix: rules (jadwal transaksi) difilter per akun (sebelumnya bocor antar akun).
+- Drive sync dinonaktifkan.
+
 ## 1.2.2 - 2026-07-20
 
 - Fix: Pengeluaran tak terduga tidak terhitung di HomeScreen karena query `observeCashflow()` tidak menyertakan tipe `UNEXPECTED_EXPENSE`.

@@ -78,6 +78,10 @@ class ReceiptManager @Inject constructor(
         }
     }
 
+    suspend fun updateMetadata(receiptId: Long, capturedAt: Long?, latitude: Double?, longitude: Double?) {
+        database.kronDao().updateReceiptMetadata(receiptId, capturedAt, latitude, longitude)
+    }
+
     companion object {
         private const val MAX_DISPLAY_NAME = 160
         private const val MAX_MIME_TYPE = 120

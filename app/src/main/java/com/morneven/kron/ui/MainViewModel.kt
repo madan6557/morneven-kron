@@ -2,7 +2,9 @@ package com.morneven.kron.ui
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
+import android.util.Log
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.retry
 import androidx.lifecycle.SavedStateHandle
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -28,11 +30,17 @@ import com.morneven.kron.data.SyncStateEntity
 import com.morneven.kron.data.TransactionDirection
 import com.morneven.kron.preferences.PrivacyPreferences
 import com.morneven.kron.report.CsvExporter
+import com.morneven.kron.security.ImageCompressor
 import com.morneven.kron.security.ReceiptManager
 import com.morneven.kron.sync.GoogleAccountIdentity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
+import java.io.FileInputStream
+import java.text.SimpleDateFormat
 import java.time.LocalDate
+import java.util.Date
+import java.util.Locale
 import java.time.YearMonth
 import java.util.UUID
 import javax.inject.Inject
@@ -77,9 +85,9 @@ data class KronUiState(
 ) {
     val activeAccount: AccountEntity? get() = accounts.firstOrNull { it.isActive }
     val activeAccountBalance: AccountBalanceRow? get() = accountBalances.firstOrNull { it.isActive }
-    val totalAssets: Long get() = accountBalances.sumOf { it.totalBalance }
-    val totalCashAssets: Long get() = accountBalances.sumOf { it.cashBalance }
-    val totalEBudgetAssets: Long get() = accountBalances.sumOf { it.eBudgetBalance }
+    val totalAssets: Long get() = activeAccountBalance?.totalBalance ?: 0
+    val totalCashAssets: Long get() = activeAccountBalance?.cashBalance ?: 0
+    val totalEBudgetAssets: Long get() = activeAccountBalance?.eBudgetBalance ?: 0
     val totalVault: Long get() = vaultCash + vaultEBudget
     val bookedCash: Long get() = allocations.filter { !it.portfolioArchived && it.fundingChannel == FundingChannel.CASH }.sumOf { it.bookedAmount }
     val bookedEBudget: Long get() = allocations.filter { !it.portfolioArchived && it.fundingChannel == FundingChannel.EBUDGET }.sumOf { it.bookedAmount }
@@ -129,6 +137,7 @@ class MainViewModel @Inject constructor(
     private val budgetNotifier: BudgetNotifier,
     private val csvExporter: CsvExporter,
     private val receiptManager: ReceiptManager,
+    private val imageCompressor: ImageCompressor,
 ) : ViewModel() {
     private val message = MutableStateFlow<String?>(null)
     private val sessionVisibility = MutableStateFlow<Boolean?>(null)
@@ -244,6 +253,9 @@ class MainViewModel @Inject constructor(
             authLockedUntil = prefs.authLockedUntil,
             budgetAlertsEnabled = prefs.budgetAlertsEnabled,
         )
+    }.retry(Long.MAX_VALUE) { e ->
+        Log.e("KRON_UI", "Flow chain error, restarting", e)
+        true
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), KronUiState())
 
     init {
@@ -323,7 +335,7 @@ class MainViewModel @Inject constructor(
         csvExporter.export(uri, current.activities, current.allocations)
     }
 
-    fun attachReceipt(eventId: String, uri: Uri) = runAction("Foto bukti terenkripsi dan disimpan") {
+    private suspend fun saveReceipt(eventId: String, uri: Uri) {
         val resolver = context.contentResolver
         val mimeType = resolver.getType(uri).orEmpty()
         require(mimeType.startsWith("image/")) { "Pilih file gambar yang valid" }
@@ -334,6 +346,29 @@ class MainViewModel @Inject constructor(
         resolver.openInputStream(uri)?.use { input ->
             receiptManager.importReceipt(eventId, displayName, mimeType, input)
         } ?: error("Foto bukti tidak dapat dibuka")
+    }
+
+    private suspend fun saveCameraReceipt(eventId: String, file: java.io.File) {
+        val noBackup = context.noBackupFilesDir
+        noBackup.mkdirs()
+        val compressed = java.io.File(noBackup, "comp_${file.name}")
+        val metadata = imageCompressor.extractMetadata(file)
+        val result = imageCompressor.compress(file, compressed)
+        if (result.error != null) error(result.error)
+        val displayName = "Foto kamera ${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.forLanguageTag("id-ID")).format(Date())}"
+        java.io.FileInputStream(compressed).use { input ->
+            val entity = receiptManager.importReceipt(eventId, displayName, "image/jpeg", input)
+            receiptManager.updateMetadata(entity.id, metadata.capturedAt, metadata.latitude, metadata.longitude)
+        }
+        compressed.delete()
+    }
+
+    fun attachReceipt(eventId: String, uri: Uri) = runAction("Foto bukti terenkripsi dan disimpan") {
+        saveReceipt(eventId, uri)
+    }
+
+    fun attachCameraReceipt(eventId: String, file: java.io.File) = runAction("Foto bukti terenkripsi dan disimpan") {
+        saveCameraReceipt(eventId, file)
     }
 
     fun addAccount(name: String, openingCash: Long, openingEBudget: Long) = runAction("Akun berhasil ditambahkan") {
@@ -367,11 +402,17 @@ class MainViewModel @Inject constructor(
         endDate: LocalDate? = null,
         intervalCount: Int = 1,
         recordNow: Boolean = true,
+        receiptUri: Uri? = null,
+        cameraFile: java.io.File? = null,
     ) = runAction("Pemasukan tercatat") {
         require(intervalCount > 0) { "Interval harus minimal 1" }
         require(endDate == null || !endDate.isBefore(startDate)) { "Tanggal akhir tidak boleh sebelum tanggal mulai" }
-        if (recurring == null || recordNow) {
+        val eventId = if (recurring == null || recordNow) {
             repository.addIncome(accountId, fundingChannel, amount, categoryId, title, note, targetAllocationId = targetAllocationId)
+        } else null
+        if (eventId != null) {
+            if (receiptUri != null) saveReceipt(eventId, receiptUri)
+            if (cameraFile != null) saveCameraReceipt(eventId, cameraFile)
         }
         if (recurring != null) {
             val today = LocalDate.now()
@@ -413,10 +454,18 @@ class MainViewModel @Inject constructor(
         endDate: LocalDate? = null,
         intervalCount: Int = 1,
         recordNow: Boolean = true,
+        receiptUri: Uri? = null,
+        cameraFile: java.io.File? = null,
     ) = runAction("Pengeluaran tercatat") {
         require(intervalCount > 0) { "Interval harus minimal 1" }
         require(endDate == null || !endDate.isBefore(startDate)) { "Tanggal akhir tidak boleh sebelum tanggal mulai" }
-        if (recurring == null || recordNow) repository.addExpense(accountId, fundingChannel, amount, splits, title, note, unexpected)
+        val eventId = if (recurring == null || recordNow) {
+            repository.addExpense(accountId, fundingChannel, amount, splits, title, note, unexpected)
+        } else null
+        if (eventId != null) {
+            if (receiptUri != null) saveReceipt(eventId, receiptUri)
+            if (cameraFile != null) saveCameraReceipt(eventId, cameraFile)
+        }
         if (recurring != null && splits.size == 1 && !unexpected) {
             val today = LocalDate.now()
             val first = if (recordNow) {

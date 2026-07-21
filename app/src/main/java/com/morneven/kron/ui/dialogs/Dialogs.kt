@@ -1,5 +1,6 @@
 package com.morneven.kron.ui.dialogs
 
+import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,7 +17,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AddAPhoto
+import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
@@ -72,7 +75,7 @@ import java.time.ZoneOffset
 import kotlin.math.abs
 
 @Composable
-fun IncomeDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, String, Long, Long?, Long?, String, String, String?, LocalDate, LocalDate?, Int, Boolean) -> Unit) {
+fun IncomeDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, String, Long, Long?, Long?, String, String, String?, LocalDate, LocalDate?, Int, Boolean, Uri?, java.io.File?) -> Unit, receiptUri: Uri? = null, cameraFile: java.io.File? = null, onGalleryPick: () -> Unit = {}, onCameraCapture: () -> Unit = {}) {
     val account = state.activeAccount
     val categories = state.categories.filter { it.direction == TransactionDirection.INCOME }
     var channel by remember { mutableStateOf(FundingChannel.CASH) }
@@ -87,7 +90,7 @@ fun IncomeDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Str
     var intervalCount by remember { mutableIntStateOf(1) }
     var recordNow by remember { mutableStateOf(true) }
     FormDialog("Catat pemasukan", onDismiss, confirmEnabled = account != null && money(amount) > 0 && intervalCount > 0 && (endDate == null || !endDate!!.isBefore(startDate)), onConfirm = {
-        onSubmit(requireNotNull(account).id, channel, money(amount), categoryId, targetAllocationId, title, note, recurring, startDate, endDate, intervalCount, recordNow)
+        onSubmit(requireNotNull(account).id, channel, money(amount), categoryId, targetAllocationId, title, note, recurring, startDate, endDate, intervalCount, recordNow, receiptUri, cameraFile)
     }) {
         Text("Akun aktif: ${account?.name ?: "Belum ada"}", style = MaterialTheme.typography.titleMedium)
         Text("Masuk ke kanal", style = MaterialTheme.typography.labelLarge)
@@ -102,6 +105,19 @@ fun IncomeDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Str
         )
         OutlinedTextField(title, { title = it }, label = { Text("Judul") }, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(note, { note = it }, label = { Text("Catatan") }, modifier = Modifier.fillMaxWidth())
+        Text("Foto bukti", style = MaterialTheme.typography.labelLarge)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onGalleryPick, modifier = Modifier.weight(1f), enabled = receiptUri == null && cameraFile == null) {
+                Icon(androidx.compose.material.icons.Icons.Outlined.PhotoLibrary, contentDescription = null)
+                Text(" Pilih galeri")
+            }
+            OutlinedButton(onClick = onCameraCapture, modifier = Modifier.weight(1f), enabled = receiptUri == null && cameraFile == null) {
+                Icon(androidx.compose.material.icons.Icons.Outlined.CameraAlt, contentDescription = null)
+                Text(" Ambil foto")
+            }
+        }
+        if (receiptUri != null) Text("Galeri: ${receiptUri?.lastPathSegment ?: "terpilih"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+        if (cameraFile != null) Text("Kamera: ${cameraFile?.name}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
         RecurrencePicker(recurring) { recurring = it }
         if (recurring != null) ScheduleFields(startDate, { startDate = it }, endDate, { endDate = it }, intervalCount, { intervalCount = it }, recurring, recordNow, { recordNow = it })
     }
@@ -182,7 +198,7 @@ private fun UnexpectedCategorySelector(
 private data class BudgetCategoryDraft(var name: String, var amount: String, var cashPercentage: Int = 50)
 
 @Composable
-fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, String, Long, List<ExpenseSplitInput>, String, String, Boolean, String?, LocalDate, LocalDate?, Int, Boolean) -> Unit) {
+fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, String, Long, List<ExpenseSplitInput>, String, String, Boolean, String?, LocalDate, LocalDate?, Int, Boolean, Uri?, java.io.File?) -> Unit, receiptUri: Uri? = null, cameraFile: java.io.File? = null, onGalleryPick: () -> Unit = {}, onCameraCapture: () -> Unit = {}) {
     val account = state.activeAccount
     val categories = state.categories.filter { it.direction == TransactionDirection.EXPENSE }
     var channel by remember { mutableStateOf(FundingChannel.CASH) }
@@ -206,7 +222,7 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, St
         val customNote = splits.fold(note) { acc, split ->
             if (split.customCategoryName.isNotBlank()) "$acc [Kategori: ${split.customCategoryName}]" else acc
         }
-        onSubmit(requireNotNull(account).id, channel, splitTotal, splits.map { ExpenseSplitInput(it.categoryId, if (unexpected) null else it.allocationId, money(it.amount)) }, title, customNote, unexpected, recurring, startDate, endDate, intervalCount, recordNow)
+        onSubmit(requireNotNull(account).id, channel, splitTotal, splits.map { ExpenseSplitInput(it.categoryId, if (unexpected) null else it.allocationId, money(it.amount)) }, title, customNote, unexpected, recurring, startDate, endDate, intervalCount, recordNow, receiptUri, cameraFile)
     }) {
         Text("Akun aktif: ${account?.name ?: "Belum ada"}", style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -298,6 +314,19 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, St
         }
         OutlinedTextField(title, { title = it }, label = { Text("Judul") }, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(note, { note = it }, label = { Text("Catatan") }, modifier = Modifier.fillMaxWidth())
+        Text("Foto bukti", style = MaterialTheme.typography.labelLarge)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onGalleryPick, modifier = Modifier.weight(1f), enabled = receiptUri == null && cameraFile == null) {
+                Icon(androidx.compose.material.icons.Icons.Outlined.PhotoLibrary, contentDescription = null)
+                Text(" Pilih galeri")
+            }
+            OutlinedButton(onClick = onCameraCapture, modifier = Modifier.weight(1f), enabled = receiptUri == null && cameraFile == null) {
+                Icon(androidx.compose.material.icons.Icons.Outlined.CameraAlt, contentDescription = null)
+                Text(" Ambil foto")
+            }
+        }
+        if (receiptUri != null) Text("Galeri: ${receiptUri?.lastPathSegment ?: "terpilih"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+        if (cameraFile != null) Text("Kamera: ${cameraFile?.name}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
         if (splits.size == 1) {
             RecurrencePicker(recurring) { recurring = it }
             if (recurring != null) ScheduleFields(startDate, { startDate = it }, endDate, { endDate = it }, intervalCount, { intervalCount = it }, recurring, recordNow, { recordNow = it })
@@ -598,7 +627,8 @@ fun AuditDialog(
     event: ActivityRow,
     state: KronUiState,
     onDismiss: () -> Unit,
-    onAddReceipt: (String) -> Unit,
+    onGalleryPick: (String) -> Unit,
+    onCameraCapture: (String) -> Unit,
     onRevert: (String, String) -> Unit,
 ) {
     var reason by remember { mutableStateOf("") }
@@ -629,9 +659,15 @@ fun AuditDialog(
                 }
             }
         }
-        OutlinedButton(onClick = { onAddReceipt(event.id) }, modifier = Modifier.fillMaxWidth()) {
-            Icon(Icons.Outlined.AddAPhoto, contentDescription = null)
-            Text(" Tambahkan foto bukti")
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { onCameraCapture(event.id) }, modifier = Modifier.weight(1f)) {
+                Icon(Icons.Outlined.CameraAlt, contentDescription = null)
+                Text(" Ambil foto")
+            }
+            OutlinedButton(onClick = { onGalleryPick(event.id) }, modifier = Modifier.weight(1f)) {
+                Icon(Icons.Outlined.PhotoLibrary, contentDescription = null)
+                Text(" Pilih galeri")
+            }
         }
         Text("Foto disalin ke penyimpanan privat dan dienkripsi.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (lifecycleEvent) Text("Event lifecycle bersifat read-only. Gunakan tab Arsip untuk memulihkan atau mengarsipkan kembali.", color = MaterialTheme.colorScheme.tertiary)

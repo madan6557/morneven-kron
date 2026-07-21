@@ -284,6 +284,10 @@ private fun MainScaffold(
     var editAccount by remember { mutableStateOf<AccountEntity?>(null) }
     var pendingPassword by remember { mutableStateOf<CharArray?>(null) }
     var receiptTargetEventId by rememberSaveable { mutableStateOf<String?>(null) }
+    var cameraTargetEventId by rememberSaveable { mutableStateOf<String?>(null) }
+    var showCameraCapture by remember { mutableStateOf(false) }
+    var dialogReceiptUri by remember { mutableStateOf<Uri?>(null) }
+    var dialogCameraFile by remember { mutableStateOf<java.io.File?>(null) }
     val pendingDriveSubject by viewModel.pendingDriveSubjectId.collectAsState()
     val pendingDriveEmail by viewModel.pendingDriveEmail.collectAsState()
     val pendingDriveName by viewModel.pendingDriveDisplayName.collectAsState()
@@ -388,7 +392,11 @@ private fun MainScaffold(
     }
     val receiptLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         val eventId = receiptTargetEventId
-        if (uri != null && eventId != null) viewModel.attachReceipt(eventId, uri)
+        if (uri != null && eventId != null) {
+            viewModel.attachReceipt(eventId, uri)
+        } else if (uri != null) {
+            dialogReceiptUri = uri
+        }
         receiptTargetEventId = null
     }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -587,43 +595,11 @@ private fun MainScaffold(
                         criticalReason = ""
                     },
                     cloudBackupState = cloudBackupState,
-                    onConnectCloud = if (driveSyncRuntime == null) null else ({ passwordMode = "DRIVE_CONNECT" }),
-                    onSyncNow = if (driveSyncRuntime == null) null else ({
-                        scope.launch { handleSyncResult(driveSyncRuntime.syncNow()) }
-                    }),
-                    onDisconnectCloud = if (driveSyncRuntime == null) null else ({
-                        criticalAction = CriticalAction(
-                            title = "Putuskan Google Drive",
-                            summary = "Sinkronisasi otomatis dihentikan dan izin KRON dicabut. Snapshot terenkripsi yang sudah ada tidak mengubah data lokal.",
-                        ) {
-                            scope.launch {
-                                runCatching { driveSyncRuntime.disconnect() }
-                                    .onSuccess { viewModel.showMessage("Google Drive diputuskan") }
-                                    .onFailure { viewModel.showMessage(it.message ?: "Google Drive gagal diputuskan") }
-                            }
-                        }
-                        criticalReason = ""
-                    }),
-                    onChangeCloudAccount = if (driveSyncRuntime == null) null else ({
-                        criticalAction = CriticalAction(
-                            title = "Ganti akun Google Drive",
-                            summary = "Akun saat ini akan diputuskan. Data dari akun berbeda tidak pernah digabungkan otomatis.",
-                        ) {
-                            scope.launch {
-                                runCatching { driveSyncRuntime.disconnect() }
-                                    .onSuccess { passwordMode = "DRIVE_CONNECT" }
-                                    .onFailure { viewModel.showMessage(it.message ?: "Akun Drive gagal diputuskan") }
-                            }
-                        }
-                        criticalReason = ""
-                    }),
-                    onWifiOnly = if (driveSyncRuntime == null) null else ({ value ->
-                        scope.launch {
-                            runCatching { driveSyncRuntime.setWifiOnly(value) }
-                                .onSuccess { cloudWifiOnly = value }
-                                .onFailure { viewModel.showMessage(it.message ?: "Preferensi jaringan gagal disimpan") }
-                        }
-                    }),
+                    onConnectCloud = null,
+                    onSyncNow = null,
+                    onDisconnectCloud = null,
+                    onChangeCloudAccount = null,
+                    onWifiOnly = null,
                     onBudgetAlertsChanged = { enabled ->
                         if (!enabled) {
                             viewModel.setBudgetAlertsEnabled(false)
@@ -654,8 +630,32 @@ private fun MainScaffold(
         }
     }
     when (dialog) {
-        ActionDialog.INCOME -> IncomeDialog(state, { dialog = null }) { account, channel, amount, category, target, title, note, recurring, startDate, endDate, interval, recordNow -> dialog = null; viewModel.addIncome(account, channel, amount, category, target, title, note, recurring, startDate, endDate, interval, recordNow) }
-        ActionDialog.EXPENSE -> ExpenseDialog(state, { dialog = null }) { account, channel, amount, splits, title, note, unexpected, recurring, startDate, endDate, interval, recordNow -> dialog = null; viewModel.addExpense(account, channel, amount, splits, title, note, unexpected, recurring, startDate, endDate, interval, recordNow) }
+        ActionDialog.INCOME -> IncomeDialog(
+            state = state, onDismiss = { dialog = null; dialogReceiptUri = null; dialogCameraFile = null },
+            receiptUri = dialogReceiptUri, cameraFile = dialogCameraFile,
+            onGalleryPick = {
+                dialogCameraFile = null
+                receiptLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            },
+            onCameraCapture = {
+                dialogReceiptUri = null
+                showCameraCapture = true
+            },
+            onSubmit = { account, channel, amount, category, target, title, note, recurring, startDate, endDate, interval, recordNow, _, _ -> dialog = null; viewModel.addIncome(account, channel, amount, category, target, title, note, recurring, startDate, endDate, interval, recordNow, dialogReceiptUri, dialogCameraFile); dialogReceiptUri = null; dialogCameraFile = null },
+        )
+        ActionDialog.EXPENSE -> ExpenseDialog(
+            state = state, onDismiss = { dialog = null; dialogReceiptUri = null; dialogCameraFile = null },
+            receiptUri = dialogReceiptUri, cameraFile = dialogCameraFile,
+            onGalleryPick = {
+                dialogCameraFile = null
+                receiptLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            },
+            onCameraCapture = {
+                dialogReceiptUri = null
+                showCameraCapture = true
+            },
+            onSubmit = { account, channel, amount, splits, title, note, unexpected, recurring, startDate, endDate, interval, recordNow, _, _ -> dialog = null; viewModel.addExpense(account, channel, amount, splits, title, note, unexpected, recurring, startDate, endDate, interval, recordNow, dialogReceiptUri, dialogCameraFile); dialogReceiptUri = null; dialogCameraFile = null },
+        )
         ActionDialog.TRANSFER -> TransferDialog(state, { dialog = null }) { fromAccount, fromChannel, toAccount, toChannel, amount, note -> dialog = null; viewModel.transfer(fromAccount, fromChannel, toAccount, toChannel, amount, note) }
         ActionDialog.PORTFOLIO -> PortfolioDialog(state, { dialog = null }) { name, cadence, income, rollover, drafts, startDate, endDate, interval -> dialog = null; viewModel.createPortfolio(name, cadence, income, rollover, drafts, startDate, endDate, interval) }
         ActionDialog.RESOLVE -> ResolveDialog(state, { dialog = null }, { source, target, amount, note -> dialog = null; viewModel.resolveFromAllocation(source, target, amount, note) }, { target, amount, note -> dialog = null; viewModel.resolveFromVault(target, amount, note) }, { target, amount, note -> dialog = null; viewModel.resolveFromRollover(target, amount, note) }, { target, amount, note -> dialog = null; viewModel.allocateUnallocated(target, amount, note) })
@@ -669,9 +669,13 @@ private fun MainScaffold(
                 event = event,
                 state = state,
                 onDismiss = { auditId = null },
-                onAddReceipt = { eventId ->
+                onGalleryPick = { eventId ->
                     receiptTargetEventId = eventId
                     receiptLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                },
+                onCameraCapture = { eventId ->
+                    cameraTargetEventId = eventId
+                    showCameraCapture = true
                 },
                 onRevert = { eventId, reason ->
                     auditId = null
@@ -790,6 +794,26 @@ private fun MainScaffold(
                 }) { Text("Tutup KRON") }
             },
             properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+        )
+    }
+    if (showCameraCapture) {
+        CameraCaptureScreen(
+            onPhotoCaptured = { uri ->
+                val file = uri.path?.let { java.io.File(it) }
+                if (file != null) {
+                    if (cameraTargetEventId != null) {
+                        viewModel.attachCameraReceipt(cameraTargetEventId!!, file)
+                        cameraTargetEventId = null
+                    } else {
+                        dialogCameraFile = file
+                    }
+                }
+                showCameraCapture = false
+            },
+            onCancel = {
+                cameraTargetEventId = null
+                showCameraCapture = false
+            },
         )
     }
 }

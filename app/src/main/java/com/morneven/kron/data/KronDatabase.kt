@@ -30,7 +30,7 @@ import com.morneven.kron.security.SqlCipherLibrary
         ReceiptEntity::class,
         SyncStateEntity::class,
     ],
-    version = 6,
+    version = 11,
     exportSchema = true,
 )
 abstract class KronDatabase : RoomDatabase() {
@@ -239,12 +239,106 @@ abstract class KronDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_6_7: Migration = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE receipts ADD COLUMN capturedAt INTEGER")
+                db.execSQL("ALTER TABLE receipts ADD COLUMN latitude REAL")
+                db.execSQL("ALTER TABLE receipts ADD COLUMN longitude REAL")
+            }
+        }
+
+        val MIGRATION_7_8: Migration = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE activity_events ADD COLUMN accountId INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE portfolios ADD COLUMN accountId INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE budget_journal_lines ADD COLUMN accountId INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_8_9: Migration = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    UPDATE activity_events SET accountId = COALESCE(
+                        (SELECT accountId FROM cash_journal_lines WHERE eventId = activity_events.id LIMIT 1),
+                        0
+                    ) WHERE accountId = 0
+                """.trimIndent())
+                db.execSQL("""
+                    UPDATE portfolios SET accountId = COALESCE(
+                        (SELECT id FROM accounts WHERE isActive = 1 LIMIT 1),
+                        0
+                    ) WHERE accountId = 0
+                """.trimIndent())
+                db.execSQL("""
+                    UPDATE budget_journal_lines SET accountId = COALESCE(
+                        (SELECT accountId FROM cash_journal_lines WHERE eventId = budget_journal_lines.eventId LIMIT 1),
+                        0
+                    ) WHERE accountId = 0
+                """.trimIndent())
+                db.execSQL("""
+                    UPDATE budget_journal_lines SET accountId = COALESCE(
+                        (SELECT p.accountId FROM allocations al
+                         JOIN budget_periods per ON per.id = al.periodId
+                         JOIN portfolios p ON p.id = per.portfolioId
+                         WHERE al.id = budget_journal_lines.allocationId),
+                        0
+                    ) WHERE accountId = 0
+                """.trimIndent())
+                db.execSQL("""
+                    UPDATE budget_journal_lines SET accountId = COALESCE(
+                        (SELECT accountId FROM budget_journal_lines b2
+                         WHERE b2.eventId = budget_journal_lines.eventId AND b2.accountId != 0
+                         LIMIT 1),
+                        0
+                    ) WHERE accountId = 0
+                """.trimIndent())
+                db.execSQL("""
+                    UPDATE activity_events SET accountId = COALESCE(
+                        (SELECT accountId FROM budget_journal_lines WHERE eventId = activity_events.id AND accountId != 0 LIMIT 1),
+                        0
+                    ) WHERE accountId = 0
+                """.trimIndent())
+            }
+        }
+
+        val MIGRATION_9_10: Migration = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    UPDATE budget_journal_lines SET accountId = COALESCE(
+                        (SELECT accountId FROM budget_journal_lines b2
+                         WHERE b2.eventId = budget_journal_lines.eventId AND b2.accountId != 0
+                         LIMIT 1),
+                        0
+                    ) WHERE accountId = 0
+                """.trimIndent())
+                db.execSQL("""
+                    UPDATE activity_events SET accountId = COALESCE(
+                        (SELECT accountId FROM budget_journal_lines WHERE eventId = activity_events.id AND accountId != 0 LIMIT 1),
+                        0
+                    ) WHERE accountId = 0
+                """.trimIndent())
+            }
+        }
+
+        val MIGRATION_10_11: Migration = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("UPDATE portfolios SET accountId = 0 WHERE accountId != 0")
+                db.execSQL("UPDATE activity_events SET accountId = 0")
+                db.execSQL("UPDATE budget_journal_lines SET accountId = 0")
+            }
+        }
+
         private val ALL_MIGRATIONS = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
             MIGRATION_3_4,
             MIGRATION_4_5,
             MIGRATION_5_6,
+            MIGRATION_6_7,
+            MIGRATION_7_8,
+            MIGRATION_8_9,
+            MIGRATION_9_10,
+            MIGRATION_10_11,
         )
 
         private val SYNC_TRIGGER_CALLBACK = object : Callback() {
