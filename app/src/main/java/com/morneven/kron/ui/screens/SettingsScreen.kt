@@ -20,9 +20,9 @@ import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.CloudOff
-import androidx.compose.material.icons.outlined.BrightnessAuto
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.LightMode
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.NotificationsNone
@@ -295,13 +295,14 @@ fun SettingsScreen(
                 Text("Tema", style = MaterialTheme.typography.titleMedium)
                 Text("Pilih tampilan yang nyaman untuk perangkat ini.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(top = 10.dp),
                 ) {
                     items(listOf(
                         Triple("DARK", "Gelap", Icons.Outlined.DarkMode),
                         Triple("LIGHT", "Terang", Icons.Outlined.LightMode),
-                        Triple("SYSTEM", "Sistem", Icons.Outlined.BrightnessAuto),
+                        Triple("SYSTEM", "Sistem", Icons.Outlined.Settings),
                     ), key = { it.first }) { (key, label, icon) ->
                         FilterChip(
                             selected = state.theme == key,

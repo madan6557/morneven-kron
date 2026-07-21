@@ -1,5 +1,10 @@
 # KRON Changelog
 
+## 1.3.19 - 2026-07-21
+
+- UI: Theme container -- LazyRow sekarang fillMaxWidth (rata kiri/kanan dengan konten lain).
+- UI: Icon "Sistem" -- ganti BrightnessAuto dengan Settings (gear).
+
 ## 1.3.18 - 2026-07-21
 
 - UI: BudgetHistoryDialog -- tambah grafik batang planned vs spent per periode.
