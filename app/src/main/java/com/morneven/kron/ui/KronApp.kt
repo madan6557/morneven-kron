@@ -103,6 +103,7 @@ import com.morneven.kron.ui.dialogs.EditAccountDialog
 import com.morneven.kron.data.AccountEntity
 import com.morneven.kron.ui.dialogs.AuditDialog
 import com.morneven.kron.ui.dialogs.BudgetDetailDialog
+import com.morneven.kron.ui.dialogs.BudgetHistoryDialog
 import com.morneven.kron.ui.dialogs.ChannelTransferDialog
 import com.morneven.kron.ui.dialogs.ExpenseDialog
 import com.morneven.kron.ui.dialogs.IncomeDialog
@@ -278,6 +279,7 @@ private fun MainScaffold(
     var dialog by remember { mutableStateOf<ActionDialog?>(null) }
     var auditId by remember { mutableStateOf<String?>(null) }
     var detailPeriod by remember { mutableStateOf<Pair<Long, Boolean>?>(null) }
+    var historyPortfolioId by remember { mutableStateOf<Long?>(null) }
     var passwordMode by remember { mutableStateOf<String?>(null) }
     var criticalAction by remember { mutableStateOf<CriticalAction?>(null) }
     var criticalReason by remember { mutableStateOf("") }
@@ -518,6 +520,7 @@ private fun MainScaffold(
                     onChannelTransfer = { dialog = ActionDialog.CHANNEL_TRANSFER },
                     onReleaseRollover = viewModel::releaseRolloverToVault,
                     onDetail = { periodId, readOnly -> detailPeriod = periodId to readOnly },
+                    onHistory = { historyPortfolioId = it },
                     onPause = { portfolioId ->
                         criticalAction = CriticalAction("Jeda portfolio", "Periode baru tidak akan dibuat sampai portfolio dilanjutkan. Riwayat tetap tersimpan.") { viewModel.pausePortfolio(portfolioId, it) }
                         criticalReason = ""
@@ -685,6 +688,14 @@ private fun MainScaffold(
         }
     }
     detailPeriod?.let { (periodId, readOnly) -> BudgetDetailDialog(state, periodId, readOnly, { detailPeriod = null }, viewModel::correctAllocation) }
+    historyPortfolioId?.let { portfolioId ->
+        BudgetHistoryDialog(
+            state = state,
+            portfolioId = portfolioId,
+            onDismiss = { historyPortfolioId = null },
+            onDetail = { periodId -> historyPortfolioId = null; detailPeriod = periodId to false },
+        )
+    }
     passwordMode?.let { mode ->
         if (mode == "BACKUP" || mode == "RESTORE") {
             PasswordDialog(mode == "BACKUP", { passwordMode = null }) { password ->

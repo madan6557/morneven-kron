@@ -60,6 +60,7 @@ fun BudgetScreen(
     onChannelTransfer: () -> Unit,
     onReleaseRollover: (String) -> Unit,
     onDetail: (Long, Boolean) -> Unit,
+    onHistory: (Long) -> Unit,
     onPause: (Long) -> Unit,
     onResume: (Long) -> Unit,
     onArchive: (Long) -> Unit,
@@ -148,6 +149,7 @@ fun BudgetScreen(
                     hasPortfolioDeficit = state.allocations.any { it.portfolioId == first.portfolioId && it.availableAmount < 0 },
                     visible = state.valuesVisible,
                     onDetail = { onDetail(first.periodId, false) },
+                    onHistory = { onHistory(first.portfolioId) },
                     onPause = { onPause(first.portfolioId) },
                     onResume = { onResume(first.portfolioId) },
                     onArchive = { onArchive(first.portfolioId) },
@@ -179,7 +181,10 @@ fun BudgetScreen(
                         Text("Periode terakhir ${LocalDate.ofEpochDay(latestRows.first().startEpochDay).format(indonesianDate)} sampai ${LocalDate.ofEpochDay(latestRows.first().endEpochDay).format(indonesianDate)}", style = MaterialTheme.typography.bodySmall)
                     }
                     Text("Historis terpakai ${displayMoney(historicalRows.sumOf { it.spentAmount }, state.valuesVisible)}", style = MaterialTheme.typography.bodyMedium)
-                    TextButton(onClick = { latestRows.firstOrNull()?.let { onDetail(it.periodId, true) } }, enabled = latestRows.isNotEmpty()) { Text("Lihat detail read-only") }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = { latestRows.firstOrNull()?.let { onDetail(it.periodId, true) } }, enabled = latestRows.isNotEmpty()) { Text("Lihat detail read-only") }
+                        TextButton(onClick = { onHistory(portfolio.id) }) { Text("Riwayat") }
+                    }
                     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = { onRestore(portfolio.id, false) }, modifier = Modifier.fillMaxWidth()) {
                             Icon(Icons.Outlined.Restore, contentDescription = null)
@@ -204,6 +209,7 @@ private fun ActiveBudgetCard(
     hasPortfolioDeficit: Boolean,
     visible: Boolean,
     onDetail: () -> Unit,
+    onHistory: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onArchive: () -> Unit,
@@ -237,7 +243,10 @@ private fun ActiveBudgetCard(
                 }
             }
         }
-        Button(onClick = onDetail, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Lihat detail budget") }
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onDetail, modifier = Modifier.weight(1f)) { Text("Detail budget") }
+            OutlinedButton(onClick = onHistory, modifier = Modifier.weight(1f)) { Text("Riwayat") }
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = if (paused) onResume else onPause, modifier = Modifier.weight(1f)) {
                 Icon(if (paused) Icons.Outlined.PlayCircle else Icons.Outlined.PauseCircle, contentDescription = null)

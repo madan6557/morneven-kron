@@ -69,6 +69,7 @@ import com.morneven.kron.ui.components.displayMoney
 import com.morneven.kron.ui.components.formatIdr
 import com.morneven.kron.ui.components.MoneyField
 import com.morneven.kron.ui.components.parseMoneyInput
+import com.morneven.kron.ui.components.signedColor
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -498,6 +499,72 @@ fun BudgetDetailDialog(state: KronUiState, periodId: Long, readOnly: Boolean = f
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Tutup") } },
     )
+}
+
+@Composable
+fun BudgetHistoryDialog(
+    state: KronUiState,
+    portfolioId: Long,
+    onDismiss: () -> Unit,
+    onDetail: (Long) -> Unit,
+) {
+    val portfolio = state.portfolios.firstOrNull { it.id == portfolioId }
+        ?: state.archivedPortfolios.firstOrNull { it.id == portfolioId }
+        ?: return
+    val periodIds = state.periods.filter { it.portfolioId == portfolioId }.map { it.id }.toSet()
+    val periodAllocations = state.allocations.filter { it.periodId in periodIds }
+    val periods = state.periods
+        .filter { it.portfolioId == portfolioId }
+        .sortedByDescending { it.startEpochDay }
+    val budgetMoney: (Long) -> String = { value ->
+        if (!state.valuesVisible) "Rp ***"
+        else if (abs(value) >= 1_000_000) compactIdr(value)
+        else formatIdr(value)
+    }
+    FormDialog("Riwayat ${portfolio.name}", onDismiss, "Tutup", true, onDismiss) {
+        Text("Semua periode ${portfolio.name}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(4.dp))
+        periods.forEach { period ->
+            val rows = periodAllocations.filter { it.periodId == period.id }
+            val totalPlanned = rows.sumOf { it.plannedAmount }
+            val totalSpent = rows.sumOf { it.spentAmount }
+            val totalRemaining = rows.sumOf { it.availableAmount }
+            val cashRemaining = rows.filter { it.fundingChannel == FundingChannel.CASH }.sumOf { it.availableAmount }
+            val eBudgetRemaining = rows.filter { it.fundingChannel == FundingChannel.EBUDGET }.sumOf { it.availableAmount }
+            HudCard(accent = if (totalRemaining < 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("${LocalDate.ofEpochDay(period.startEpochDay)} sampai ${LocalDate.ofEpochDay(period.endEpochDay)}", style = MaterialTheme.typography.titleMedium)
+                        Text(period.status.replace('_', ' '), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+                    }
+                    Text(budgetMoney(totalRemaining), style = MaterialTheme.typography.titleMedium, color = if (totalRemaining < 0) MaterialTheme.colorScheme.error else if (totalRemaining > 0) KronGold else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Rencana", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(budgetMoney(totalPlanned), style = MaterialTheme.typography.bodyMedium)
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Terpakai", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(budgetMoney(totalSpent), style = MaterialTheme.typography.bodyMedium)
+                }
+                if (rows.any { it.fundingChannel == FundingChannel.CASH }) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Sisa Cash", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(budgetMoney(cashRemaining), style = MaterialTheme.typography.bodySmall, color = signedColor(cashRemaining))
+                    }
+                }
+                if (rows.any { it.fundingChannel == FundingChannel.EBUDGET }) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Sisa eBudget", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(budgetMoney(eBudgetRemaining), style = MaterialTheme.typography.bodySmall, color = signedColor(eBudgetRemaining))
+                    }
+                }
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f))
+                TextButton(onClick = { onDetail(period.id) }) { Text("Detail periode ini") }
+            }
+        }
+    }
 }
 
 @Composable

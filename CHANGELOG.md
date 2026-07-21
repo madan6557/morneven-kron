@@ -1,5 +1,11 @@
 # KRON Changelog
 
+## 1.3.17 - 2026-07-21
+
+- Fitur: Riwayat budget per portfolio -- semua periode tercatat dengan planned, spent, remaining.
+- BudgetScreen: tombol "Riwayat" di kartu portfolio aktif dan arsip.
+- BudgetHistoryDialog: daftar semua periode, bisa tap "Detail periode ini".
+
 ## 1.3.16 - 2026-07-21
 
 - UI: Theme chips -- icon benar per mode (sun, moon, auto) dan ditampilkan di semua chip.
