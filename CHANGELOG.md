@@ -1,5 +1,11 @@
 # KRON Changelog
 
+## 1.3.16 - 2026-07-21
+
+- UI: Theme chips -- icon benar per mode (sun, moon, auto) dan ditampilkan di semua chip.
+- UI: Theme container -- LazyRow padding rata kiri/kanan dengan konten HudCard lain.
+- UI: Light mode colors -- primaryContainer, surface, background dimuted agar tidak silau.
+
 ## 1.3.15 - 2026-07-21
 
 - Fix: Tombol foto bukti hanya muncul untuk transaksi INCOME dan EXPENSE di dialog audit. Transfer, portfolio booking, resolve, dan jenis lainnya tidak perlu lampiran foto.

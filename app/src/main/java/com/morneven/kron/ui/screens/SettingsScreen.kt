@@ -20,7 +20,9 @@ import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.BrightnessAuto
 import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.NotificationsNone
@@ -294,18 +296,18 @@ fun SettingsScreen(
                 Text("Pilih tampilan yang nyaman untuk perangkat ini.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(top = 10.dp, end = 12.dp),
+                    contentPadding = PaddingValues(top = 10.dp),
                 ) {
-                    items(listOf("DARK" to "Gelap", "LIGHT" to "Terang", "SYSTEM" to "Sistem"), key = { it.first }) { (key, label) ->
+                    items(listOf(
+                        Triple("DARK", "Gelap", Icons.Outlined.DarkMode),
+                        Triple("LIGHT", "Terang", Icons.Outlined.LightMode),
+                        Triple("SYSTEM", "Sistem", Icons.Outlined.BrightnessAuto),
+                    ), key = { it.first }) { (key, label, icon) ->
                         FilterChip(
                             selected = state.theme == key,
                             onClick = { onTheme(key) },
                             label = { Text(label) },
-                            leadingIcon = if (state.theme == key) {
-                                { Icon(Icons.Outlined.DarkMode, contentDescription = null) }
-                            } else {
-                                null
-                            },
+                            leadingIcon = { Icon(icon, contentDescription = label) },
                         )
                     }
                 }
