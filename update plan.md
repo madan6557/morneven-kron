@@ -13,7 +13,7 @@
 **Target pengguna**: Individu dan keluarga yang ingin mencatat keuangan pribadi secara privat dan aman
 **Filosofi**: Local-first, no backend, end-to-end encrypted, open data via backup/sync
 **Tech stack**: Kotlin, Android SDK 37, Jetpack Compose + Material3, Room + SQLCipher, Hilt, WorkManager, DataStore, Biometric, Google Drive API
-**Versi saat ini**: 1.4.6 (versionCode 58, profil kunci SQLCipher permanen, baseline kompatibilitas 1.0.21)
+**Versi saat ini**: 1.4.7 (versionCode 59, baseline penyimpanan stabil 1.3.20, bootstrap data continuity)
 
 **Fitur utama yang sudah ada:**
 - Buku besar double-entry dengan jurnal append-only
@@ -34,7 +34,7 @@
 
 - **Tanggal Mulai**: 2026-07-20
 - **Fase**: Implementasi lanjutan -- perbaikan UI/UX
-- **Versi Saat Ini**: 1.4.6 (versionCode 58)
+- **Versi Saat Ini**: 1.4.7 (versionCode 59)
 
 ---
 

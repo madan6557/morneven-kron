@@ -134,7 +134,15 @@ class KronMigrationTest {
         val database = helper.writableDatabase
         database.beginTransaction()
         try {
-            KronDatabase.MIGRATION_3_4.migrate(database)
+            KronDatabase.MIGRATION_3_4_RECOVERY.migrate(database)
+            val violations = database.query("PRAGMA foreign_key_check").use { cursor ->
+                buildList {
+                    while (cursor.moveToNext()) {
+                        add("${cursor.getString(0)}:${cursor.getLong(1)}:${cursor.getString(2)}:${cursor.getLong(3)}")
+                    }
+                }
+            }
+            assertEquals(emptyList<String>(), violations)
             database.setTransactionSuccessful()
         } finally {
             database.endTransaction()
@@ -174,6 +182,11 @@ class KronMigrationTest {
                         db.execSQL("CREATE TABLE portfolio_allocation_templates (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL)")
                         db.execSQL("CREATE TABLE activity_events (id TEXT NOT NULL PRIMARY KEY)")
                         db.execSQL("CREATE TABLE recurring_rules (id TEXT NOT NULL PRIMARY KEY)")
+                        db.execSQL("CREATE TABLE cash_journal_lines (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL)")
+                        db.execSQL("CREATE TABLE budget_journal_lines (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL)")
+                        db.execSQL("CREATE TABLE transaction_splits (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL)")
+                        db.execSQL("CREATE TABLE recurring_occurrences (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL)")
+                        db.execSQL("CREATE TABLE audit_snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL)")
                         db.execSQL("CREATE TABLE receipts (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, eventId TEXT NOT NULL, localPath TEXT NOT NULL, mimeType TEXT NOT NULL, createdAt INTEGER NOT NULL, FOREIGN KEY(eventId) REFERENCES activity_events(id) ON DELETE RESTRICT)")
                         db.execSQL("CREATE INDEX index_receipts_eventId ON receipts(eventId)")
                         db.execSQL("INSERT INTO activity_events VALUES('event-5')")

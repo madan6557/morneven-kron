@@ -1,5 +1,7 @@
 # KRON
 
+Current release: KRON 1.4.7 Full Release LTS.
+
 KRON adalah aplikasi pencatatan keuangan Android local-first untuk pemasukan, pengeluaran, transfer, RAB bulanan atau tahunan, otomatisasi, resolving budget, audit immutable, laporan, serta backup terenkripsi.
 
 ## Model dana
@@ -38,6 +40,6 @@ Perintah verifikasi:
 .\gradlew.bat :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin :app:lintDebug :app:assembleRelease
 ```
 
-APK release berada di `app/build/outputs/apk/release/KRON-1.4.6.apk`.
+APK release berada di `app/build/outputs/apk/release/KRON-1.4.7.apk`.
 
 Konfigurasi signing dibaca dari `%USERPROFILE%/.android/kron-signing.properties`. Konfigurasi OAuth opsional dijelaskan pada [OAUTH_SETUP.md](OAUTH_SETUP.md). Jangan pernah menyimpan signing key, password, token, client secret, atau data finansial di repository.

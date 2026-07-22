@@ -36,6 +36,9 @@ class KronApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+    }
+
+    fun startDataServices() {
         val dataReady = runCatching { driveSyncRuntimeFactory.get().start(applicationScope) }.isSuccess
         if (!dataReady) return
         val workManager = WorkManager.getInstance(this)

@@ -1,7 +1,6 @@
 package com.morneven.kron.security
 
 import android.content.Context
-import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
@@ -9,14 +8,20 @@ import java.io.FileOutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
 import net.zetetic.database.sqlcipher.SQLiteDatabase
-import net.zetetic.database.sqlcipher.SQLiteDatabaseHook
-import net.zetetic.database.sqlcipher.SQLiteConnection
 
 @Singleton
 class DatabaseEncryptionManager @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val keyManager: DatabaseKeyManager,
 ) {
+    private val continuityMarker: File
+        get() = File(context.noBackupFilesDir, "security/database-continuity-v1.4.7.validated")
+
+    data class DatabasePreparation(
+        val keyMode: DatabaseKeyMode,
+        val guard: EncryptionGuard?,
+    )
+
     data class DatabaseInspection(
         val exists: Boolean,
         val isPlaintext: Boolean,
@@ -30,18 +35,22 @@ class DatabaseEncryptionManager @Inject constructor(
         val acceptsPassphrase: Boolean,
         val hasPreEncryptionCopy: Boolean,
         val hasRecoveryArtifacts: Boolean,
+        val resolvedMode: DatabaseKeyMode?,
     )
 
     init {
         SqlCipherLibrary.ensureLoaded()
     }
 
-    fun openHelperFactory(dbPath: String): SupportSQLiteOpenHelper.Factory {
+    fun openHelperFactory(
+        dbPath: String,
+        keyMode: DatabaseKeyMode,
+    ): SupportSQLiteOpenHelper.Factory {
         val database = File(dbPath)
         if (
             !database.exists() &&
             (
-                keyManager.isRawKeyProfileProvisioned() ||
+                keyManager.isAnyKeyProfileProvisioned() ||
                     (keyManager.isProvisioned() && !keyManager.isNewDatabaseInitializationPending())
                 )
         ) {
@@ -49,22 +58,16 @@ class DatabaseEncryptionManager @Inject constructor(
                 "Database utama tidak ditemukan, tetapi metadata kunci KRON masih tersedia.",
             )
         }
-        val keyMaterial = keyManager.getOrCreateDatabasePassphrase()
-        return try {
-            net.zetetic.database.sqlcipher.SupportOpenHelperFactory(
-                rawKeySpec(keyMaterial),
-                SQLCIPHER_4_HOOK,
-                false,
-            )
-        } finally {
-            keyMaterial.fill(0)
-        }
+        val root = keyManager.getOrCreateDatabasePassphrase()
+        val effectiveKey = keyBytes(root, keyMode)
+        root.fill(0)
+        return net.zetetic.database.sqlcipher.SupportOpenHelperFactory(effectiveKey)
     }
 
-    fun preparePrimaryDatabase(database: File): EncryptionGuard? {
+    fun preparePrimaryDatabase(database: File): DatabasePreparation {
         if (!database.exists()) {
             if (
-                keyManager.isRawKeyProfileProvisioned() ||
+                keyManager.isAnyKeyProfileProvisioned() ||
                 (keyManager.isProvisioned() && !keyManager.isNewDatabaseInitializationPending()) ||
                 hasPrimaryRecoveryArtifacts(database)
             ) {
@@ -72,88 +75,74 @@ class DatabaseEncryptionManager @Inject constructor(
                     "Database utama tidak ditemukan, tetapi metadata kunci atau artefak pemulihan KRON masih tersedia.",
                 )
             }
-            return null
+            return DatabasePreparation(DatabaseKeyMode.PASSPHRASE, null)
         }
-        val rollback = File(database.parentFile, "${database.name}.pre-encryption")
-        val sourceStaging = File(database.parentFile, "${database.name}.source-staging")
-        val staging = File(database.parentFile, "${database.name}.encryption-staging")
-        val plaintext = canOpenPlaintext(database)
-        val emptyKeyDatabase = !plaintext && canOpenEncrypted(database, ByteArray(0))
-        val profileProvisioned = database.name == PRIMARY_DATABASE_NAME &&
-            keyManager.isRawKeyProfileProvisioned()
-        if (profileProvisioned && (plaintext || emptyKeyDatabase)) {
-            throw DatabaseKeyProfileMismatchException(
-                "Profil kunci menyatakan SQLCipher raw key, tetapi database memakai format lain.",
+
+        val existingMode = resolveKnownMode(database)
+        if (existingMode != null) {
+            if (isContinuityValidated()) {
+                return DatabasePreparation(existingMode, null)
+            }
+            keyManager.preserveKeyMetadataForUpgrade()
+            val rollback = preUpgradeCopy(database)
+            if (!hasDatabaseFiles(rollback)) {
+                copyDatabaseFiles(database, rollback)
+                require(resolveKnownMode(rollback) == existingMode) {
+                    "Salinan pra-upgrade database tidak dapat diverifikasi"
+                }
+            }
+            return DatabasePreparation(
+                existingMode,
+                EncryptionGuard(database, rollback, ::markContinuityValidated),
             )
         }
-        val keyMaterial = when {
-            plaintext || emptyKeyDatabase -> keyManager.getOrCreateForValidatedLegacyDatabase()
-            else -> keyManager.loadExistingDatabasePassphrase()
-                ?: throw DatabaseKeyUnavailableException(
-                    "Database KRON terenkripsi, tetapi kunci perangkat aslinya tidak ditemukan.",
-                )
+
+        val plaintext = canOpenPlaintext(database)
+        val emptyKey = !plaintext && canOpenEncrypted(database, ByteArray(0))
+        if (!plaintext && !emptyKey) {
+            throw DatabaseKeyUnavailableException(
+                "Database KRON tidak cocok dengan passphrase 1.3.x, raw-key 1.4.x, plaintext, atau empty-key legacy.",
+            )
         }
-        val rawKey = rawKeySpec(keyMaterial)
+
+        val rollback = preUpgradeCopy(database)
+        check(!hasDatabaseFiles(rollback)) {
+            "Salinan pra-upgrade lama sudah tersedia. Migrasi baru diblokir."
+        }
+        keyManager.preserveKeyMetadataForUpgrade()
+        copyDatabaseFiles(database, rollback)
+        val sourceStaging = File(database.parentFile, ".${database.name}.source-staging-v147")
+        val targetStaging = File(database.parentFile, ".${database.name}.encrypted-staging-v147")
+        deleteDatabaseFiles(sourceStaging)
+        deleteDatabaseFiles(targetStaging)
+        val root = keyManager.getOrCreateForValidatedLegacyDatabase()
         try {
-            val acceptsRawKey = canOpenEncrypted(database, rawKey)
-            if (acceptsRawKey) {
-                return if (rollback.exists()) EncryptionGuard(database, rollback) else null
-            }
-            if (profileProvisioned) {
-                throw DatabaseKeyProfileMismatchException(
-                    "Database tidak cocok dengan profil raw key KRON yang telah dikunci.",
-                )
-            }
-            val sourceKey = when {
-                canOpenEncrypted(database, keyMaterial) -> keyMaterial
-                plaintext || emptyKeyDatabase -> ByteArray(0)
-                else -> throw IllegalStateException(
-                    "Database KRON terenkripsi dengan kunci yang tidak dikenal. " +
-                    "Pulihkan database dari cadangan yang sesuai.",
-                )
-            }
-            if (hasDatabaseFiles(rollback)) {
-                throw DatabaseRecoveryRequiredException(
-                    "Salinan pra-enkripsi lama masih tersedia. Migrasi baru diblokir.",
-                )
-            }
-            deleteDatabaseFiles(sourceStaging)
-            deleteDatabaseFiles(staging)
-            try {
-                copyDatabaseFiles(database, sourceStaging)
-                exportToEncrypted(sourceStaging, sourceKey, staging, rawKey)
-                validateEncrypted(staging, rawKey)
-                require(database.renameTo(rollback)) { "Database lama tidak dapat disiapkan untuk enkripsi" }
-                try {
-                    moveSidecar(database, rollback, "-wal")
-                    moveSidecar(database, rollback, "-shm")
-                    require(staging.renameTo(database)) { "Database terenkripsi tidak dapat diaktifkan" }
-                } catch (error: Exception) {
-                    restoreDatabaseFiles(rollback, database)
-                    throw error
-                }
-                return EncryptionGuard(database, rollback)
-            } finally {
-                if (sourceKey !== keyMaterial) sourceKey.fill(0)
-            }
+            copyDatabaseFiles(database, sourceStaging)
+            exportToEncrypted(
+                source = sourceStaging,
+                sourceKey = ByteArray(0),
+                target = targetStaging,
+                targetRoot = root,
+                targetMode = DatabaseKeyMode.PASSPHRASE,
+            )
+            validateEncrypted(targetStaging, keyBytes(root, DatabaseKeyMode.PASSPHRASE))
+            deleteDatabaseFiles(database)
+            require(targetStaging.renameTo(database)) { "Database terenkripsi tidak dapat diaktifkan" }
+            syncDirectory(requireNotNull(database.parentFile))
+            return DatabasePreparation(
+                DatabaseKeyMode.PASSPHRASE,
+                EncryptionGuard(database, rollback, ::markContinuityValidated),
+            )
+        } catch (error: Exception) {
+            restoreDatabaseFiles(rollback, database, keepSource = true)
+            throw error
         } finally {
+            root.fill(0)
             deleteDatabaseFiles(sourceStaging)
-            deleteDatabaseFiles(staging)
-            rawKey.fill(0)
-            keyMaterial.fill(0)
+            deleteDatabaseFiles(targetStaging)
         }
     }
 
-    fun hasRecoverablePreEncryptionCopy(database: File): Boolean =
-        canOpenPlaintext(File(database.parentFile, "${database.name}.pre-encryption"))
-
-    /** Called only after a portable restore database has passed all validation. */
-    fun prepareValidatedRestoreKey() {
-        val keyMaterial = keyManager.getOrCreateDatabasePassphrase()
-        keyMaterial.fill(0)
-    }
-
-    /** Performs read-only format and key checks. It never creates a key or changes a file. */
     fun inspectPrimaryDatabase(database: File): DatabaseInspection {
         if (!database.exists()) {
             return DatabaseInspection(
@@ -162,183 +151,250 @@ class DatabaseEncryptionManager @Inject constructor(
                 acceptsEmptyKey = false,
                 keyEnvelopePresent = keyManager.isProvisioned(),
                 keyEnvelopeReadable = false,
-                keyProfilePresent = keyManager.isRawKeyProfileProvisioned(),
+                keyProfilePresent = keyManager.isAnyKeyProfileProvisioned(),
                 keyProfileValid = false,
                 keyInitializationPending = keyManager.isNewDatabaseInitializationPending(),
                 acceptsRawKey = false,
                 acceptsPassphrase = false,
                 hasPreEncryptionCopy = hasRecoverablePreEncryptionCopy(database),
                 hasRecoveryArtifacts = hasPrimaryRecoveryArtifacts(database),
+                resolvedMode = null,
             )
         }
         val plaintext = canOpenPlaintext(database)
         val emptyKey = !plaintext && canOpenEncrypted(database, ByteArray(0))
-        val keyMaterial = runCatching { keyManager.loadExistingDatabasePassphrase() }.getOrNull()
-        val rawKey = keyMaterial?.let(::rawKeySpec)
+        val root = runCatching { keyManager.loadExistingDatabasePassphrase() }.getOrNull()
+        val passphrase = root?.copyOf()
+        val raw = root?.let { keyBytes(it, DatabaseKeyMode.RAW_HEX) }
+        val passphraseMatches = passphrase?.let { canOpenEncrypted(database, it) } == true
+        val rawMatches = raw?.let { canOpenEncrypted(database, it) } == true
         return try {
             DatabaseInspection(
                 exists = true,
                 isPlaintext = plaintext,
                 acceptsEmptyKey = emptyKey,
                 keyEnvelopePresent = keyManager.isProvisioned(),
-                keyEnvelopeReadable = keyMaterial != null,
-                keyProfilePresent = keyManager.isRawKeyProfileProvisioned(),
+                keyEnvelopeReadable = root != null,
+                keyProfilePresent = keyManager.isAnyKeyProfileProvisioned(),
                 keyProfileValid = keyManager.isExistingRawKeyProfileValid(),
                 keyInitializationPending = keyManager.isNewDatabaseInitializationPending(),
-                acceptsRawKey = rawKey?.let { canOpenEncrypted(database, it) } == true,
-                acceptsPassphrase = keyMaterial?.let { canOpenEncrypted(database, it) } == true,
+                acceptsRawKey = rawMatches,
+                acceptsPassphrase = passphraseMatches,
                 hasPreEncryptionCopy = hasRecoverablePreEncryptionCopy(database),
                 hasRecoveryArtifacts = hasPrimaryRecoveryArtifacts(database),
+                resolvedMode = when {
+                    passphraseMatches -> DatabaseKeyMode.PASSPHRASE
+                    rawMatches -> DatabaseKeyMode.RAW_HEX
+                    else -> null
+                },
             )
         } finally {
-            rawKey?.fill(0)
-            keyMaterial?.fill(0)
+            raw?.fill(0)
+            passphrase?.fill(0)
+            root?.fill(0)
         }
     }
 
-    /**
-     * Re-encrypts a validated plaintext recovery copy with the current raw-key
-     * profile. The unreadable primary database is retained beside it.
-     */
+    fun hasRecoverablePreEncryptionCopy(database: File): Boolean =
+        resolveKnownMode(preUpgradeCopy(database)) != null ||
+            canOpenPlaintext(preUpgradeCopy(database)) ||
+            canOpenEncrypted(preUpgradeCopy(database), ByteArray(0))
+
     fun restorePreEncryptionCopy(database: File) {
-        val rollback = File(database.parentFile, "${database.name}.pre-encryption")
-        require(canOpenPlaintext(rollback)) { "Salinan pra-enkripsi tidak dapat dipulihkan" }
-        val sourceStaging = File(database.parentFile, "${database.name}.recovery-source")
-        val staging = File(database.parentFile, "${database.name}.recovery-staging")
-        val quarantine = File(database.parentFile, "${database.name}.unreadable-${System.currentTimeMillis()}")
-        val keyMaterial = keyManager.getOrCreateForValidatedLegacyDatabase()
-        val rawKey = rawKeySpec(keyMaterial)
-        deleteDatabaseFiles(sourceStaging)
-        deleteDatabaseFiles(staging)
+        val rollback = preUpgradeCopy(database)
+        require(hasDatabaseFiles(rollback)) { "Salinan pra-upgrade tidak tersedia" }
+        require(
+            resolveKnownMode(rollback) != null || canOpenPlaintext(rollback) ||
+                canOpenEncrypted(rollback, ByteArray(0)),
+        ) { "Salinan pra-upgrade tidak dapat diverifikasi" }
+        keyManager.restoreKeyMetadataFromUpgradeCopy()
+        val quarantine = File(database.parentFile, ".${database.name}.unreadable-${System.currentTimeMillis()}")
+        deleteDatabaseFiles(quarantine)
+        if (hasDatabaseFiles(database)) moveDatabaseFiles(database, quarantine)
         try {
-            copyDatabaseFiles(rollback, sourceStaging)
-            exportToEncrypted(sourceStaging, ByteArray(0), staging, rawKey)
-            validateEncrypted(staging, rawKey)
-            require(!quarantine.exists()) { "Lokasi penyimpanan database lama tidak tersedia" }
-            var primaryQuarantined = false
-            try {
-                if (database.exists()) {
-                    require(database.renameTo(quarantine)) { "Database yang tidak dapat dibuka gagal diamankan" }
-                    primaryQuarantined = true
-                    moveSidecar(database, quarantine, "-wal")
-                    moveSidecar(database, quarantine, "-shm")
-                }
-                require(staging.renameTo(database)) { "Salinan pra-enkripsi tidak dapat dipasang" }
-            } catch (error: Exception) {
-                if (primaryQuarantined) restoreDatabaseFiles(quarantine, database)
-                throw error
-            }
-        } finally {
-            deleteDatabaseFiles(sourceStaging)
-            deleteDatabaseFiles(staging)
-            rawKey.fill(0)
-            keyMaterial.fill(0)
+            copyDatabaseFiles(rollback, database)
+        } catch (error: Exception) {
+            deleteDatabaseFiles(database)
+            if (hasDatabaseFiles(quarantine)) moveDatabaseFiles(quarantine, database)
+            throw error
         }
+    }
+
+    fun prepareValidatedRestoreKey() {
+        val root = keyManager.getOrCreateDatabasePassphrase()
+        root.fill(0)
     }
 
     fun exportPlaintext(encryptedDatabase: File, target: File) {
         deleteDatabaseFiles(target)
-        val keyMaterial = keyManager.getOrCreateDatabasePassphrase()
-        val rawKey = rawKeySpec(keyMaterial)
-        try {
-            val key = when {
-                canOpenEncrypted(encryptedDatabase, rawKey) -> rawKey
-                canOpenEncrypted(encryptedDatabase, keyMaterial) -> keyMaterial
-                else -> ByteArray(0)
-            }
-            val source = SQLiteDatabase.openDatabase(
-                encryptedDatabase.absolutePath,
-                key,
+        if (canOpenPlaintext(encryptedDatabase)) {
+            copyDatabaseFiles(encryptedDatabase, target)
+            android.database.sqlite.SQLiteDatabase.openDatabase(
+                target.absolutePath,
                 null,
-                SQLiteDatabase.OPEN_READWRITE,
-                SQLCIPHER_4_HOOK,
-            )
-            source.use { database ->
-                val targetPath = sqlString(target.absolutePath)
-                database.rawExecSQL("ATTACH DATABASE '$targetPath' AS portable KEY ''")
-                try {
-                    database.query("SELECT sqlcipher_export('portable')").use { cursor ->
-                        require(cursor.moveToFirst()) { "Database tidak dapat diekspor" }
-                    }
-                    val version = database.query("PRAGMA user_version").use { cursor ->
-                        require(cursor.moveToFirst())
-                        cursor.getInt(0)
-                    }
-                    database.rawExecSQL("PRAGMA portable.user_version = $version")
-                } finally {
-                    database.rawExecSQL("DETACH DATABASE portable")
-                }
+                android.database.sqlite.SQLiteDatabase.OPEN_READWRITE,
+            ).use { opened ->
+                opened.rawQuery("PRAGMA wal_checkpoint(FULL)", null).use { it.moveToFirst() }
             }
             validatePlaintextDatabase(target)
+            return
+        }
+        if (canOpenEncrypted(encryptedDatabase, ByteArray(0))) {
+            exportToPlaintext(encryptedDatabase, ByteArray(0), target)
+            validatePlaintextDatabase(target)
+            return
+        }
+        val root = keyManager.loadExistingDatabasePassphrase()
+            ?: throw DatabaseKeyUnavailableException("Kunci perangkat KRON tidak tersedia")
+        try {
+            val mode = resolveKnownMode(encryptedDatabase)
+                ?: throw DatabaseKeyUnavailableException("Database tidak dapat dibuka dengan kunci KRON")
+            val sourceKey = keyBytes(root, mode)
+            try {
+                exportToPlaintext(encryptedDatabase, sourceKey, target)
+                validatePlaintextDatabase(target)
+            } finally {
+                sourceKey.fill(0)
+            }
         } finally {
-            rawKey.fill(0)
-            keyMaterial.fill(0)
-            if (!target.exists()) target.delete()
+            root.fill(0)
         }
     }
 
     fun encryptPortableDatabase(plaintext: File, target: File) {
         deleteDatabaseFiles(target)
-        val keyMaterial = keyManager.getOrCreateDatabasePassphrase()
-        val rawKey = rawKeySpec(keyMaterial)
+        validatePlaintextDatabase(plaintext)
+        val root = keyManager.getOrCreateDatabasePassphrase()
         try {
-            validatePlaintextDatabase(plaintext)
-            exportToEncrypted(plaintext, ByteArray(0), target, rawKey)
-            validateEncrypted(target, rawKey)
+            exportToEncrypted(
+                source = plaintext,
+                sourceKey = ByteArray(0),
+                target = target,
+                targetRoot = root,
+                targetMode = DatabaseKeyMode.PASSPHRASE,
+            )
+            validateEncrypted(target, keyBytes(root, DatabaseKeyMode.PASSPHRASE))
         } finally {
-            rawKey.fill(0)
-            keyMaterial.fill(0)
+            root.fill(0)
         }
     }
 
     fun validateEncrypted(database: File) {
-        val keyMaterial = keyManager.getOrCreateDatabasePassphrase()
-        val rawKey = rawKeySpec(keyMaterial)
+        require(resolveKnownMode(database) != null) { "Database terenkripsi tidak valid" }
+    }
+
+    private fun isContinuityValidated(): Boolean = continuityMarker.isFile && runCatching {
+        continuityMarker.readBytes().contentEquals(CONTINUITY_MAGIC)
+    }.getOrDefault(false)
+
+    private fun markContinuityValidated() {
+        continuityMarker.parentFile?.mkdirs()
+        val temporary = File(continuityMarker.parentFile, "${continuityMarker.name}.new")
         try {
-            validateEncrypted(database, rawKey)
+            FileOutputStream(temporary, false).use { output ->
+                output.write(CONTINUITY_MAGIC)
+                output.flush()
+                output.fd.sync()
+            }
+            if (!temporary.renameTo(continuityMarker)) {
+                temporary.copyTo(continuityMarker, overwrite = true)
+            }
         } finally {
-            rawKey.fill(0)
-            keyMaterial.fill(0)
+            temporary.delete()
+        }
+    }
+
+    private fun resolveKnownMode(database: File): DatabaseKeyMode? {
+        if (!database.isFile) return null
+        val root = runCatching { keyManager.loadExistingDatabasePassphrase() }.getOrNull() ?: return null
+        val passphrase = root.copyOf()
+        val raw = keyBytes(root, DatabaseKeyMode.RAW_HEX)
+        return try {
+            when {
+                canOpenEncrypted(database, passphrase) -> DatabaseKeyMode.PASSPHRASE
+                canOpenEncrypted(database, raw) -> DatabaseKeyMode.RAW_HEX
+                else -> null
+            }
+        } finally {
+            passphrase.fill(0)
+            raw.fill(0)
+            root.fill(0)
         }
     }
 
     private fun canOpenEncrypted(database: File, passphrase: ByteArray): Boolean {
-        if (!database.exists() || database.length() < SQLITE_HEADER.size) return false
+        if (!database.isFile || database.length() < MIN_DATABASE_BYTES) return false
         return runCatching {
             SQLiteDatabase.openDatabase(
                 database.absolutePath,
                 passphrase,
                 null,
                 SQLiteDatabase.OPEN_READONLY,
-                SQLCIPHER_4_HOOK,
-            ).use { db ->
-                db.query("PRAGMA cipher_integrity_check").use { cursor ->
-                    cursor.moveToFirst() && cursor.getString(0).equals("ok", ignoreCase = true)
+                null,
+            ).use { opened ->
+                val cipherValid = opened.query("PRAGMA cipher_integrity_check").use { cursor ->
+                    var valid = true
+                    while (cursor.moveToNext()) {
+                        if (!cursor.getString(0).equals("ok", ignoreCase = true)) valid = false
+                    }
+                    valid
                 }
+                val foreignKeysValid = opened.query("PRAGMA foreign_key_check").use { cursor -> !cursor.moveToFirst() }
+                cipherValid && foreignKeysValid
             }
         }.getOrDefault(false)
     }
 
-    private fun canOpenPlaintext(database: File): Boolean {
-        return try {
-            android.database.sqlite.SQLiteDatabase.openDatabase(
-                database.absolutePath,
-                null,
-                android.database.sqlite.SQLiteDatabase.OPEN_READONLY,
-            ).use { sqlite ->
-                sqlite.rawQuery("PRAGMA integrity_check", null).use { cursor ->
-                    cursor.moveToFirst() && cursor.getString(0).equals("ok", ignoreCase = true)
-                }
+    private fun canOpenPlaintext(database: File): Boolean = runCatching {
+        if (!database.isFile) return@runCatching false
+        android.database.sqlite.SQLiteDatabase.openDatabase(
+            database.absolutePath,
+            null,
+            android.database.sqlite.SQLiteDatabase.OPEN_READONLY,
+        ).use { opened ->
+            val integrity = opened.rawQuery("PRAGMA integrity_check", null).use { cursor ->
+                cursor.moveToFirst() && cursor.getString(0).equals("ok", ignoreCase = true)
             }
-        } catch (_: Exception) {
-            false
+            val foreignKeys = opened.rawQuery("PRAGMA foreign_key_check", null).use { cursor -> !cursor.moveToFirst() }
+            integrity && foreignKeys
         }
-    }
+    }.getOrDefault(false)
 
     private fun validatePlaintextDatabase(file: File) {
-        require(file.exists() && file.length() >= SQLITE_HEADER.size) { "Database KRON tidak valid" }
-        require(canOpenPlaintext(file)) {
-            "Database KRON bukan SQLite plaintext yang dapat dibuka"
+        require(canOpenPlaintext(file)) { "Database KRON bukan SQLite plaintext yang valid" }
+    }
+
+    private fun exportToPlaintext(source: File, sourceKey: ByteArray, target: File) {
+        deleteDatabaseFiles(target)
+        SQLiteDatabase.openOrCreateDatabase(
+            target,
+            ByteArray(0),
+            null,
+            null,
+            null,
+        ).close()
+        val opened = SQLiteDatabase.openDatabase(
+            source.absolutePath,
+            sourceKey,
+            null,
+            SQLiteDatabase.OPEN_READWRITE,
+            null,
+        )
+        opened.use { database ->
+            val targetPath = sqlString(target.absolutePath)
+            database.rawExecSQL("ATTACH DATABASE '$targetPath' AS portable KEY ''")
+            try {
+                database.query("SELECT sqlcipher_export('portable')").use { cursor ->
+                    require(cursor.moveToFirst()) { "Database tidak dapat diekspor" }
+                }
+                val version = database.query("PRAGMA user_version").use { cursor ->
+                    require(cursor.moveToFirst())
+                    cursor.getInt(0)
+                }
+                database.rawExecSQL("PRAGMA portable.user_version = $version")
+            } finally {
+                database.rawExecSQL("DETACH DATABASE portable")
+            }
         }
     }
 
@@ -346,96 +402,62 @@ class DatabaseEncryptionManager @Inject constructor(
         source: File,
         sourceKey: ByteArray,
         target: File,
-        targetRawKey: ByteArray,
+        targetRoot: ByteArray,
+        targetMode: DatabaseKeyMode,
     ) {
+        require(sourceKey.isEmpty()) { "Sumber enkripsi harus berupa database portabel tanpa kunci" }
         deleteDatabaseFiles(target)
-        val keyLiteral = String(targetRawKey, Charsets.US_ASCII)
-        val database = SQLiteDatabase.openDatabase(
-            source.absolutePath,
-            sourceKey,
+        val targetKey = keyBytes(targetRoot, targetMode)
+        val opened = SQLiteDatabase.openOrCreateDatabase(
+            target,
+            targetKey,
             null,
-            SQLiteDatabase.OPEN_READWRITE,
-            SQLCIPHER_4_HOOK,
-        )
-        database.use { db ->
-            val targetPath = sqlString(target.absolutePath)
-            db.rawExecSQL("ATTACH DATABASE '$targetPath' AS encrypted KEY \"$keyLiteral\"")
-            try {
-                db.query("SELECT sqlcipher_export('encrypted')").use { cursor ->
-                    require(cursor.moveToFirst()) { "Database tidak dapat dienkripsi" }
-                }
-                val version = db.query("PRAGMA user_version").use { cursor ->
-                    require(cursor.moveToFirst())
-                    cursor.getInt(0)
-                }
-                db.rawExecSQL("PRAGMA encrypted.user_version = $version")
-            } finally {
-                db.rawExecSQL("DETACH DATABASE encrypted")
-            }
-        }
-    }
-
-    private fun validateEncrypted(file: File, passphrase: ByteArray) {
-        val database = SQLiteDatabase.openDatabase(
-            file.absolutePath,
-            passphrase,
             null,
-            SQLiteDatabase.OPEN_READONLY,
-            SQLCIPHER_4_HOOK,
+            null,
         )
-        database.use {
-            val valid = it.query("PRAGMA cipher_integrity_check").use { cursor ->
-                cursor.moveToFirst() && cursor.getString(0).equals("ok", ignoreCase = true)
+        try {
+            opened.use { database ->
+                val sourcePath = sqlString(source.absolutePath)
+                database.rawExecSQL("ATTACH DATABASE '$sourcePath' AS portable KEY ''")
+                try {
+                    database.query("SELECT sqlcipher_export('main', 'portable')").use { cursor ->
+                        require(cursor.moveToFirst()) { "Database tidak dapat dienkripsi" }
+                    }
+                    val version = database.query("PRAGMA portable.user_version").use { cursor ->
+                        require(cursor.moveToFirst())
+                        cursor.getInt(0)
+                    }
+                    database.rawExecSQL("PRAGMA user_version = $version")
+                } finally {
+                    database.rawExecSQL("DETACH DATABASE portable")
+                }
             }
-            require(valid) { "Integritas database terenkripsi tidak valid" }
+        } finally {
+            targetKey.fill(0)
         }
     }
 
-    private fun deleteSidecars(database: File) {
-        File(database.path + "-wal").delete()
-        File(database.path + "-shm").delete()
+    private fun validateEncrypted(file: File, key: ByteArray) {
+        require(canOpenEncrypted(file, key)) { "Integritas database terenkripsi tidak valid" }
     }
 
-    private fun deleteDatabaseFiles(database: File) {
-        database.delete()
-        deleteSidecars(database)
+    private fun keyBytes(root: ByteArray, mode: DatabaseKeyMode): ByteArray = when (mode) {
+        DatabaseKeyMode.PASSPHRASE -> root.copyOf()
+        DatabaseKeyMode.RAW_HEX -> rawKeySpec(root)
     }
 
-    private fun hasDatabaseFiles(database: File): Boolean =
-        database.exists() || File(database.path + "-wal").exists() || File(database.path + "-shm").exists()
+    private fun rawKeySpec(root: ByteArray): ByteArray =
+        "x'${root.toHex()}'".toByteArray(Charsets.US_ASCII)
 
-    private fun copyDatabaseFiles(source: File, target: File) {
-        require(source.isFile) { "Database sumber tidak tersedia" }
-        copyFileAndSync(source, target)
-        listOf("-wal", "-shm").forEach { suffix ->
-            val sourceSidecar = File(source.path + suffix)
-            if (sourceSidecar.isFile) copyFileAndSync(sourceSidecar, File(target.path + suffix))
+    private fun ByteArray.toHex(): String = buildString(size * 2) {
+        this@toHex.forEach { byte ->
+            append(HEX_DIGITS[(byte.toInt() ushr 4) and 0x0f])
+            append(HEX_DIGITS[byte.toInt() and 0x0f])
         }
     }
 
-    private fun copyFileAndSync(source: File, target: File) {
-        target.parentFile?.mkdirs()
-        source.inputStream().use { input ->
-            FileOutputStream(target).use { output ->
-                input.copyTo(output)
-                output.flush()
-                output.fd.sync()
-            }
-        }
-    }
-
-    private fun restoreDatabaseFiles(rollback: File, database: File) {
-        deleteDatabaseFiles(database)
-        require(rollback.renameTo(database)) { "Database lama tidak dapat dikembalikan" }
-        moveSidecar(rollback, database, "-wal")
-        moveSidecar(rollback, database, "-shm")
-    }
-
-    private fun moveSidecar(source: File, target: File, suffix: String) {
-        val sourceSidecar = File(source.path + suffix)
-        if (!sourceSidecar.exists()) return
-        require(sourceSidecar.renameTo(File(target.path + suffix))) { "File pendamping database tidak dapat diamankan" }
-    }
+    private fun preUpgradeCopy(database: File): File =
+        File(database.parentFile, ".${database.name}.pre-1.4.7")
 
     private fun hasPrimaryRecoveryArtifacts(database: File): Boolean =
         database.parentFile?.listFiles()?.any { candidate ->
@@ -443,62 +465,96 @@ class DatabaseEncryptionManager @Inject constructor(
                 (candidate.name.startsWith(database.name) || candidate.name.startsWith(".${database.name}"))
         } == true
 
-    private fun sqlString(value: String): String = value.replace("'", "''")
+    private fun hasDatabaseFiles(database: File): Boolean =
+        database.exists() || File(database.path + "-wal").exists() || File(database.path + "-shm").exists()
 
-    private fun rawKeySpec(keyMaterial: ByteArray): ByteArray {
-        val hex = buildString(keyMaterial.size * 2 + 3) {
-            append("x'")
-            keyMaterial.forEach { byte ->
-                append(HEX_DIGITS[(byte.toInt() ushr 4) and 0x0f])
-                append(HEX_DIGITS[byte.toInt() and 0x0f])
-            }
-            append('\'')
+    private fun copyDatabaseFiles(source: File, target: File) {
+        require(source.isFile) { "Database sumber tidak tersedia" }
+        deleteDatabaseFiles(target)
+        copyFileAndSync(source, target)
+        listOf("-wal", "-shm").forEach { suffix ->
+            val sidecar = File(source.path + suffix)
+            if (sidecar.isFile) copyFileAndSync(sidecar, File(target.path + suffix))
         }
-        return hex.toByteArray(Charsets.US_ASCII)
+        syncDirectory(requireNotNull(target.parentFile))
     }
 
-    class EncryptionGuard internal constructor(
-        private val encryptedDatabase: File,
-        private val rollbackDatabase: File,
-    ) {
-        fun commit() {
-            rollbackDatabase.delete()
-            File(rollbackDatabase.path + "-wal").delete()
-            File(rollbackDatabase.path + "-shm").delete()
-        }
-
-        fun rollback() {
-            if (!rollbackDatabase.exists()) return
-            encryptedDatabase.delete()
-            File(encryptedDatabase.path + "-wal").delete()
-            File(encryptedDatabase.path + "-shm").delete()
-            require(rollbackDatabase.renameTo(encryptedDatabase)) { "Database lama tidak dapat dikembalikan" }
-            moveSidecarIfPresent(rollbackDatabase, encryptedDatabase, "-wal")
-            moveSidecarIfPresent(rollbackDatabase, encryptedDatabase, "-shm")
-        }
-
-        private fun moveSidecarIfPresent(source: File, target: File, suffix: String) {
+    private fun moveDatabaseFiles(source: File, target: File) {
+        require(source.renameTo(target)) { "Database tidak dapat dipindahkan" }
+        listOf("-wal", "-shm").forEach { suffix ->
             val sidecar = File(source.path + suffix)
             if (sidecar.exists()) require(sidecar.renameTo(File(target.path + suffix))) {
-                "File pendamping database lama tidak dapat dikembalikan"
+                "File pendamping database tidak dapat dipindahkan"
+            }
+        }
+        syncDirectory(requireNotNull(target.parentFile))
+    }
+
+    private fun restoreDatabaseFiles(source: File, target: File, keepSource: Boolean) {
+        deleteDatabaseFiles(target)
+        if (keepSource) copyDatabaseFiles(source, target) else moveDatabaseFiles(source, target)
+    }
+
+    private fun copyFileAndSync(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.inputStream().use { input ->
+            FileOutputStream(target, false).use { output ->
+                input.copyTo(output)
+                output.flush()
+                output.fd.sync()
+            }
+        }
+    }
+
+    private fun deleteDatabaseFiles(database: File) {
+        database.delete()
+        File(database.path + "-wal").delete()
+        File(database.path + "-shm").delete()
+    }
+
+    private fun syncDirectory(directory: File) {
+        runCatching {
+            val descriptor = android.system.Os.open(directory.absolutePath, android.system.OsConstants.O_RDONLY, 0)
+            try {
+                android.system.Os.fsync(descriptor)
+            } finally {
+                android.system.Os.close(descriptor)
+            }
+        }.getOrThrow()
+    }
+
+    private fun sqlString(value: String): String = value.replace("'", "''")
+
+    class EncryptionGuard internal constructor(
+        private val liveDatabase: File,
+        private val recoveryDatabase: File,
+        private val onCommit: () -> Unit,
+    ) {
+        fun commit() = onCommit()
+
+        fun rollback() {
+            if (!recoveryDatabase.exists()) return
+            liveDatabase.delete()
+            File(liveDatabase.path + "-wal").delete()
+            File(liveDatabase.path + "-shm").delete()
+            recoveryDatabase.inputStream().use { input ->
+                FileOutputStream(liveDatabase, false).use { output ->
+                    input.copyTo(output)
+                    output.flush()
+                    output.fd.sync()
+                }
+            }
+            listOf("-wal", "-shm").forEach { suffix ->
+                val source = File(recoveryDatabase.path + suffix)
+                if (source.isFile) source.copyTo(File(liveDatabase.path + suffix), overwrite = true)
             }
         }
     }
 
     companion object {
         private const val HEX_DIGITS = "0123456789abcdef"
-        private const val PRIMARY_DATABASE_NAME = "kron-v4.db"
-        private val SQLCIPHER_4_HOOK = object : SQLiteDatabaseHook {
-            override fun preKey(connection: SQLiteConnection) {
-                connection.execute("PRAGMA cipher_compatibility = 4", null, null)
-            }
-
-            override fun postKey(connection: SQLiteConnection) = Unit
-        }
-        private val SQLITE_HEADER = byteArrayOf(
-            0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66,
-            0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33, 0x00,
-        )
+        private const val MIN_DATABASE_BYTES = 16
+        private val CONTINUITY_MAGIC = "KRONCONT147".toByteArray(Charsets.US_ASCII)
     }
 }
 

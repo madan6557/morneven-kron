@@ -32,8 +32,8 @@ android {
         applicationId = "com.morneven.kron"
         minSdk = 26
         targetSdk = 37
-        versionCode = 58
-        versionName = "1.4.6"
+        versionCode = 59
+        versionName = "1.4.7"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${googleWebClientId.replace("\"", "\\\"")}\"")
@@ -120,6 +120,7 @@ dependencies {
 
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
     kapt(libs.androidx.room.compiler)
 
     implementation(libs.androidx.work.runtime)

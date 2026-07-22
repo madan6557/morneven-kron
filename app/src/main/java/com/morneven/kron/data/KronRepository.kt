@@ -352,7 +352,7 @@ class KronRepository @Inject constructor(
         dao.insertCashLines(listOf(CashJournalLineEntity(eventId = eventId, accountId = accountId, fundingChannel = fundingChannel, amount = -amount)))
         val budgetLines = if (unexpected) {
             listOf(
-                BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = fundingChannel, amount = -amount, accountId = accountId),
+                BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.UNEXPECTED, fundingChannel = fundingChannel, amount = -amount, accountId = accountId),
                 BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.EXTERNAL, fundingChannel = fundingChannel, amount = amount, accountId = accountId),
             )
         } else {

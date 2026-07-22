@@ -45,10 +45,10 @@ abstract class KronDatabase : RoomDatabase() {
                 val keyManager = DatabaseKeyManager(appContext)
                 val encryption = DatabaseEncryptionManager(appContext, keyManager)
                 val dbPath = appContext.getDatabasePath(DATABASE_NAME).absolutePath
-                val guard = encryption.preparePrimaryDatabase(appContext.getDatabasePath(DATABASE_NAME))
+                val preparation = encryption.preparePrimaryDatabase(appContext.getDatabasePath(DATABASE_NAME))
                 try {
                     val opened = Room.databaseBuilder(appContext, KronDatabase::class.java, DATABASE_NAME)
-                        .openHelperFactory(encryption.openHelperFactory(dbPath))
+                        .openHelperFactory(encryption.openHelperFactory(dbPath, preparation.keyMode))
                         .addMigrations(*ALL_MIGRATIONS)
                         .addCallback(SYNC_TRIGGER_CALLBACK)
                         .build()
@@ -59,11 +59,11 @@ abstract class KronDatabase : RoomDatabase() {
                         writableDatabase,
                         EncryptedAttachmentStore(appContext, keyManager),
                     )
-                    keyManager.confirmRawKeyProfile()
-                    guard?.commit()
+                    keyManager.confirmKeyProfile(preparation.keyMode)
+                    preparation.guard?.commit()
                     opened.also { instance = it }
                 } catch (error: Exception) {
-                    guard?.rollback()
+                    preparation.guard?.rollback()
                     throw error
                 }
             }
@@ -173,6 +173,140 @@ abstract class KronDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX index_recurring_rules_accountId ON recurring_rules(accountId)")
                 db.execSQL("CREATE INDEX index_recurring_rules_categoryId ON recurring_rules(categoryId)")
                 db.execSQL("CREATE INDEX index_recurring_rules_allocationId ON recurring_rules(allocationId)")
+                db.execSQL("DROP TABLE account_channels")
+            }
+        }
+
+        /**
+         * Forward-only replacement path for schema 3. The original 3 -> 4
+         * migration is retained above as shipped history, but dropping parent
+         * tables could leave SQLite's deferred foreign-key counter dirty even
+         * after foreign_key_check returned clean. This path never leaves a
+         * child row without its parent inside the migration transaction.
+         */
+        val MIGRATION_3_4_RECOVERY: Migration = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TEMP TABLE account_channels (id INTEGER PRIMARY KEY NOT NULL, fundingChannel TEXT NOT NULL)")
+                db.execSQL("INSERT INTO account_channels(id, fundingChannel) SELECT id, CASE WHEN fundingChannel = 'EBUDGET' THEN 'EBUDGET' ELSE 'CASH' END FROM accounts")
+
+                listOf(
+                    "index_cash_journal_lines_eventId",
+                    "index_cash_journal_lines_accountId",
+                    "index_recurring_rules_accountId",
+                    "index_recurring_rules_categoryId",
+                    "index_recurring_rules_allocationId",
+                    "index_recurring_occurrences_ruleId",
+                    "index_recurring_occurrences_ruleId_dueEpochDay",
+                ).forEach { db.execSQL("DROP INDEX IF EXISTS $it") }
+
+                db.execSQL("ALTER TABLE recurring_occurrences RENAME TO recurring_occurrences_v3")
+                db.execSQL("ALTER TABLE recurring_rules RENAME TO recurring_rules_v3")
+                db.execSQL("ALTER TABLE cash_journal_lines RENAME TO cash_journal_lines_v3")
+                db.execSQL("ALTER TABLE accounts RENAME TO accounts_v3")
+
+                db.execSQL("CREATE TABLE accounts (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, name TEXT NOT NULL, isActive INTEGER NOT NULL, isArchived INTEGER NOT NULL, createdAt INTEGER NOT NULL)")
+                db.execSQL(
+                    """
+                    INSERT INTO accounts(id, name, isActive, isArchived, createdAt)
+                    SELECT id, name,
+                           CASE WHEN isArchived = 0 AND id = (SELECT MIN(id) FROM accounts_v3 WHERE isArchived = 0) THEN 1 ELSE 0 END,
+                           isArchived, createdAt
+                    FROM accounts_v3
+                    """.trimIndent(),
+                )
+
+                db.execSQL(
+                    """
+                    CREATE TABLE cash_journal_lines (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        eventId TEXT NOT NULL,
+                        accountId INTEGER NOT NULL,
+                        fundingChannel TEXT NOT NULL,
+                        amount INTEGER NOT NULL,
+                        FOREIGN KEY(eventId) REFERENCES activity_events(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                        FOREIGN KEY(accountId) REFERENCES accounts(id) ON UPDATE NO ACTION ON DELETE RESTRICT
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO cash_journal_lines(id, eventId, accountId, fundingChannel, amount)
+                    SELECT line.id, line.eventId, line.accountId, channel.fundingChannel, line.amount
+                    FROM cash_journal_lines_v3 line
+                    JOIN account_channels channel ON channel.id = line.accountId
+                    """.trimIndent(),
+                )
+
+                db.execSQL(
+                    """
+                    CREATE TABLE recurring_rules (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        direction TEXT NOT NULL,
+                        amount INTEGER NOT NULL,
+                        accountId INTEGER NOT NULL,
+                        fundingChannel TEXT NOT NULL,
+                        categoryId INTEGER,
+                        allocationId INTEGER,
+                        cadence TEXT NOT NULL,
+                        intervalCount INTEGER NOT NULL,
+                        anchorMonth INTEGER NOT NULL,
+                        anchorDay INTEGER NOT NULL,
+                        startEpochDay INTEGER NOT NULL,
+                        nextEpochDay INTEGER NOT NULL,
+                        endEpochDay INTEGER,
+                        remainingOccurrences INTEGER,
+                        isPaused INTEGER NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        FOREIGN KEY(accountId) REFERENCES accounts(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                        FOREIGN KEY(categoryId) REFERENCES categories(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                        FOREIGN KEY(allocationId) REFERENCES allocations(id) ON UPDATE NO ACTION ON DELETE RESTRICT
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO recurring_rules(
+                        id, title, direction, amount, accountId, fundingChannel, categoryId, allocationId,
+                        cadence, intervalCount, anchorMonth, anchorDay, startEpochDay, nextEpochDay,
+                        endEpochDay, remainingOccurrences, isPaused, createdAt
+                    )
+                    SELECT rule.id, rule.title, rule.direction, rule.amount, rule.accountId,
+                           channel.fundingChannel, rule.categoryId, rule.allocationId,
+                           rule.cadence, rule.intervalCount, rule.anchorMonth, rule.anchorDay,
+                           rule.startEpochDay, rule.nextEpochDay, rule.endEpochDay,
+                           rule.remainingOccurrences, rule.isPaused, rule.createdAt
+                    FROM recurring_rules_v3 rule
+                    JOIN account_channels channel ON channel.id = rule.accountId
+                    """.trimIndent(),
+                )
+
+                db.execSQL(
+                    """
+                    CREATE TABLE recurring_occurrences (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        ruleId TEXT NOT NULL,
+                        dueEpochDay INTEGER NOT NULL,
+                        eventId TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        FOREIGN KEY(ruleId) REFERENCES recurring_rules(id) ON UPDATE NO ACTION ON DELETE RESTRICT
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("INSERT INTO recurring_occurrences(id, ruleId, dueEpochDay, eventId, createdAt) SELECT id, ruleId, dueEpochDay, eventId, createdAt FROM recurring_occurrences_v3")
+
+                db.execSQL("DROP TABLE recurring_occurrences_v3")
+                db.execSQL("DROP TABLE recurring_rules_v3")
+                db.execSQL("DROP TABLE cash_journal_lines_v3")
+                db.execSQL("DROP TABLE accounts_v3")
+
+                db.execSQL("CREATE INDEX index_cash_journal_lines_eventId ON cash_journal_lines(eventId)")
+                db.execSQL("CREATE INDEX index_cash_journal_lines_accountId ON cash_journal_lines(accountId)")
+                db.execSQL("CREATE INDEX index_recurring_rules_accountId ON recurring_rules(accountId)")
+                db.execSQL("CREATE INDEX index_recurring_rules_categoryId ON recurring_rules(categoryId)")
+                db.execSQL("CREATE INDEX index_recurring_rules_allocationId ON recurring_rules(allocationId)")
+                db.execSQL("CREATE INDEX index_recurring_occurrences_ruleId ON recurring_occurrences(ruleId)")
+                db.execSQL("CREATE UNIQUE INDEX index_recurring_occurrences_ruleId_dueEpochDay ON recurring_occurrences(ruleId, dueEpochDay)")
                 db.execSQL("DROP TABLE account_channels")
             }
         }
@@ -506,7 +640,7 @@ abstract class KronDatabase : RoomDatabase() {
         private val ALL_MIGRATIONS = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
-            MIGRATION_3_4,
+            MIGRATION_3_4_RECOVERY,
             MIGRATION_4_5,
             MIGRATION_5_6,
             MIGRATION_6_7,

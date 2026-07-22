@@ -80,7 +80,7 @@ class BackupManager @Inject constructor(
         val nonce = ByteArray(NONCE_BYTES).also(SecureRandom()::nextBytes)
         FileOutputStream(target).buffered().use { rawOutput ->
             val data = DataOutputStream(rawOutput)
-            data.write(MAGIC_V2)
+            data.write(MAGIC_V3)
             data.write(salt)
             data.write(nonce)
             data.writeInt(PBKDF2_ITERATIONS)
@@ -97,11 +97,11 @@ class BackupManager @Inject constructor(
     }
 
     private fun verifyBackupStaging(file: File) {
-        require(file.exists() && file.length() > MAGIC_V2.size + SALT_BYTES + NONCE_BYTES + Int.SIZE_BYTES) {
+        require(file.exists() && file.length() > MAGIC_V3.size + SALT_BYTES + NONCE_BYTES + Int.SIZE_BYTES) {
             "Backup staging tidak lengkap"
         }
-        val magic = DataInputStream(file.inputStream().buffered()).use { input -> input.readExact(MAGIC_V2.size) }
-        require(magic.contentEquals(MAGIC_V2)) { "Header backup staging tidak valid" }
+        val magic = DataInputStream(file.inputStream().buffered()).use { input -> input.readExact(MAGIC_V3.size) }
+        require(magic.contentEquals(MAGIC_V3)) { "Header backup staging tidak valid" }
     }
 
     suspend fun createPortableSnapshotPayload(): ByteArray = withContext(Dispatchers.IO) {
@@ -370,6 +370,7 @@ class BackupManager @Inject constructor(
                 val data = DataInputStream(raw)
                 val magic = data.readExact(MAGIC_V2.size)
                 when {
+                    magic.contentEquals(MAGIC_V3) -> decryptV2(data, password, target)
                     magic.contentEquals(MAGIC_V2) -> decryptV2(data, password, target)
                     magic.contentEquals(MAGIC_V1) -> decryptV1(data, password, target)
                     else -> throw IllegalArgumentException("Format backup tidak dikenali")
@@ -877,6 +878,7 @@ class BackupManager @Inject constructor(
         private const val MAX_ATTACHMENT_COUNT = 500
         private val MAGIC_V1 = "KRONBKP1".toByteArray(Charsets.US_ASCII)
         private val MAGIC_V2 = "KRONBKP2".toByteArray(Charsets.US_ASCII)
+        private val MAGIC_V3 = "KRONBKP3".toByteArray(Charsets.US_ASCII)
         private val STORAGE_ID = Regex("[A-Za-z0-9_-]{8,128}")
         private val ATTACHMENT_ENTRY = Regex("attachments/([A-Za-z0-9_-]{8,128})\\.bin")
         private val SHA256 = Regex("[0-9a-f]{64}")

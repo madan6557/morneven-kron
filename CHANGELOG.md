@@ -1,5 +1,18 @@
 # KRON Changelog
 
+## 1.4.7 - 2026-07-22
+
+- Menetapkan KRON 1.3.20 sebagai baseline penyimpanan stabil dan mengembalikan mode passphrase SQLCipher sebagai default permanen.
+- Database passphrase 1.3.x, raw-key 1.4.x, plaintext, dan empty-key legacy diperiksa secara read-only sebelum akses tulis diaktifkan.
+- Database valid menjadi sumber kebenaran. Profil kunci lama tidak lagi dapat memblokir database yang terbukti dapat dibuka dan lolos pemeriksaan integritas.
+- Menambahkan profil kunci v2 yang menyimpan fingerprint, mode passphrase atau raw-key, serta kompatibilitas SQLCipher 4 setelah database berhasil dibuka.
+- Menambahkan bootstrap barrier agar automation, WorkManager, Drive Sync, repository, dan UI operasional tidak membuka database sebelum pemeriksaan selesai.
+- Upgrade dari versi lama mewajibkan backup pra-upgrade terenkripsi dengan recovery passphrase minimal 12 karakter melalui pemilih file Android.
+- Backup baru memakai header `.kronbackup` v3. Importer v1 dan v2 tetap dipertahankan.
+- Database, WAL, SHM, envelope, profil, dan lampiran dipertahankan ketika migration atau pembukaan ulang gagal.
+- Menambahkan salinan pra-upgrade yang dapat dipulihkan tanpa uninstall, clear data, reset, atau downgrade.
+- Menaikkan versi aplikasi dan label UI menjadi `KRON 1.4.7 Full Release LTS`.
+
 ## 1.4.6 - 2026-07-22
 
 - Kunci database kini memiliki profil permanen yang mengikat envelope perangkat, fingerprint kunci, format raw hex, dan kompatibilitas SQLCipher 4.

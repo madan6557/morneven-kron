@@ -15,7 +15,7 @@ import org.junit.Test
 
 class SecurityStorageTest {
     @Test
-    fun keyProfilePermanentlyBindsEnvelopeToRawKeyEncoding() {
+    fun keyProfilePermanentlyBindsEnvelopeToStablePassphraseMode() {
         val base = ApplicationProvider.getApplicationContext<Context>()
         val root = File(base.cacheDir, "key-profile-${UUID.randomUUID()}")
         val context = isolatedContext(base, root)
@@ -25,10 +25,11 @@ class SecurityStorageTest {
             key.fill(0)
             val missingPrimary = context.getDatabasePath("kron-v4.db")
             assertTrue(manager.isNewDatabaseInitializationPending())
-            assertNull(DatabaseEncryptionManager(context, manager).preparePrimaryDatabase(missingPrimary))
-            manager.confirmRawKeyProfile()
+            assertNull(DatabaseEncryptionManager(context, manager).preparePrimaryDatabase(missingPrimary).guard)
+            manager.confirmKeyProfile(DatabaseKeyMode.PASSPHRASE)
 
-            assertTrue(manager.isRawKeyProfileProvisioned())
+            assertTrue(manager.isAnyKeyProfileProvisioned())
+            assertEquals(DatabaseKeyMode.PASSPHRASE, manager.readKeyProfileMode())
             assertTrue(manager.isExistingRawKeyProfileValid())
             assertFalse(manager.isNewDatabaseInitializationPending())
             val missingPrimaryError = runCatching {
@@ -36,14 +37,14 @@ class SecurityStorageTest {
             }.exceptionOrNull()
             assertTrue(missingPrimaryError is DatabaseRecoveryRequiredException)
 
-            val profile = File(context.noBackupFilesDir, "security/database-key-profile-v1.bin")
+            val profile = File(context.noBackupFilesDir, "security/database-key-profile-v2.bin")
             val corrupted = profile.readBytes().also { bytes ->
                 bytes[bytes.lastIndex] = (bytes.last().toInt() xor 0x01).toByte()
             }
             profile.writeBytes(corrupted)
 
             assertFalse(manager.isExistingRawKeyProfileValid())
-            assertTrue(runCatching { manager.loadExistingDatabasePassphrase() }.isFailure)
+            assertTrue(runCatching { manager.loadExistingDatabasePassphrase() }.isSuccess)
         } finally {
             root.deleteRecursively()
         }
@@ -55,7 +56,7 @@ class SecurityStorageTest {
         val root = File(base.cacheDir, "missing-primary-${UUID.randomUUID()}")
         val context = isolatedContext(base, root)
         val primary = context.getDatabasePath("kron-v4.db")
-        val rollback = File(primary.parentFile, "${primary.name}.pre-encryption")
+        val rollback = File(primary.parentFile, ".${primary.name}.pre-1.4.7")
         try {
             rollback.parentFile?.mkdirs()
             android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(rollback, null).use { database ->
@@ -118,7 +119,9 @@ class SecurityStorageTest {
                 database.execSQL("INSERT INTO proof(id, value) VALUES(1, 'verified')")
             }
             val encryption = DatabaseEncryptionManager(context, DatabaseKeyManager(context))
-            val guard = requireNotNull(encryption.preparePrimaryDatabase(plaintext))
+            val preparation = encryption.preparePrimaryDatabase(plaintext)
+            val guard = requireNotNull(preparation.guard)
+            assertEquals(DatabaseKeyMode.PASSPHRASE, preparation.keyMode)
             val header = plaintext.inputStream().use { input -> ByteArray(16).also(input::read) }
             assertFalse(header.contentEquals("SQLite format 3\u0000".toByteArray(Charsets.US_ASCII)))
             encryption.exportPlaintext(plaintext, portable)
@@ -129,6 +132,9 @@ class SecurityStorageTest {
                 }
             }
             guard.commit()
+            val inspection = encryption.inspectPrimaryDatabase(plaintext)
+            assertTrue(inspection.acceptsPassphrase)
+            assertFalse(inspection.acceptsRawKey)
         } finally {
             plaintext.delete()
             File(plaintext.path + "-wal").delete()
@@ -138,39 +144,125 @@ class SecurityStorageTest {
     }
 
     @Test
+    fun stable1320PassphraseDatabaseReopensAfterProfileIsWritten() {
+        val base = ApplicationProvider.getApplicationContext<Context>()
+        val rootDirectory = File(base.cacheDir, "stable-passphrase-${UUID.randomUUID()}")
+        val context = isolatedContext(base, rootDirectory)
+        val primary = context.getDatabasePath("kron-v4.db")
+        try {
+            SqlCipherLibrary.ensureLoaded()
+            val keyManager = DatabaseKeyManager(context)
+            val passphrase = keyManager.getOrCreateDatabasePassphrase()
+            try {
+                net.zetetic.database.sqlcipher.SQLiteDatabase.openOrCreateDatabase(
+                    primary,
+                    passphrase,
+                    null,
+                    null,
+                    null,
+                ).use { database ->
+                    database.rawExecSQL("CREATE TABLE proof (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
+                    database.rawExecSQL("INSERT INTO proof(id, value) VALUES(1, 'stable-1.3.20')")
+                }
+            } finally {
+                passphrase.fill(0)
+            }
+
+            val encryption = DatabaseEncryptionManager(context, keyManager)
+            val firstPreparation = encryption.preparePrimaryDatabase(primary)
+            assertEquals(DatabaseKeyMode.PASSPHRASE, firstPreparation.keyMode)
+            keyManager.confirmKeyProfile(firstPreparation.keyMode)
+            firstPreparation.guard?.commit()
+
+            val reopenedKeyManager = DatabaseKeyManager(context)
+            val reopenedEncryption = DatabaseEncryptionManager(context, reopenedKeyManager)
+            val secondPreparation = reopenedEncryption.preparePrimaryDatabase(primary)
+            assertEquals(DatabaseKeyMode.PASSPHRASE, secondPreparation.keyMode)
+            val inspection = reopenedEncryption.inspectPrimaryDatabase(primary)
+            assertTrue(inspection.acceptsPassphrase)
+            assertFalse(inspection.acceptsRawKey)
+            assertEquals(DatabaseKeyMode.PASSPHRASE, reopenedKeyManager.readKeyProfileMode())
+
+            val reopenedPassphrase = reopenedKeyManager.loadExistingDatabasePassphrase()!!
+            try {
+                net.zetetic.database.sqlcipher.SQLiteDatabase.openDatabase(
+                    primary.absolutePath,
+                    reopenedPassphrase,
+                    null,
+                    net.zetetic.database.sqlcipher.SQLiteDatabase.OPEN_READONLY,
+                    null,
+                ).use { database ->
+                    database.query("SELECT value FROM proof WHERE id=1").use { cursor ->
+                        assertTrue(cursor.moveToFirst())
+                        assertEquals("stable-1.3.20", cursor.getString(0))
+                    }
+                }
+            } finally {
+                reopenedPassphrase.fill(0)
+            }
+        } finally {
+            rootDirectory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun staleLegacyRawProfileCannotOverrideValidPassphraseDatabase() {
+        val base = ApplicationProvider.getApplicationContext<Context>()
+        val rootDirectory = File(base.cacheDir, "stale-profile-${UUID.randomUUID()}")
+        val context = isolatedContext(base, rootDirectory)
+        val primary = context.getDatabasePath("kron-v4.db")
+        try {
+            SqlCipherLibrary.ensureLoaded()
+            val keyManager = DatabaseKeyManager(context)
+            val passphrase = keyManager.getOrCreateDatabasePassphrase()
+            try {
+                net.zetetic.database.sqlcipher.SQLiteDatabase.openOrCreateDatabase(
+                    primary,
+                    passphrase,
+                    null,
+                    null,
+                    null,
+                ).use { database ->
+                    database.rawExecSQL("CREATE TABLE proof (id INTEGER PRIMARY KEY)")
+                }
+            } finally {
+                passphrase.fill(0)
+            }
+            val legacyProfile = File(context.noBackupFilesDir, "security/database-key-profile-v1.bin")
+            legacyProfile.parentFile?.mkdirs()
+            legacyProfile.writeBytes("stale-profile-that-must-not-block-data".toByteArray())
+
+            val encryption = DatabaseEncryptionManager(context, keyManager)
+            val preparation = encryption.preparePrimaryDatabase(primary)
+            assertEquals(DatabaseKeyMode.PASSPHRASE, preparation.keyMode)
+            assertTrue(encryption.inspectPrimaryDatabase(primary).acceptsPassphrase)
+        } finally {
+            rootDirectory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun rawKeyDatabaseFromPreviousReleaseCanBeOpenedAndExported() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val plaintext = File(context.cacheDir, "raw-source-${UUID.randomUUID()}.db")
         val encrypted = File(context.cacheDir, "raw-legacy-${UUID.randomUUID()}.db")
         val portable = File(context.cacheDir, "raw-portable-${UUID.randomUUID()}.db")
         val keyManager = DatabaseKeyManager(context)
         val keyMaterial = keyManager.getOrCreateDatabasePassphrase()
         val rawKey = rawKeySpec(keyMaterial)
         try {
-            android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(plaintext, null).use { database ->
-                database.execSQL("CREATE TABLE proof (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
-                database.execSQL("INSERT INTO proof(id, value) VALUES(1, 'raw-key')")
-            }
-            net.zetetic.database.sqlcipher.SQLiteDatabase.openDatabase(
-                plaintext.absolutePath,
-                ByteArray(0),
+            net.zetetic.database.sqlcipher.SQLiteDatabase.openOrCreateDatabase(
+                encrypted,
+                rawKey.toByteArray(Charsets.US_ASCII),
                 null,
-                net.zetetic.database.sqlcipher.SQLiteDatabase.OPEN_READWRITE,
+                null,
                 null,
             ).use { database ->
-                val target = encrypted.absolutePath.replace("'", "''")
-                database.rawExecSQL("ATTACH DATABASE '$target' AS encrypted KEY \"$rawKey\"")
-                try {
-                    database.query("SELECT sqlcipher_export('encrypted')").use { cursor ->
-                        assertTrue(cursor.moveToFirst())
-                    }
-                } finally {
-                    database.rawExecSQL("DETACH DATABASE encrypted")
-                }
+                database.rawExecSQL("CREATE TABLE proof (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
+                database.rawExecSQL("INSERT INTO proof(id, value) VALUES(1, 'raw-key')")
             }
 
             val encryption = DatabaseEncryptionManager(context, keyManager)
-            assertNull(encryption.preparePrimaryDatabase(encrypted))
+            assertEquals(DatabaseKeyMode.RAW_HEX, encryption.preparePrimaryDatabase(encrypted).keyMode)
             encryption.exportPlaintext(encrypted, portable)
             android.database.sqlite.SQLiteDatabase.openDatabase(
                 portable.absolutePath,
@@ -184,9 +276,6 @@ class SecurityStorageTest {
             }
         } finally {
             keyMaterial.fill(0)
-            plaintext.delete()
-            File(plaintext.path + "-wal").delete()
-            File(plaintext.path + "-shm").delete()
             encrypted.delete()
             File(encrypted.path + "-wal").delete()
             File(encrypted.path + "-shm").delete()
@@ -198,7 +287,7 @@ class SecurityStorageTest {
     fun validatedPreEncryptionCopyRestoresWithoutDeletingUnreadablePrimary() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val primary = File(context.cacheDir, "recovery-${UUID.randomUUID()}.db")
-        val rollback = File(primary.parentFile, "${primary.name}.pre-encryption")
+        val rollback = File(primary.parentFile, ".${primary.name}.pre-1.4.7")
         val portable = File(primary.parentFile, "${primary.name}.portable")
         try {
             primary.writeBytes("unreadable encrypted data".toByteArray())
@@ -212,7 +301,7 @@ class SecurityStorageTest {
             encryption.restorePreEncryptionCopy(primary)
 
             val quarantined = primary.parentFile?.listFiles()
-                ?.singleOrNull { it.name.startsWith("${primary.name}.unreadable-") }
+                ?.singleOrNull { it.name.startsWith(".${primary.name}.unreadable-") }
             assertTrue(quarantined?.readText() == "unreadable encrypted data")
             encryption.exportPlaintext(primary, portable)
             android.database.sqlite.SQLiteDatabase.openDatabase(
@@ -232,7 +321,7 @@ class SecurityStorageTest {
             rollback.delete()
             portable.delete()
             primary.parentFile?.listFiles()
-                ?.filter { it.name.startsWith("${primary.name}.unreadable-") }
+                ?.filter { it.name.startsWith(".${primary.name}.unreadable-") }
                 ?.forEach(File::delete)
         }
     }

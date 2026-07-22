@@ -6,12 +6,14 @@ import androidx.work.WorkerParameters
 import com.morneven.kron.data.KronDatabase
 import com.morneven.kron.data.KronRepository
 import com.morneven.kron.data.TransactionDirection
+import com.morneven.kron.security.DatabaseAccessGate
 
 class AutomationWorker(
     appContext: Context,
     workerParams: WorkerParameters,
 ) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result = runCatching {
+        if (!DatabaseAccessGate.isReady()) return Result.retry()
         val database = KronDatabase.getInstance(applicationContext)
         KronRepository(database).apply {
             seedIfNeeded()

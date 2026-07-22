@@ -11,6 +11,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import java.util.concurrent.TimeUnit
+import com.morneven.kron.security.DatabaseAccessGate
 
 /**
  * The app registers a coordinator only after optional Drive sync is configured.
@@ -36,6 +37,7 @@ class DriveSyncWorker(
     workerParams: WorkerParameters,
 ) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result {
+        if (!DatabaseAccessGate.isReady()) return Result.retry()
         val coordinator = DriveSyncServiceLocator.coordinator() ?: return Result.success()
         return when (val result = coordinator.syncNow()) {
             is SyncRunResult.Error -> if (result.retryable) Result.retry() else Result.failure()

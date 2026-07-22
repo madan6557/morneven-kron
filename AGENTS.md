@@ -38,6 +38,11 @@
 - Before a risky encryption or key-format upgrade, create and verify an automatic pre-upgrade backup that can be restored by the new version. Do not start the migration if that backup cannot be verified.
 - Recovery diagnostics must not expose keys, passphrases, financial values, account details, file contents, or other sensitive data in the UI, logs, crash reports, or exported diagnostics.
 - If Android Keystore material is genuinely unavailable and no valid recovery copy exists, stop all writes and preserve every artifact for forensic recovery. Never hide this condition by creating a new key.
+- Starting with KRON 1.4.7, SQLCipher passphrase bytes as used by KRON 1.3.20 are the default write mode for new databases and upgrades from 1.3.x. Raw-hex remains a supported historical read mode and must never be reinterpreted as a passphrase.
+- Profile v2 `security/database-key-profile-v2.bin` records the validated key fingerprint, SQLCipher compatibility, and database key mode. A profile is metadata, not authority. A database that independently opens and passes every integrity and financial invariant check is the source of truth.
+- Database access is process-gated. WorkManager, automation, Drive Sync, dependency injection, and operational UI must not open or write the database before bootstrap validation marks the current process ready.
+- Ordinary Room schema upgrades must not rekey or convert a valid SQLCipher database. A key-mode conversion requires its own versioned migration, verified external recovery backup, private rollback copy, and signed install-over test.
+- A release must test a fresh database through create, close, process death, and reopen. It must also install over the exact signed KRON 1.3.20 APK and the immediately previous production APK before release.
 
 ## Security and repository hygiene
 
