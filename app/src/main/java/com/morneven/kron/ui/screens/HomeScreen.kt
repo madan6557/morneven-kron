@@ -29,6 +29,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -266,15 +267,19 @@ fun HomeScreen(
             }
         }
 
-        if (state.activities.isNotEmpty()) {
+        val financialActivities = state.activities.filter { it.type !in setOf("TRANSFER", "CHANNEL_TRANSFER") }
+        if (financialActivities.isNotEmpty()) {
             item { SectionHeader("Aktivitas terbaru", "Lihat semua", onAllActivities) }
-            items(state.activities.take(5), key = { it.id }) { activity ->
+            items(financialActivities.take(5), key = { it.id }) { activity ->
+                val reversed = activity.reversedByEventId != null
                 Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text(activity.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
+                        Text(activity.title, style = MaterialTheme.typography.bodyLarge.copy(textDecoration = if (reversed) TextDecoration.LineThrough else null), maxLines = 1)
                         Text(activity.type.replace('_', ' '), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    Text(displayMoney(activity.cashImpact.takeIf { it != 0L } ?: activity.budgetImpact, visible), color = signedColor(activity.cashImpact), style = MaterialTheme.typography.labelLarge)
+                    if (!reversed) {
+                        Text(displayMoney(activity.cashImpact.takeIf { it != 0L } ?: activity.budgetImpact, visible), color = signedColor(activity.cashImpact), style = MaterialTheme.typography.labelLarge)
+                    }
                 }
             }
         }

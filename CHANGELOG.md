@@ -16,6 +16,11 @@
 - UI hanya menampilkan `KRON 1.5.0` tanpa label Full Release atau LTS.
 - Kontrak SQLCipher passphrase KRON 1.4.7 dipertahankan tanpa rekey. Raw-key 1.4.x tetap hanya menjadi mode baca historis.
 
+## 1.5.7 - 2026-07-22
+
+- Fix: Filter TRANSFER/CHANNEL_TRANSFER dari overview HomeScreen — hanya tampilkan transaksi finansial (INCOME, EXPENSE, REVERSAL, dll).
+- Fix: Strikethrough title + sembunyikan nominal untuk transaksi reversal di HomeScreen.
+
 ## 1.5.6 - 2026-07-22
 
 - Fix: Reset status SYNCING ke ERROR saat startup agar sync tidak stuck selamanya kalau proses sebelumnya crash/interrupt.
