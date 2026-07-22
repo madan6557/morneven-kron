@@ -53,7 +53,7 @@ class DriveSyncRuntime internal constructor(
                 throw cancelled
             } catch (error: IllegalStateException) {
                 discardUncommittedPassphrase()
-                Log.w(TAG, "authorization.connect() gagal: ${error.message}", error)
+                Log.w(TAG, "Otorisasi Drive gagal")
                 return DriveConnectResult.Failed(
                     error.message ?: "Akun Google tidak dapat dihubungkan",
                     retryable = false,
@@ -194,6 +194,15 @@ class DriveSyncRuntime internal constructor(
             secretStore.clear()
             factory.deactivate()
         }
+    }
+
+    suspend fun clearDriveData(): SyncRunResult = passphraseOperationMutex.withLock {
+        val result = coordinator.clearDriveData()
+        if (result is SyncRunResult.NoChanges || result is SyncRunResult.Synchronized) {
+            secretStore.clear()
+            factory.deactivate()
+        }
+        result
     }
 
     private suspend fun finalizeStagedPassphrase(

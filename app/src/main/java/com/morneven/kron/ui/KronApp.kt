@@ -106,6 +106,7 @@ import com.morneven.kron.ui.dialogs.BudgetDetailDialog
 import com.morneven.kron.ui.dialogs.BudgetHistoryDialog
 import com.morneven.kron.ui.dialogs.ChannelTransferDialog
 import com.morneven.kron.ui.dialogs.ExpenseDialog
+import com.morneven.kron.ui.dialogs.EvidenceCenterDialog
 import com.morneven.kron.ui.dialogs.IncomeDialog
 import com.morneven.kron.ui.dialogs.PortfolioDialog
 import com.morneven.kron.ui.dialogs.ResolveDialog
@@ -117,6 +118,7 @@ import com.morneven.kron.ui.screens.OnboardingScreen
 import com.morneven.kron.ui.screens.ReportsScreen
 import com.morneven.kron.ui.screens.SettingsScreen
 import com.morneven.kron.ui.screens.CloudBackupUiState
+import com.morneven.kron.ui.components.displayMoney
 import com.morneven.kron.ui.screens.CloudSyncStatus
 import com.morneven.kron.sync.ConflictResolution
 import com.morneven.kron.sync.DriveConnectResult
@@ -167,6 +169,10 @@ fun KronApp(
                 }
                 activity.window.statusBarColor = Color.Transparent.toArgb()
                 activity.window.navigationBarColor = Color.Transparent.toArgb()
+                activity.window.decorView.filterTouchesWhenObscured = true
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    activity.window.setHideOverlayWindows(true)
+                }
             }
         }
         if (!state.onboardingComplete) {
@@ -290,9 +296,14 @@ private fun MainScaffold(
     var receiptTargetEventId by rememberSaveable { mutableStateOf<String?>(null) }
     var cameraTargetEventId by rememberSaveable { mutableStateOf<String?>(null) }
     var showCameraCapture by remember { mutableStateOf(false) }
+    var showEvidenceCenter by rememberSaveable { mutableStateOf(false) }
+    var pendingEvidenceRange by rememberSaveable { mutableStateOf<Pair<Long, Long>?>(null) }
+    var pendingEvidenceEventId by rememberSaveable { mutableStateOf<String?>(null) }
     var dialogReceiptUri by remember { mutableStateOf<Uri?>(null) }
     var dialogCameraFile by remember { mutableStateOf<java.io.File?>(null) }
     val manualRestoreReady by viewModel.isManualRestoreReady.collectAsState()
+    val evidenceHealth by viewModel.evidenceHealth.collectAsState()
+    val evidenceVerification by viewModel.evidenceVerification.collectAsState()
     val pendingDriveSubject by viewModel.pendingDriveSubjectId.collectAsState()
     val pendingDriveEmail by viewModel.pendingDriveEmail.collectAsState()
     val pendingDriveName by viewModel.pendingDriveDisplayName.collectAsState()
@@ -327,6 +338,12 @@ private fun MainScaffold(
         mutableStateOf(driveSyncRuntime?.isWifiOnly() ?: false)
     }
     val scope = rememberCoroutineScope()
+    val screenshotProtected = state.valuesVisible || dialog != null || auditId != null || showEvidenceCenter || passwordMode != null
+    DisposableEffect(activity, screenshotProtected) {
+        if (screenshotProtected) activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        onDispose { activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
+    }
 
     fun handleSyncResult(result: SyncRunResult) {
         when (result) {
@@ -382,6 +399,30 @@ private fun MainScaffold(
             is DriveConnectResult.Failed -> viewModel.showMessage(result.message)
         }
     }
+
+    fun authenticateCriticalAction(title: String, onSuccess: () -> Unit) {
+        val executor = ContextCompat.getMainExecutor(activity)
+        val prompt = BiometricPrompt(activity, executor, object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = onSuccess()
+
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                viewModel.showMessage("Autentikasi tindakan dibatalkan")
+            }
+
+            override fun onAuthenticationFailed() {
+                viewModel.showMessage("Autentikasi tindakan belum berhasil")
+            }
+        })
+        val info = BiometricPrompt.PromptInfo.Builder()
+            .setTitle(title)
+            .setSubtitle("Konfirmasi perubahan pada catatan audit KRON")
+            .setAllowedAuthenticators(
+                BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                    BiometricManager.Authenticators.DEVICE_CREDENTIAL,
+            )
+            .build()
+        prompt.authenticate(info)
+    }
     val backupLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         val password = pendingPassword
         if (uri != null && password != null) viewModel.exportBackup(uri, password)
@@ -394,6 +435,28 @@ private fun MainScaffold(
     }
     val reportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
         if (uri != null) viewModel.exportCsv(uri)
+    }
+    val evidencePdfLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        val range = pendingEvidenceRange
+        if (uri != null && range != null) viewModel.exportEvidencePdf(uri, range.first, range.second)
+        pendingEvidenceRange = null
+    }
+    val evidencePackageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        val range = pendingEvidenceRange
+        val eventId = pendingEvidenceEventId
+        val password = pendingPassword
+        if (uri != null && password != null) {
+            if (eventId != null) viewModel.exportEventEvidencePackage(uri, eventId, password)
+            else if (range != null) viewModel.exportEvidencePackage(uri, range.first, range.second, password)
+        }
+        pendingPassword = null
+        pendingEvidenceRange = null
+        pendingEvidenceEventId = null
+    }
+    val evidenceVerifyLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val password = pendingPassword
+        if (uri != null && password != null) viewModel.verifyEvidencePackage(uri, password)
+        pendingPassword = null
     }
     val receiptLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         val eventId = receiptTargetEventId
@@ -585,6 +648,10 @@ private fun MainScaffold(
                     onTheme = viewModel::setTheme,
                     onBackup = { passwordMode = "BACKUP" },
                     onRestore = { passwordMode = "RESTORE" },
+                    onEvidenceCenter = {
+                        showEvidenceCenter = true
+                        viewModel.refreshEvidenceHealth()
+                    },
                     onPauseRule = { ruleId ->
                         criticalAction = CriticalAction(
                             "Jeda jadwal otomatis",
@@ -604,11 +671,40 @@ private fun MainScaffold(
                         criticalReason = ""
                     },
                     cloudBackupState = cloudBackupState,
-                    onConnectCloud = null,
-                    onSyncNow = null,
-                    onDisconnectCloud = null,
-                    onChangeCloudAccount = null,
-                    onWifiOnly = null,
+                    onConnectCloud = {
+                        if (driveSyncRuntime == null) viewModel.showMessage("Konfigurasi OAuth Drive belum tersedia")
+                        else passwordMode = "DRIVE_CONNECT"
+                    },
+                    onSyncNow = {
+                        driveSyncRuntime?.let { runtime -> scope.launch { handleSyncResult(runtime.syncNow()) } }
+                    },
+                    onDisconnectCloud = {
+                        driveSyncRuntime?.let { runtime -> scope.launch { runtime.disconnect(); viewModel.showMessage("Google Drive diputuskan") } }
+                    },
+                    onChangeCloudAccount = {
+                        driveSyncRuntime?.let { runtime ->
+                            scope.launch {
+                                runtime.disconnect()
+                                passwordMode = "DRIVE_CONNECT"
+                            }
+                        }
+                    },
+                    onWifiOnly = { enabled ->
+                        cloudWifiOnly = enabled
+                        driveSyncRuntime?.let { runtime -> scope.launch { runtime.setWifiOnly(enabled) } }
+                    },
+                    onClearDriveData = {
+                        criticalAction = CriticalAction(
+                            "Hapus data Drive",
+                            "Semua snapshot KRON di Google Drive akan dihapus permanen. " +
+                                "Data di perangkat ini tetap aman. Tindakan ini tidak dapat dibatalkan.",
+                        ) {
+                            driveSyncRuntime?.let { runtime ->
+                                scope.launch { handleSyncResult(runtime.clearDriveData()) }
+                            }
+                        }
+                        criticalReason = ""
+                    },
                     onBudgetAlertsChanged = { enabled ->
                         if (!enabled) {
                             viewModel.setBudgetAlertsEnabled(false)
@@ -665,10 +761,55 @@ private fun MainScaffold(
             },
             onSubmit = { account, channel, amount, splits, title, note, unexpected, recurring, startDate, endDate, interval, recordNow, _, _ -> dialog = null; viewModel.addExpense(account, channel, amount, splits, title, note, unexpected, recurring, startDate, endDate, interval, recordNow, dialogReceiptUri, dialogCameraFile); dialogReceiptUri = null; dialogCameraFile = null },
         )
-        ActionDialog.TRANSFER -> TransferDialog(state, { dialog = null }) { fromAccount, fromChannel, toAccount, toChannel, amount, note -> dialog = null; viewModel.transfer(fromAccount, fromChannel, toAccount, toChannel, amount, note) }
+        ActionDialog.TRANSFER -> TransferDialog(state, { dialog = null }) { fromAccount, fromChannel, toAccount, toChannel, amount, note ->
+            dialog = null
+            criticalReason = ""
+            criticalAction = CriticalAction(
+                "Konfirmasi transfer",
+                "Dana ${displayMoney(amount, state.valuesVisible)} akan dipindahkan dari $fromChannel ke $toChannel.",
+            ) { reason -> viewModel.transfer(fromAccount, fromChannel, toAccount, toChannel, amount, listOf(note, reason).filter(String::isNotBlank).joinToString(" | ")) }
+        }
         ActionDialog.PORTFOLIO -> PortfolioDialog(state, { dialog = null }) { name, cadence, income, rollover, drafts, startDate, endDate, interval -> dialog = null; viewModel.createPortfolio(name, cadence, income, rollover, drafts, startDate, endDate, interval) }
-        ActionDialog.RESOLVE -> ResolveDialog(state, { dialog = null }, { source, target, amount, note -> dialog = null; viewModel.resolveFromAllocation(source, target, amount, note) }, { target, amount, note -> dialog = null; viewModel.resolveFromVault(target, amount, note) }, { target, amount, note -> dialog = null; viewModel.resolveFromRollover(target, amount, note) }, { target, amount, note -> dialog = null; viewModel.allocateUnallocated(target, amount, note) })
-        ActionDialog.CHANNEL_TRANSFER -> ChannelTransferDialog(state, { dialog = null }) { allocation, from, to, amount, note -> dialog = null; viewModel.transferBookedChannel(allocation, from, to, amount, note) }
+        ActionDialog.RESOLVE -> ResolveDialog(
+            state,
+            { dialog = null },
+            { source, target, amount, note ->
+                dialog = null
+                criticalReason = ""
+                criticalAction = CriticalAction("Konfirmasi realokasi", "Dana budget ${displayMoney(amount, state.valuesVisible)} akan dipindahkan antar kategori.") { reason ->
+                    viewModel.resolveFromAllocation(source, target, amount, listOf(note, reason).filter(String::isNotBlank).joinToString(" | "))
+                }
+            },
+            { target, amount, note ->
+                dialog = null
+                criticalReason = ""
+                criticalAction = CriticalAction("Konfirmasi penutupan overbudget", "Main Vault akan berkurang ${displayMoney(amount, state.valuesVisible)}.") { reason ->
+                    viewModel.resolveFromVault(target, amount, listOf(note, reason).filter(String::isNotBlank).joinToString(" | "))
+                }
+            },
+            { target, amount, note ->
+                dialog = null
+                criticalReason = ""
+                criticalAction = CriticalAction("Konfirmasi penggunaan reserve", "Reserve rollover akan berkurang ${displayMoney(amount, state.valuesVisible)}.") { reason ->
+                    viewModel.resolveFromRollover(target, amount, listOf(note, reason).filter(String::isNotBlank).joinToString(" | "))
+                }
+            },
+            { target, amount, note ->
+                dialog = null
+                criticalReason = ""
+                criticalAction = CriticalAction("Konfirmasi alokasi tertunda", "Pengeluaran tertunda ${displayMoney(amount, state.valuesVisible)} akan dipindahkan ke budget.") { reason ->
+                    viewModel.allocateUnallocated(target, amount, listOf(note, reason).filter(String::isNotBlank).joinToString(" | "))
+                }
+            },
+        )
+        ActionDialog.CHANNEL_TRANSFER -> ChannelTransferDialog(state, { dialog = null }) { allocation, from, to, amount, note ->
+            dialog = null
+            criticalReason = ""
+            criticalAction = CriticalAction(
+                "Konfirmasi transfer kanal",
+                "Dana terbooking ${displayMoney(amount, state.valuesVisible)} akan dipindahkan antara Cash dan eBudget.",
+            ) { reason -> viewModel.transferBookedChannel(allocation, from, to, amount, listOf(note, reason).filter(String::isNotBlank).joinToString(" | ")) }
+        }
         ActionDialog.ACCOUNT -> AccountDialog({ dialog = null }) { name, openingCash, openingEBudget -> dialog = null; viewModel.addAccount(name, openingCash, openingEBudget) }
         null -> Unit
     }
@@ -686,9 +827,22 @@ private fun MainScaffold(
                     cameraTargetEventId = eventId
                     showCameraCapture = true
                 },
+                onExportEvidence = { eventId ->
+                    pendingEvidenceRange = null
+                    pendingEvidenceEventId = eventId
+                    passwordMode = "EVIDENCE_EXPORT"
+                },
                 onRevert = { eventId, reason ->
-                    auditId = null
-                    viewModel.reverseEvent(eventId, reason)
+                    authenticateCriticalAction("Batalkan transaksi") {
+                        auditId = null
+                        viewModel.reverseEvent(eventId, reason)
+                    }
+                },
+                onCorrect = { eventId, title, note, reason ->
+                    authenticateCriticalAction("Koreksi transaksi") {
+                        auditId = null
+                        viewModel.correctEvent(eventId, title, note, reason)
+                    }
                 },
             )
         }
@@ -703,12 +857,34 @@ private fun MainScaffold(
         )
     }
     passwordMode?.let { mode ->
-        if (mode == "BACKUP" || mode == "RESTORE") {
-            PasswordDialog(mode == "BACKUP", { passwordMode = null }) { password ->
+        if (mode in setOf("BACKUP", "RESTORE", "EVIDENCE_EXPORT", "EVIDENCE_VERIFY")) {
+            val createsFile = mode == "BACKUP" || mode == "EVIDENCE_EXPORT"
+            PasswordDialog(
+                isBackup = createsFile,
+                onDismiss = {
+                    passwordMode = null
+                    if (mode == "EVIDENCE_EXPORT") {
+                        pendingEvidenceRange = null
+                        pendingEvidenceEventId = null
+                    }
+                },
+                titleOverride = when (mode) {
+                    "EVIDENCE_EXPORT" -> "Enkripsi paket bukti"
+                    "EVIDENCE_VERIFY" -> "Buka paket bukti"
+                    else -> null
+                },
+            ) { password ->
                 passwordMode = null
                 pendingPassword = password.toCharArray()
-                if (mode == "BACKUP") backupLauncher.launch("KRON-${LocalDate.now()}.kronbackup")
-                else restoreLauncher.launch(arrayOf("application/octet-stream", "application/zip", "*/*"))
+                when (mode) {
+                    "BACKUP" -> backupLauncher.launch("KRON-${LocalDate.now()}.kronbackup")
+                    "RESTORE" -> restoreLauncher.launch(arrayOf("application/octet-stream", "application/zip", "*/*"))
+                    "EVIDENCE_EXPORT" -> evidencePackageLauncher.launch(
+                        if (pendingEvidenceEventId != null) "KRON-bukti-transaksi-${LocalDate.now()}.kronevidence"
+                        else "KRON-bukti-${LocalDate.now()}.kronevidence",
+                    )
+                    "EVIDENCE_VERIFY" -> evidenceVerifyLauncher.launch(arrayOf("application/octet-stream", "*/*"))
+                }
             }
         } else {
             SyncPassphraseDialog(
@@ -742,8 +918,37 @@ private fun MainScaffold(
                     OutlinedTextField(criticalReason, { criticalReason = it }, label = { Text("Alasan wajib") }, modifier = Modifier.fillMaxWidth())
                 }
             },
-            confirmButton = { Button(onClick = { action.onConfirm(criticalReason); criticalAction = null }, enabled = criticalReason.isNotBlank()) { Text("Konfirmasi") } },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val reason = criticalReason
+                        authenticateCriticalAction(action.title) {
+                            action.onConfirm(reason)
+                            criticalAction = null
+                        }
+                    },
+                    enabled = criticalReason.isNotBlank(),
+                ) { Text("Konfirmasi") }
+            },
             dismissButton = { TextButton(onClick = { criticalAction = null }) { Text("Batal") } },
+        )
+    }
+    if (showEvidenceCenter) {
+        EvidenceCenterDialog(
+            health = evidenceHealth,
+            verification = evidenceVerification,
+            onDismiss = { showEvidenceCenter = false },
+            onRefresh = viewModel::refreshEvidenceHealth,
+            onExportPdf = { start, end ->
+                pendingEvidenceRange = start to end
+                evidencePdfLauncher.launch("KRON-pertanggungjawaban-${LocalDate.now()}.pdf")
+            },
+            onExportPackage = { start, end ->
+                pendingEvidenceRange = start to end
+                pendingEvidenceEventId = null
+                passwordMode = "EVIDENCE_EXPORT"
+            },
+            onVerifyPackage = { passwordMode = "EVIDENCE_VERIFY" },
         )
     }
     cloudConflict?.let { conflict ->
@@ -959,14 +1164,19 @@ private fun KronLogoMark() {
 }
 
 @Composable
-private fun PasswordDialog(isBackup: Boolean, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+private fun PasswordDialog(
+    isBackup: Boolean,
+    onDismiss: () -> Unit,
+    titleOverride: String? = null,
+    onConfirm: (String) -> Unit,
+) {
     var password by remember { mutableStateOf("") }
     var confirmation by remember { mutableStateOf("") }
     var visible by remember { mutableStateOf(false) }
     val valid = password.length >= 12 && (!isBackup || password == confirmation)
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (isBackup) "Enkripsi backup" else "Buka backup") },
+        title = { Text(titleOverride ?: if (isBackup) "Enkripsi backup" else "Buka backup") },
         text = {
             Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(

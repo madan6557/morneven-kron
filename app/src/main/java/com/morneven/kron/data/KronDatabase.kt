@@ -29,8 +29,13 @@ import com.morneven.kron.security.SqlCipherLibrary
         AuditSnapshotEntity::class,
         ReceiptEntity::class,
         SyncStateEntity::class,
+        LedgerAccountEntity::class,
+        LedgerLineEntity::class,
+        JournalSealEntity::class,
+        EvidenceKeyEntity::class,
+        ActorProfileEntity::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = true,
 )
 abstract class KronDatabase : RoomDatabase() {
@@ -44,13 +49,15 @@ abstract class KronDatabase : RoomDatabase() {
                 val appContext = context.applicationContext
                 val keyManager = DatabaseKeyManager(appContext)
                 val encryption = DatabaseEncryptionManager(appContext, keyManager)
-                val dbPath = appContext.getDatabasePath(DATABASE_NAME).absolutePath
-                val preparation = encryption.preparePrimaryDatabase(appContext.getDatabasePath(DATABASE_NAME))
+                val databaseFile = appContext.getDatabasePath(DATABASE_NAME)
+                val wasFreshInstall = !databaseFile.exists()
+                val dbPath = databaseFile.absolutePath
+                val preparation = encryption.preparePrimaryDatabase(databaseFile)
                 try {
                     val opened = Room.databaseBuilder(appContext, KronDatabase::class.java, DATABASE_NAME)
                         .openHelperFactory(encryption.openHelperFactory(dbPath, preparation.keyMode))
                         .addMigrations(*ALL_MIGRATIONS)
-                        .addCallback(SYNC_TRIGGER_CALLBACK)
+                        .addCallback(DATABASE_TRIGGER_CALLBACK)
                         .build()
                     val writableDatabase = opened.openHelper.writableDatabase
                     validateOpenedDatabase(writableDatabase)
@@ -61,6 +68,7 @@ abstract class KronDatabase : RoomDatabase() {
                     )
                     keyManager.confirmKeyProfile(preparation.keyMode)
                     preparation.guard?.commit()
+                    if (wasFreshInstall) encryption.markFreshDatabaseValidated()
                     opened.also { instance = it }
                 } catch (error: Exception) {
                     preparation.guard?.rollback()
@@ -73,7 +81,7 @@ abstract class KronDatabase : RoomDatabase() {
             SqlCipherLibrary.ensureLoaded()
             return Room.databaseBuilder(context.applicationContext, KronDatabase::class.java, name)
                 .addMigrations(*ALL_MIGRATIONS)
-                .addCallback(SYNC_TRIGGER_CALLBACK)
+                .addCallback(DATABASE_TRIGGER_CALLBACK)
                 .build()
         }
 
@@ -637,6 +645,225 @@ abstract class KronDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_12_13: Migration = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS ledger_accounts (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        code TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        kind TEXT NOT NULL,
+                        accountId INTEGER,
+                        fundingChannel TEXT,
+                        categoryId INTEGER,
+                        createdAt INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_ledger_accounts_code ON ledger_accounts(code)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_ledger_accounts_accountId ON ledger_accounts(accountId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_ledger_accounts_categoryId ON ledger_accounts(categoryId)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS ledger_lines (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        eventId TEXT NOT NULL,
+                        ledgerAccountId TEXT NOT NULL,
+                        side TEXT NOT NULL,
+                        amount INTEGER NOT NULL,
+                        accountId INTEGER,
+                        fundingChannel TEXT,
+                        categoryId INTEGER,
+                        correlationId TEXT,
+                        legacyBackfill INTEGER NOT NULL DEFAULT 0,
+                        FOREIGN KEY(eventId) REFERENCES activity_events(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                        FOREIGN KEY(ledgerAccountId) REFERENCES ledger_accounts(id) ON UPDATE NO ACTION ON DELETE RESTRICT
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_ledger_lines_eventId ON ledger_lines(eventId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_ledger_lines_ledgerAccountId ON ledger_lines(ledgerAccountId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_ledger_lines_accountId ON ledger_lines(accountId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_ledger_lines_correlationId ON ledger_lines(correlationId)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS evidence_keys (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        alias TEXT NOT NULL,
+                        algorithm TEXT NOT NULL,
+                        publicKeyBase64 TEXT NOT NULL,
+                        certificateBase64 TEXT NOT NULL,
+                        fingerprint TEXT NOT NULL,
+                        securityLevel TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        retiredAt INTEGER
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_evidence_keys_fingerprint ON evidence_keys(fingerprint)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS journal_seals (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        eventId TEXT NOT NULL,
+                        sequence INTEGER NOT NULL,
+                        previousChainHash TEXT NOT NULL,
+                        payloadHash TEXT NOT NULL,
+                        chainHash TEXT NOT NULL,
+                        signatureBase64 TEXT NOT NULL,
+                        recordedAtUtc INTEGER NOT NULL,
+                        timezoneId TEXT NOT NULL,
+                        deviceId TEXT NOT NULL,
+                        actor TEXT NOT NULL,
+                        appVersion TEXT NOT NULL,
+                        keyId TEXT NOT NULL,
+                        legacyBackfill INTEGER NOT NULL DEFAULT 0,
+                        FOREIGN KEY(eventId) REFERENCES activity_events(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                        FOREIGN KEY(keyId) REFERENCES evidence_keys(id) ON UPDATE NO ACTION ON DELETE RESTRICT
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_journal_seals_eventId ON journal_seals(eventId)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_journal_seals_sequence ON journal_seals(sequence)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_journal_seals_keyId ON journal_seals(keyId)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS actor_profiles (
+                        id INTEGER NOT NULL PRIMARY KEY,
+                        displayName TEXT NOT NULL,
+                        updatedAt INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "INSERT OR IGNORE INTO actor_profiles(id, displayName, updatedAt) VALUES(1, 'Pengguna lokal', strftime('%s','now') * 1000)",
+                )
+                db.execSQL("ALTER TABLE receipts ADD COLUMN origin TEXT NOT NULL DEFAULT 'LEGACY'")
+                db.execSQL("ALTER TABLE receipts ADD COLUMN evidenceEventId TEXT")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_receipts_evidenceEventId ON receipts(evidenceEventId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_activity_events_accountId_effectiveEpochDay ON activity_events(accountId, effectiveEpochDay)")
+
+                val nowExpression = "strftime('%s','now') * 1000"
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO ledger_accounts(id, code, name, kind, accountId, fundingChannel, categoryId, createdAt)
+                    VALUES
+                        ('income:general', '4000', 'Pemasukan', 'INCOME', NULL, NULL, NULL, $nowExpression),
+                        ('expense:general', '5000', 'Pengeluaran', 'EXPENSE', NULL, NULL, NULL, $nowExpression),
+                        ('equity:opening', '3000', 'Modal awal', 'EQUITY', NULL, NULL, NULL, $nowExpression),
+                        ('clearing:legacy', '9999', 'Legacy clearing', 'CLEARING', NULL, NULL, NULL, $nowExpression)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO ledger_accounts(id, code, name, kind, accountId, fundingChannel, categoryId, createdAt)
+                    SELECT 'asset:' || a.id || ':' || ch.channel,
+                           '1' || printf('%06d', a.id) || CASE ch.channel WHEN 'CASH' THEN '01' ELSE '02' END,
+                           a.name || ' ' || CASE ch.channel WHEN 'CASH' THEN 'Cash' ELSE 'eBudget' END,
+                           'ASSET', a.id, ch.channel, NULL, $nowExpression
+                    FROM accounts a
+                    CROSS JOIN (SELECT 'CASH' AS channel UNION ALL SELECT 'EBUDGET') ch
+                    """.trimIndent(),
+                )
+
+                // Ordinary cash movements are reconstructed without changing any
+                // historical event or amount. Ambiguous legacy counterparts use a
+                // dedicated clearing account and remain visibly marked as backfill.
+                db.execSQL(
+                    """
+                    INSERT INTO ledger_lines(eventId, ledgerAccountId, side, amount, accountId, fundingChannel, categoryId, correlationId, legacyBackfill)
+                    SELECT c.eventId,
+                           'asset:' || c.accountId || ':' || c.fundingChannel,
+                           CASE WHEN c.amount > 0 THEN 'DEBIT' ELSE 'CREDIT' END,
+                           ABS(c.amount), c.accountId, c.fundingChannel, NULL, e.relatedEventId, 1
+                    FROM cash_journal_lines c
+                    JOIN activity_events e ON e.id = c.eventId
+                    WHERE c.amount != 0 AND e.type NOT IN ('TRANSFER','CHANNEL_TRANSFER','REVERSAL')
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO ledger_lines(eventId, ledgerAccountId, side, amount, accountId, fundingChannel, categoryId, correlationId, legacyBackfill)
+                    SELECT c.eventId,
+                           CASE
+                               WHEN e.type = 'OPENING_BALANCE' THEN 'equity:opening'
+                               WHEN e.type IN ('INCOME','AUTOMATION') AND c.amount > 0 THEN 'income:general'
+                               WHEN e.type IN ('EXPENSE','UNEXPECTED_EXPENSE','AUTOMATION') AND c.amount < 0 THEN 'expense:general'
+                               ELSE 'clearing:legacy'
+                           END,
+                           CASE WHEN c.amount > 0 THEN 'CREDIT' ELSE 'DEBIT' END,
+                           ABS(c.amount), c.accountId, c.fundingChannel,
+                           (SELECT s.categoryId FROM transaction_splits s WHERE s.eventId = c.eventId ORDER BY s.id LIMIT 1),
+                           e.relatedEventId, 1
+                    FROM cash_journal_lines c
+                    JOIN activity_events e ON e.id = c.eventId
+                    WHERE c.amount != 0 AND e.type NOT IN ('TRANSFER','CHANNEL_TRANSFER','REVERSAL')
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO ledger_lines(eventId, ledgerAccountId, side, amount, accountId, fundingChannel, categoryId, correlationId, legacyBackfill)
+                    SELECT c.eventId, 'asset:' || c.accountId || ':' || c.fundingChannel,
+                           CASE WHEN c.amount > 0 THEN 'DEBIT' ELSE 'CREDIT' END,
+                           ABS(c.amount), c.accountId, c.fundingChannel, NULL, e.relatedEventId, 1
+                    FROM cash_journal_lines c
+                    JOIN activity_events e ON e.id = c.eventId
+                    WHERE c.amount != 0 AND e.type IN ('TRANSFER','CHANNEL_TRANSFER')
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO ledger_lines(eventId, ledgerAccountId, side, amount, accountId, fundingChannel, categoryId, correlationId, legacyBackfill)
+                    SELECT r.id, l.ledgerAccountId,
+                           CASE l.side WHEN 'DEBIT' THEN 'CREDIT' ELSE 'DEBIT' END,
+                           l.amount, l.accountId, l.fundingChannel, l.categoryId, r.relatedEventId, 1
+                    FROM activity_events r
+                    JOIN ledger_lines l ON l.eventId = r.relatedEventId
+                    WHERE r.type = 'REVERSAL'
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO ledger_lines(eventId, ledgerAccountId, side, amount, accountId, fundingChannel, categoryId, correlationId, legacyBackfill)
+                    SELECT c.eventId, 'asset:' || c.accountId || ':' || c.fundingChannel,
+                           CASE WHEN c.amount > 0 THEN 'DEBIT' ELSE 'CREDIT' END,
+                           ABS(c.amount), c.accountId, c.fundingChannel, NULL, e.relatedEventId, 1
+                    FROM cash_journal_lines c
+                    JOIN activity_events e ON e.id = c.eventId
+                    WHERE c.amount != 0 AND e.type = 'REVERSAL'
+                      AND NOT EXISTS(SELECT 1 FROM ledger_lines l WHERE l.eventId = e.relatedEventId)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO ledger_lines(eventId, ledgerAccountId, side, amount, accountId, fundingChannel, categoryId, correlationId, legacyBackfill)
+                    SELECT c.eventId, 'clearing:legacy',
+                           CASE WHEN c.amount > 0 THEN 'CREDIT' ELSE 'DEBIT' END,
+                           ABS(c.amount), c.accountId, c.fundingChannel, NULL, e.relatedEventId, 1
+                    FROM cash_journal_lines c
+                    JOIN activity_events e ON e.id = c.eventId
+                    WHERE c.amount != 0 AND e.type = 'REVERSAL'
+                      AND NOT EXISTS(SELECT 1 FROM ledger_lines l WHERE l.eventId = e.relatedEventId)
+                    """.trimIndent(),
+                )
+                // Historical cross-account and cross-channel movements were balanced
+                // globally, but did not carry the per-account/channel bridge required
+                // by the schema 13 budget subledger contract.
+                db.execSQL(
+                    """
+                    INSERT INTO budget_journal_lines(eventId, allocationId, bucket, fundingChannel, amount, accountId)
+                    SELECT eventId, NULL, 'EXTERNAL', fundingChannel, -SUM(amount), accountId
+                    FROM budget_journal_lines
+                    GROUP BY eventId, accountId, fundingChannel
+                    HAVING SUM(amount) != 0
+                    """.trimIndent(),
+                )
+                createAppendOnlyTriggers(db)
+                createSyncGenerationTriggers(db)
+            }
+        }
+
         private val ALL_MIGRATIONS = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
@@ -649,15 +876,18 @@ abstract class KronDatabase : RoomDatabase() {
             MIGRATION_9_10,
             MIGRATION_10_11,
             MIGRATION_11_12,
+            MIGRATION_12_13,
         )
 
-        private val SYNC_TRIGGER_CALLBACK = object : Callback() {
+        private val DATABASE_TRIGGER_CALLBACK = object : Callback() {
             override fun onCreate(db: SupportSQLiteDatabase) {
                 createSyncGenerationTriggers(db)
+                createAppendOnlyTriggers(db)
             }
 
             override fun onOpen(db: SupportSQLiteDatabase) {
                 createSyncGenerationTriggers(db)
+                createAppendOnlyTriggers(db)
             }
         }
 
@@ -694,6 +924,10 @@ abstract class KronDatabase : RoomDatabase() {
                 "transaction_splits",
                 "recurring_occurrences",
                 "audit_snapshots",
+                "ledger_accounts",
+                "ledger_lines",
+                "journal_seals",
+                "evidence_keys",
             )
             guardedTables.forEach { table ->
                 listOf("INSERT", "UPDATE", "DELETE").forEach { operation ->
@@ -713,6 +947,62 @@ abstract class KronDatabase : RoomDatabase() {
             }
         }
 
+        private fun createAppendOnlyTriggers(db: SupportSQLiteDatabase) {
+            val immutableTables = listOf(
+                "activity_events",
+                "cash_journal_lines",
+                "budget_journal_lines",
+                "transaction_splits",
+                "audit_snapshots",
+                "ledger_lines",
+                "journal_seals",
+                "evidence_keys",
+            )
+            immutableTables.forEach { table ->
+                listOf("UPDATE", "DELETE").forEach { operation ->
+                    db.execSQL(
+                        """
+                        CREATE TRIGGER IF NOT EXISTS append_only_${table}_${operation.lowercase()}
+                        BEFORE $operation ON $table
+                        BEGIN
+                            SELECT RAISE(ABORT, 'Catatan audit KRON bersifat append-only');
+                        END
+                        """.trimIndent(),
+                    )
+                }
+            }
+            db.execSQL(
+                """
+                CREATE TRIGGER IF NOT EXISTS append_only_receipts_update
+                BEFORE UPDATE ON receipts
+                WHEN NEW.eventId != OLD.eventId
+                  OR NEW.storageId != OLD.storageId
+                  OR NEW.displayName != OLD.displayName
+                  OR NEW.mimeType != OLD.mimeType
+                  OR NEW.byteSize != OLD.byteSize
+                  OR NEW.sha256 != OLD.sha256
+                  OR NEW.createdAt != OLD.createdAt
+                  OR COALESCE(NEW.capturedAt, -1) != COALESCE(OLD.capturedAt, -1)
+                  OR COALESCE(NEW.latitude, 999) != COALESCE(OLD.latitude, 999)
+                  OR COALESCE(NEW.longitude, 999) != COALESCE(OLD.longitude, 999)
+                  OR NEW.origin != OLD.origin
+                  OR COALESCE(NEW.evidenceEventId, '') != COALESCE(OLD.evidenceEventId, '')
+                BEGIN
+                    SELECT RAISE(ABORT, 'Metadata bukti KRON bersifat append-only');
+                END
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE TRIGGER IF NOT EXISTS append_only_receipts_delete
+                BEFORE DELETE ON receipts
+                BEGIN
+                    SELECT RAISE(ABORT, 'Bukti KRON bersifat append-only');
+                END
+                """.trimIndent(),
+            )
+        }
+
         private fun validateOpenedDatabase(db: SupportSQLiteDatabase) {
             val integrityOk = db.query("PRAGMA integrity_check").use { cursor ->
                 cursor.moveToFirst() && cursor.getString(0).equals("ok", ignoreCase = true)
@@ -720,6 +1010,34 @@ abstract class KronDatabase : RoomDatabase() {
             require(integrityOk) { "Integritas database KRON tidak valid" }
             val hasForeignKeyViolation = db.query("PRAGMA foreign_key_check").use { it.moveToFirst() }
             require(!hasForeignKeyViolation) { "Relasi database KRON tidak valid" }
+
+            val unbalancedLedger = scalar(
+                db,
+                """
+                SELECT COUNT(*) FROM (
+                    SELECT eventId,
+                           SUM(CASE WHEN side='DEBIT' THEN amount ELSE 0 END) AS debit,
+                           SUM(CASE WHEN side='CREDIT' THEN amount ELSE 0 END) AS credit
+                    FROM ledger_lines GROUP BY eventId HAVING debit != credit
+                )
+                """.trimIndent(),
+            )
+            require(unbalancedLedger == 0L) { "General ledger memiliki event tidak seimbang" }
+            val invalidLedgerLine = scalar(
+                db,
+                "SELECT COUNT(*) FROM ledger_lines WHERE amount <= 0 OR side NOT IN ('DEBIT','CREDIT')",
+            )
+            require(invalidLedgerLine == 0L) { "General ledger memiliki baris tidak valid" }
+            val unbalancedBudgetEvent = scalar(
+                db,
+                "SELECT COUNT(*) FROM (SELECT eventId FROM budget_journal_lines GROUP BY eventId HAVING SUM(amount) != 0)",
+            )
+            require(unbalancedBudgetEvent == 0L) { "Subledger budget memiliki event tidak seimbang" }
+            val unbalancedBudgetScope = scalar(
+                db,
+                "SELECT COUNT(*) FROM (SELECT eventId, accountId, fundingChannel FROM budget_journal_lines GROUP BY eventId, accountId, fundingChannel HAVING SUM(amount) != 0)",
+            )
+            require(unbalancedBudgetScope == 0L) { "Subledger budget per akun dan kanal tidak seimbang" }
 
             val cashTotal = scalar(db, "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines")
             val budgetTotal = scalar(
@@ -777,6 +1095,6 @@ abstract class KronDatabase : RoomDatabase() {
         }
 
         const val DATABASE_NAME = "kron-v4.db"
-        const val SCHEMA_VERSION = 12
+        const val SCHEMA_VERSION = 13
     }
 }

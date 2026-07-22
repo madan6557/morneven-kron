@@ -40,7 +40,9 @@
 
 ## Status Fitur Saat Ini
 
-- **Sync Google Drive**: OPSIONAL. Account dipilih melalui Credential Manager lalu diberi izin hanya untuk `drive.appdata`. Data seluler diizinkan secara bawaan. Build tetap memerlukan konfigurasi OAuth eksternal yang valid.
+- **Sync Google Drive (privat)**: TIDAK BERFUNGSI. Koneksi gagal di Credential Manager — selalu timeout ("Google tidak merespon") padahal webClientId sudah benar, GCP sudah diisi scope `drive.appdata`, test user sudah ditambahkan, internet aktif, Google Play Services versi 26. Kemungkinan Credential Manager tidak kompatibel penuh dengan perangkat. Belum ada solusi fix.
+- **OAuth GCP config**: Web client ID `677791134689-rb53arqc2k6ror17oku0pvm3nmfrcnkc.apps.googleusercontent.com` cocok dengan `kron-google.properties`. Android client `677791134689-onu28oduh8h4ql632h8aphh4nad1qjbr.apps.googleusercontent.com` untuk Play Services AuthorizationClient. Kedua scope `drive.appdata` (sync private, ekstensi `.krondrive`) dan `drive.file` (team/share, ekstensi `.kronshare`) sudah ditambahkan di OAuth consent screen. Status masih `Testing`.
+- **Rencana sync private**: Jika Credential Manager tidak bisa dipakai, opsi alternatif adalah bypass langsung ke Play Services AuthorizationClient (tanpa pemilih akun via Credential Manager).
 - **Backup/Restore (.kronbackup)**: TERVALIDASI DI STAGING. Backup v1/v2 tetap diterima, kandidat restore dimigrasikan, diperiksa, dienkripsi SQLCipher, lalu dijadwalkan untuk swap atomik saat cold start.
 - **Kamera (foto bukti)**: SUDAH BERFUNGSI. Menggunakan CameraX (bukan delegasi intent). Izin CAMERA diminta runtime.
 - **Isolasi akun**: Setiap akun punya portfolio, transaksi, Vault, receipt, dan laporan sendiri. Data lama yang ambigu ditempatkan pada akun nonaktif `Data KRON Lama`, tidak ditampilkan pada akun operasional.
@@ -440,84 +442,43 @@ Semua fitur F1, F4, F6 sudah diimplementasi dan dirilis.
 - **Riwayat budget**: BudgetHistoryDialog dengan daftar semua periode (1.3.17)
 - **Grafik batang**: Planned vs spent per periode (1.3.18)
 
-### Fase 3 -- Sync dan Backup (BERMASALAH)
+### Fase 3 -- Sync Drive Privat (.krondrive) -- BERMASALAH
 
-**Google Drive Sync**: DINONAKTIFKAN. Kode tetap ada tapi tidak dapat digunakan karena infrastruktur OAuth/credential manager belum berfungsi dengan baik. Tidak ada target perbaikan saat ini.
+**Google Drive Sync (privat)**: TIDAK BERFUNGSI. Koneksi gagal di tahap Credential Manager — selalu timeout 30 detik ("Google tidak merespon"). Penyebab belum pasti. Tidak ada target perbaikan saat ini.
 
-**Backup/Restore (.kronbackup)**: BERMASALAH. Proses restore rentan gagal di tengah, tidak ada rollback solid. Validasi backup lama belum sempurna. Perlu perbaikan menyeluruh sebelum bisa diandalkan untuk pemulihan data.
+**Detail masalah**:
+- Credential Manager `getCredential()` timeout setelah 30 detik
+- Web client ID sudah benar: `677791134689-rb53arqc2k6ror17oku0pvm3nmfrcnkc.apps.googleusercontent.com`
+- Android client ID: `677791134689-onu28oduh8h4ql632h8aphh4nad1qjbr.apps.googleusercontent.com`
+- Scope `drive.appdata` sudah ditambahkan di GCP OAuth consent screen
+- Test user (email pemilik) sudah terdaftar
+- Internet aktif, Google Play Services versi 26.26.34
+- Kemungkinan: Credential Manager tidak kompatibel penuh dengan perangkat
 
-### Fase 4 -- F5 Akun Team (DITUNDA)
+**Rencana**: Jika Credential Manager tidak bisa dipakai, bypass langsung ke Play Services AuthorizationClient (tanpa ID token). TIDAK DIPRIORITASKAN.
 
-**Target**: ~~Kolaborasi Drive-based viewer untuk 1-5 orang.~~ **Implementasi ditunda sampai diputuskan siap.**
+### Fase 3b -- Backup/Restore (.kronbackup) -- PERLU PERBAIKAN
 
-Desain dan analisis F5 tetap didokumentasikan di bawah ini untuk referensi jika implementasi dilanjutkan di masa depan.
+Proses restore bisa gagal di tengah, rollback belum solid. Tidak ada target perbaikan saat ini.
 
-#### F5 -- Akun Team MVP (Estimasi: 10-14 hari, tidak berlaku)
-1. **Data layer**:
-   - Field baru di `AccountEntity`:
-     - `isTeam: Boolean = false`
-     - `teamFileId: String? = null`
-     - `teamEncryptedKey: String? = null`
-     - `isTeamOwner: Boolean = false`
-   - Definisikan ulang jenis akun: isTeam menentukan apakah akun privat atau team
-    - ~~Migration 8->9~~ (tidak relevan -- F5 ditunda, schema sudah jauh berkembang)
-2. **Enkripsi blob** (`sync/TeamSnapshotManager.kt`):
-   - Generate AES-256-GCM key random
-   - Ekspor data akun team (transaksi terkait, allocation terkait, saldo) ke format JSON
-   - Enkripsi JSON -> blob biner dengan format: magic + nonce + ciphertext + tag
-   - Dekripsi: baca magic -> nonce -> ciphertext -> decrypt -> parse JSON
-   - Integrasi dengan existing DriveAppDataClient untuk upload/download
-3. **Invite code system**:
-   - Generate: `KRON-TM-{base64url(fileId)}-{base64url(wrappedKey)}-{checksum}`
-   - Parsing: regex `KRON-TM-([A-Za-z0-9_-]+)-([A-Za-z0-9_-]+)-([A-Za-z0-9_-]{2})`
-   - Validasi: checksum sederhana (XOR seluruh karakter -> 2 char hex)
-   - Tampilkan di UI sebagai teks + QR Code
-4. **Owner auto sync**:
-   - Hook di KronRepository: setelah transaksi/create/update yang melibatkan akun team
-   - Trigger: `teamSnapshotManager.scheduleSync(accountId)` 
-   - WorkManager: debounce 30 detik (tunggu perubahan selesai)
-   - Upload: encrypted blob ke Drive file (update existing fileId)
-   - Status: MutableStateFlow di viewModel untuk UI indikator
-5. **Member viewer**:
-   - Saat pertama join: setelah input invite code, download blob, simpan key
-   - Setiap refresh: download blob terbaru, update state lokal
-   - UI: akun team muncul di Home/Budget/Activity dengan badge "[Tim]"
-   - Filter activities: hanya events yang terkait dengan akun team
-   - Budget: hanya allocation yang terkait dengan portfolio di akun team
-   - Read-only enforcement:
-     - FAB disembunyikan saat akun team aktif
-     - Tombol income/expense/transfer di-disable
-     - BudgetDetailDialog dengan readOnly=true
-     - Settings: tidak ada edit/arsip
-6. **Manual refresh**:
-   - Pull-to-refresh (SwipeRefresh) di halaman Home/Budget/Activity
-   - Tombol `↻` kecil di kartu akun team (HomeScreen)
-   - "Periksa update" di settings akun team
-   - Loading indicator saat sync
-7. **Background polling**:
-   - WorkManager periodic 30 menit (existsFor akun team)
-   - Bandingkan generation counter atau file modification time
-   - Jika berubah: download, update state, kirim notifikasi
-8. **Notifikasi**:
-   - Channel notifikasi: "Pembaruan Tim"
-   - Judul: "Data [Nama Tim] diperbarui"
-   - Body: "Ada transaksi baru. Ketuk untuk melihat."
-   - Intent: buka app -> refresh data -> navigasi ke halaman akun team
-9. **Testing**:
-   - Enkripsi/dekripsi blob dengan berbagai dataset
-   - Parse invite code valid dan invalid
-   - Mock Drive API: upload, download, file not found, permission denied
-    - Read-only enforcement: coba semua aksi sebagai member
-    - Migration test (nomor migration perlu disesuaikan dengan schema terbaru jika implementasi dilanjutkan)
+### Fase 4 -- F5 Akun Team / Kolaborasi (.kronshare) -- DITUNDA
 
-### Catatan Lintas Fase
+**Konsep**: Team workspace via Google Drive, berbasis file `.kronshare` dengan scope `drive.file`. Owner single-writer, member read-only viewer.
 
-- Setiap rilis harus mengikuti aturan AGENTS.md: migration test, backup round trip, financial invariants, lint, release build
-- F2 sudah selesai di 1.1.5
-- F3 (CameraX) sudah berfungsi. Izin CAMERA runtime diperlukan. ACCESS_FINE_LOCATION untuk geotag belum diimplementasi.
-- F5 (Akun Team): DITUNDA. Infrastruktur Drive (DriveSyncRuntime, DriveAppDataClient, DriveSnapshotCrypto) ada tapi tidak bisa dipakai karena OAuth bermasalah. Jika dilanjutkan, perlu redesain arsitektur (lihat Rekomendasi F5 di Analisis Teknis).
-- Google Drive Sync (privat) dinonaktifkan karena OAuth/Credential Manager tidak berfungsi.
-- Backup/Restore (.kronbackup) bermasalah -- rentan gagal di tengah, tanpa rollback solid.
+**Perubahan desain** (berdasarkan diskusi 2026-07-22):
+- Ekstensi file: `.kronshare` untuk team, `.krondrive` untuk sync private
+- Scope `drive.file` untuk team (bisa di-share via ACL Google Drive), bukan `appDataFolder`
+- Mekanisme invite via permission Drive (email-based), bukan invite code base64
+- GCP OAuth consent screen sudah punya kedua scope (`drive.appdata` + `drive.file`)
+
+**Blocking issues**:
+1. Fondasi Drive (DriveSyncRuntime, Credential Manager) belum stabil
+2. Sync private `.krondrive` harus berfungsi dulu sebelum team
+3. Perlu implementasi bypass Credential Manager
+
+**Tidak akan dimulai** sampai fondasi Drive privat sudah berfungsi dan stabil.
+
+Desain lama F5 (di bawah "Analisis Teknis") tetap dipertahankan sebagai referensi arsitektur.
 
 ---
 
@@ -1224,3 +1185,25 @@ Sebuah fitur dianggap selesai hanya jika:
   - Pengguna baru: setelah seed, accounts non-empty, onboardingComplete=false -> tampil OnboardingScreen
   - Pengguna lama: saat state termuat, accounts non-empty, onboardingComplete=true -> langsung ke konten utama
 - **Release**: 1.3.20 (versionCode 51) -- APK, SHA-256, R8 mapping, schema-11.json diarsipkan di releases/1.3.20/
+
+### 2026-07-22 - Sesi 4: Fix validasi seal jurnal untuk income
+
+- **Tiket**: "Total split tidak sesuai pengeluaran" error setiap tambah pemasukan
+- **Akar masalah**: `LedgerPostingEngine.validateSealable()` bandingkan total split dengan `cashOutflow` saja (filter negatif). Income hanya punya cash inflow (positif), jadi `cashMagnitude=0` tapi split sum > 0.
+- **Fix**: Ganti `filter { it.amount < 0 }.sumOf { -it.amount }` jadi `sumOf { abs(it.amount) }` -- mencakup inflow dan outflow.
+- **Release**: 1.5.1 (versionCode 61) -- diinstall via ADB, APK diarsipkan di releases/1.5.1/
+
+### 2026-07-22 - Sesi 5: Diagnosa Drive Sync + Update Roadmap
+
+- **Masalah**: Drive Sync gagal di Credential Manager -- timeout 30 detik "Google tidak merespon"
+- **Pemeriksaan**:
+  - Web client ID: `677791134689-rb53arqc2k6ror17oku0pvm3nmfrcnkc.apps.googleusercontent.com` cocok dengan file di `Secret/`
+  - Android client: `677791134689-onu28oduh8h4ql632h8aphh4nad1qjbr.apps.googleusercontent.com`
+  - Scope `drive.appdata` + `drive.file` sudah ditambahkan di GCP OAuth consent screen
+  - Test user sudah terdaftar, internet aktif, Google Play Services versi 26.26.34
+  - Belum ketemu penyebab pasti -- kemungkinan Credential Manager tidak kompatibel penuh dengan perangkat
+- **Rencana**:
+  - Ekstensi file: `.krondrive` untuk sync private, `.kronshare` untuk team/share
+  - Scope `drive.appdata` untuk private, `drive.file` untuk team
+  - Bypass Credential Manager mungkin diperlukan (langsung ke AuthorizationClient)
+  - F5 team ditunda sampai fondasi Drive privat stabil

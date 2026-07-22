@@ -1,6 +1,6 @@
 # KRON
 
-Current release: KRON 1.4.7 Full Release LTS.
+Current release: KRON 1.5.0.
 
 KRON adalah aplikasi pencatatan keuangan Android local-first untuk pemasukan, pengeluaran, transfer, RAB bulanan atau tahunan, otomatisasi, resolving budget, audit immutable, laporan, serta backup terenkripsi.
 
@@ -12,15 +12,17 @@ KRON adalah aplikasi pencatatan keuangan Android local-first untuk pemasukan, pe
 - Main Vault menyimpan dana tersedia yang belum dibooking.
 - Kategori budget dapat memakai komposisi Cash dan eBudget.
 - Transfer dapat memindahkan dana antar akun, antar kanal, atau keduanya.
-- Seluruh perubahan finansial memakai jurnal append-only. Koreksi dan revert menghasilkan event baru.
+- Seluruh perubahan finansial memakai jurnal append-only dan general ledger double-entry. Koreksi dan reversal menghasilkan event baru.
 - Invariant total dan per kanal diperiksa setelah operasi finansial.
+- Timeline memakai render lazy dan pemuatan bertahap agar daftar panjang tetap responsif.
 
 ## Data dan keamanan
 
-- Database Room schema 12 dienkripsi menggunakan SQLCipher dan kunci acak yang dibungkus Android Keystore. Upgrade dari database plaintext lama dilakukan melalui staging tervalidasi agar database aktif tidak diganti bila validasi gagal.
-- `.kronbackup` v2 memakai AES-256-GCM, PBKDF2-HMAC-SHA256, checksum, staging, dan validasi sebelum restore.
-- Importer tetap membaca backup v1.
-- Foto bukti disimpan terenkripsi pada penyimpanan privat aplikasi dan ikut dalam backup v2.
+- Database Room schema 13 dienkripsi menggunakan SQLCipher dan kunci acak yang dibungkus Android Keystore. Upgrade mewajibkan backup eksternal terverifikasi dan memiliki salinan pemulihan privat sampai dua cold launch berhasil.
+- `.kronbackup` v3 memakai AES-256-GCM, PBKDF2-HMAC-SHA256 600.000 iterasi, checksum, staging, dan validasi sebelum restore.
+- Importer tetap membaca backup produksi v1 dan v2.
+- Foto bukti asli disimpan terenkripsi pada penyimpanan privat aplikasi dan ikut dalam backup.
+- Pusat Bukti dapat memeriksa hash chain, mengekspor PDF, membuat paket `.kronevidence`, dan memverifikasi tanda tangan ECDSA P-256.
 - Sinkronisasi Google Drive bersifat opsional. Snapshot dienkripsi sebelum disimpan pada `appDataFolder` akun yang dipilih.
 - KRON tidak memakai backend, Firebase, analytics, iklan, atau billing Google Cloud.
 
@@ -40,6 +42,6 @@ Perintah verifikasi:
 .\gradlew.bat :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin :app:lintDebug :app:assembleRelease
 ```
 
-APK release berada di `app/build/outputs/apk/release/KRON-1.4.7.apk`.
+APK release berada di `app/build/outputs/apk/release/KRON-1.5.0.apk`.
 
 Konfigurasi signing dibaca dari `%USERPROFILE%/.android/kron-signing.properties`. Konfigurasi OAuth opsional dijelaskan pada [OAUTH_SETUP.md](OAUTH_SETUP.md). Jangan pernah menyimpan signing key, password, token, client secret, atau data finansial di repository.

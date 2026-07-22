@@ -43,7 +43,7 @@ class PreUpgradeBackupManager(private val context: Context) {
             encryption.exportPlaintext(primary, portable)
             validatePortableDatabase(portable)
             val attachments = extractAttachments(portable, workspace)
-            val staged = File(workspace, "KRON-pre-upgrade-1.4.7.kronbackup")
+            val staged = File(workspace, "KRON-pre-upgrade-1.5.0.kronbackup")
             writeBackup(staged, portable, attachments, password)
             verifyBackup(staged, password)
             val output = context.contentResolver.openOutputStream(uri, "w")

@@ -2,8 +2,10 @@ package com.morneven.kron.sync
 
 import java.io.IOException
 import java.util.UUID
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 
 internal sealed interface SyncDecision {
     data class Upload(val parentSnapshotId: String?) : SyncDecision
@@ -140,6 +142,9 @@ class DriveSyncCoordinator(
     private val snapshotIdFactory: () -> String = { UUID.randomUUID().toString() },
     private val syncMutex: Mutex = Mutex(),
 ) {
+    companion object {
+        private const val SYNC_TIMEOUT_MILLIS = 180_000L
+    }
     suspend fun syncNow(): SyncRunResult = syncMutex.withLock { syncNowLocked() }
 
     suspend fun validatePassphrase(remoteHint: RemoteDriveSnapshot? = null): SyncRunResult = syncMutex.withLock {
@@ -195,10 +200,14 @@ class DriveSyncCoordinator(
             return SyncRunResult.RestartRequired(initialState.lastSnapshotId ?: "pending-restore")
         }
         if (initialState.disabledDueToBilling) return SyncRunResult.FreeOnlyBlocked
-        val tokenResult = authorization.accessToken(interactive = false)
-        if (tokenResult !is DriveAccessTokenResult.Granted) return handleTokenFailure(tokenResult)
+        if (initialState.status == SyncStatus.SYNCING) {
+            stateStore.update { it.copy(status = SyncStatus.ERROR, lastError = "Sinkron sebelumnya terputus") }
+        }
+        return withTimeout(SYNC_TIMEOUT_MILLIS) {
+            val tokenResult = authorization.accessToken(interactive = false)
+            if (tokenResult !is DriveAccessTokenResult.Granted) return@withTimeout handleTokenFailure(tokenResult)
 
-        return try {
+            try {
             stateStore.update {
                 it.copy(
                     status = SyncStatus.SYNCING,
@@ -250,6 +259,7 @@ class DriveSyncCoordinator(
             }
         } catch (error: Throwable) {
             handleFailure(error)
+        }
         }
     }
 
@@ -328,6 +338,39 @@ class DriveSyncCoordinator(
                 )
             }
         }
+    }
+
+    suspend fun clearDriveData(): SyncRunResult = syncMutex.withLock {
+        val state = stateStore.read()
+        if (state.status == SyncStatus.DISCONNECTED || state.status == SyncStatus.DISABLED) {
+            return SyncRunResult.NoChanges
+        }
+        val tokenResult = authorization.accessToken(interactive = false)
+        if (tokenResult !is DriveAccessTokenResult.Granted) return handleTokenFailure(tokenResult)
+        try {
+            drive.listSnapshots(tokenResult.accessToken).forEach {
+                drive.deleteSnapshot(tokenResult.accessToken, it.fileId)
+            }
+        } catch (error: Throwable) {
+            return handleFailure(error)
+        }
+        try {
+            authorization.disconnect()
+        } finally {
+            stateStore.update {
+                it.copy(
+                    status = SyncStatus.DISCONNECTED,
+                    lastSnapshotId = null,
+                    parentSnapshotId = null,
+                    lastSyncedGeneration = -1,
+                    conflictRemoteFileId = null,
+                    lastError = null,
+                    accountSubject = null,
+                    accountEmail = null,
+                )
+            }
+        }
+        SyncRunResult.NoChanges
     }
 
     private suspend fun uploadActive(
@@ -523,6 +566,7 @@ class DriveSyncCoordinator(
         }
         is DriveApiException -> recordError(error.message.orEmpty(), error.retryable)
         is IOException -> recordError("Jaringan tidak tersedia", retryable = true)
+        is TimeoutCancellationException -> recordError("Sinkronisasi terputus (terlalu lama)", retryable = true)
         else -> recordError(error.message ?: "Sinkronisasi gagal", retryable = false)
     }
 

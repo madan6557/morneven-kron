@@ -1,6 +1,7 @@
 package com.morneven.kron.data
 
 import androidx.room.withTransaction
+import com.morneven.kron.audit.LedgerPostingEngine
 import java.time.LocalDate
 import java.time.YearMonth
 import java.util.UUID
@@ -75,6 +76,7 @@ object ScheduleCalculator {
 @Singleton
 class KronRepository @Inject constructor(
     private val database: KronDatabase,
+    private val ledgerPostingEngine: LedgerPostingEngine,
 ) {
     private val dao = database.kronDao()
 
@@ -132,6 +134,7 @@ class KronRepository @Inject constructor(
     suspend fun isFirstInstall(): Boolean = dao.accountCount() == 0
 
     suspend fun seedIfNeeded() = database.withTransaction {
+        ledgerPostingEngine.validateAll()
         if (dao.syncState() == null) {
             dao.upsertSyncState(
                 SyncStateEntity(
@@ -408,6 +411,8 @@ class KronRepository @Inject constructor(
         ))
         dao.insertBudgetLines(listOf(
             BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = fromChannel, amount = -amount, accountId = fromAccountId),
+            BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.EXTERNAL, fundingChannel = fromChannel, amount = amount, accountId = fromAccountId),
+            BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.EXTERNAL, fundingChannel = toChannel, amount = -amount, accountId = toAccountId),
             BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = toChannel, amount = amount, accountId = toAccountId),
         ))
         dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = if (fromAccountId == toAccountId) "Konversi komposisi kanal Main Vault" else "Transfer dana Main Vault antar akun", beforeJson = "{\"accountId\":$fromAccountId,\"channel\":\"$fromChannel\"}", afterJson = "{\"accountId\":$toAccountId,\"channel\":\"$toChannel\",\"amount\":$amount}"))
@@ -727,6 +732,8 @@ class KronRepository @Inject constructor(
         ))
         dao.insertBudgetLines(listOf(
             BudgetJournalLineEntity(eventId = eventId, allocationId = source.id, fundingChannel = source.fundingChannel, amount = -amount, accountId = fromAccountId),
+            BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.EXTERNAL, fundingChannel = source.fundingChannel, amount = amount, accountId = fromAccountId),
+            BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.EXTERNAL, fundingChannel = target.fundingChannel, amount = -amount, accountId = toAccountId),
             BudgetJournalLineEntity(eventId = eventId, allocationId = target.id, fundingChannel = target.fundingChannel, amount = amount, accountId = toAccountId),
         ))
         dao.insertAudit(AuditSnapshotEntity(
@@ -742,7 +749,7 @@ class KronRepository @Inject constructor(
 
     suspend fun reverseEvent(originalEventId: String, reason: String) = database.withTransaction {
         val original = requireNotNull(dao.eventById(originalEventId))
-        require(original.reversedByEventId == null) { "Event sudah dibalik" }
+        require(!dao.isEventReversed(originalEventId)) { "Event sudah dibalik" }
         require(original.type != LedgerType.REVERSAL) { "Reversal tidak dapat dibalik langsung" }
         require(original.type !in setOf(LedgerType.ARCHIVE, LedgerType.RESTORE)) { "Gunakan tindakan Pulihkan atau Arsipkan dari halaman terkait" }
         val eventId = UUID.randomUUID().toString()
@@ -761,12 +768,91 @@ class KronRepository @Inject constructor(
         val budget = dao.budgetLinesForEvent(originalEventId).map { BudgetJournalLineEntity(eventId = eventId, allocationId = it.allocationId, bucket = it.bucket, fundingChannel = it.fundingChannel, amount = -it.amount, accountId = it.accountId) }
         if (cash.isNotEmpty()) dao.insertCashLines(cash)
         if (budget.isNotEmpty()) dao.insertBudgetLines(budget)
-        dao.updateEvent(original.copy(reversedByEventId = eventId))
         val affectedPeriods = budget.mapNotNull { it.allocationId }.mapNotNull { dao.allocationById(it)?.periodId }.distinct()
         for (periodId in affectedPeriods) refreshPeriodStatus(periodId)
         dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = reason, beforeJson = "{\"event\":\"$originalEventId\"}", afterJson = "{\"reversedBy\":\"$eventId\"}"))
         assertInvariant()
         eventId
+    }
+
+    suspend fun correctEvent(
+        originalEventId: String,
+        correctedTitle: String,
+        correctedNote: String,
+        reason: String,
+    ) = database.withTransaction {
+        require(correctedTitle.isNotBlank()) { "Judul koreksi wajib diisi" }
+        require(reason.isNotBlank()) { "Alasan koreksi wajib diisi" }
+        val original = requireNotNull(dao.eventById(originalEventId)) { "Event asli tidak ditemukan" }
+        require(original.type in setOf(LedgerType.INCOME, LedgerType.EXPENSE, LedgerType.UNEXPECTED_EXPENSE, LedgerType.OPENING_BALANCE)) {
+            "Jenis event ini tidak dapat dikoreksi dari form transaksi"
+        }
+        require(!dao.isEventReversed(originalEventId)) { "Event sudah dibalik" }
+        val correlationId = UUID.randomUUID().toString()
+        val reversalId = UUID.randomUUID().toString()
+        val replacementId = UUID.randomUUID().toString()
+        dao.insertEvent(
+            ActivityEventEntity(
+                id = correlationId,
+                type = LedgerType.CORRECTION,
+                title = "Koreksi: ${original.title}",
+                note = reason,
+                source = "USER",
+                effectiveEpochDay = LocalDate.now().toEpochDay(),
+                relatedEventId = originalEventId,
+                accountId = original.accountId,
+            ),
+        )
+        dao.insertEvent(
+            ActivityEventEntity(
+                id = reversalId,
+                type = LedgerType.REVERSAL,
+                title = "Pembalikan untuk koreksi: ${original.title}",
+                note = reason,
+                source = "USER",
+                effectiveEpochDay = LocalDate.now().toEpochDay(),
+                relatedEventId = originalEventId,
+                accountId = original.accountId,
+            ),
+        )
+        dao.insertEvent(
+            original.copy(
+                id = replacementId,
+                title = correctedTitle.trim(),
+                note = correctedNote.trim(),
+                createdAt = System.currentTimeMillis(),
+                relatedEventId = correlationId,
+                reversedByEventId = null,
+            ),
+        )
+        val originalCash = dao.cashLinesForEvent(originalEventId)
+        val originalBudget = dao.budgetLinesForEvent(originalEventId)
+        val originalSplits = dao.splitsForEvent(originalEventId)
+        if (originalCash.isNotEmpty()) {
+            dao.insertCashLines(originalCash.map { it.copy(id = 0, eventId = reversalId, amount = -it.amount) })
+            dao.insertCashLines(originalCash.map { it.copy(id = 0, eventId = replacementId) })
+        }
+        if (originalBudget.isNotEmpty()) {
+            dao.insertBudgetLines(originalBudget.map { it.copy(id = 0, eventId = reversalId, amount = -it.amount) })
+            dao.insertBudgetLines(originalBudget.map { it.copy(id = 0, eventId = replacementId) })
+        }
+        if (originalSplits.isNotEmpty()) {
+            dao.insertSplits(originalSplits.map { it.copy(id = 0, eventId = replacementId) })
+        }
+        dao.insertAudit(
+            AuditSnapshotEntity(
+                eventId = correlationId,
+                reason = reason,
+                beforeJson = "{\"eventId\":\"$originalEventId\",\"title\":\"${original.title}\"}",
+                afterJson = "{\"eventId\":\"$replacementId\",\"title\":\"${correctedTitle.trim()}\"}",
+            ),
+        )
+        dao.insertAudit(AuditSnapshotEntity(eventId = reversalId, reason = reason, beforeJson = "{\"eventId\":\"$originalEventId\"}", afterJson = "{\"reversedBy\":\"$reversalId\"}"))
+        dao.insertAudit(AuditSnapshotEntity(eventId = replacementId, reason = reason, beforeJson = "{\"eventId\":\"$originalEventId\"}", afterJson = "{\"replacementEventId\":\"$replacementId\"}"))
+        originalBudget.mapNotNull { it.allocationId }.mapNotNull { dao.allocationById(it)?.periodId }.distinct()
+            .forEach { refreshPeriodStatus(it) }
+        assertInvariant()
+        replacementId
     }
 
     suspend fun addRecurringRule(rule: RecurringRuleEntity) = database.withTransaction {
@@ -783,6 +869,7 @@ class KronRepository @Inject constructor(
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(eventId, LedgerType.SYSTEM, "Jadwal transaksi dihentikan", reason, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
         dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = reason, beforeJson = "{\"ruleId\":\"$ruleId\",\"paused\":false}", afterJson = "{\"ruleId\":\"$ruleId\",\"paused\":true}"))
+        assertInvariant()
     }
 
     suspend fun resumeRecurringRule(
@@ -1088,6 +1175,10 @@ class KronRepository @Inject constructor(
     }
 
     private suspend fun assertInvariant() {
+        ledgerPostingEngine.finalizeUnsealedEvents()
+        if (dao.unbalancedLedgerEvents().isNotEmpty()) {
+            throw LedgerInvariantException("General ledger memiliki event tidak seimbang")
+        }
         if (dao.accountCount() > 0 && dao.activeAccountCount() != 1) {
             throw LedgerInvariantException("Harus ada tepat satu akun aktif")
         }
@@ -1113,9 +1204,10 @@ class KronRepository @Inject constructor(
                 }
             }
         }
-        val newest = dao.allEvents().lastOrNull()
-        if (newest != null && dao.budgetEventTotal(newest.id) != 0L && dao.budgetLinesForEvent(newest.id).isNotEmpty()) {
-            throw LedgerInvariantException("Budget event ${newest.id} tidak seimbang")
+        dao.allEvents().forEach { event ->
+            if (dao.budgetEventTotal(event.id) != 0L && dao.budgetLinesForEvent(event.id).isNotEmpty()) {
+                throw LedgerInvariantException("Budget event ${event.id} tidak seimbang")
+            }
         }
     }
 }

@@ -1,5 +1,46 @@
 # KRON Changelog
 
+## 1.5.0 - 2026-07-22
+
+- Menambahkan general ledger double-entry schema 13 dengan akun aset Cash/eBudget, modal awal, pemasukan, pengeluaran, transfer, reversal, dan legacy clearing.
+- Seluruh event finansial baru divalidasi agar debit sama dengan kredit. Subledger budget divalidasi seimbang per event.
+- Menambahkan rantai hash append-only dan tanda tangan ECDSA P-256 dari Android Keystore, termasuk actor lokal, zona waktu, device ID, dan versi aplikasi.
+- Event, baris kas, subledger budget, split, audit, seal, dan metadata bukti dilindungi trigger database dari update atau delete.
+- Reversal tidak lagi mengubah event asli. Koreksi membuat grup atomik berisi event koreksi, reversal, event pengganti, alasan, dan snapshot audit.
+- Foto bukti kamera disimpan dari byte asli tanpa kompresi. Asal CAMERA, GALLERY, atau LEGACY, checksum SHA-256, ukuran, waktu capture, dan lokasi opsional disimpan sebagai metadata immutable.
+- Menambahkan Pusat Bukti untuk pemeriksaan kesehatan ledger, PDF pertanggungjawaban, paket `.kronevidence` terenkripsi, dan verifikasi checksum serta signature.
+- Paket bukti memakai AES-256-GCM dan PBKDF2-HMAC-SHA256 600.000 iterasi. Nominal `Long` ditulis sebagai string dalam canonical JSON.
+- CSV ditambah event ID, waktu efektif dan pencatatan, debit, kredit, kanal, reversal, hash lampiran, dan status audit.
+- Sinkronisasi Google Drive kembali dapat dikendalikan dari Pengaturan dan data seluler menjadi perilaku bawaan ketika opsi Wi-Fi saja mati.
+- Daftar operasional memakai komponen lazy dan detail bukti membatasi rendering awal agar tetap ringan pada dataset besar.
+- UI hanya menampilkan `KRON 1.5.0` tanpa label Full Release atau LTS.
+- Kontrak SQLCipher passphrase KRON 1.4.7 dipertahankan tanpa rekey. Raw-key 1.4.x tetap hanya menjadi mode baca historis.
+
+## 1.5.6 - 2026-07-22
+
+- Fix: Reset status SYNCING ke ERROR saat startup agar sync tidak stuck selamanya kalau proses sebelumnya crash/interrupt.
+- Fix: Tambah timeout 180 detik di `syncNowLocked()` — sinkron yang menggantung (network timeout, process death) akan gagal dengan status ERROR + retryable, bukan stuck SYNCING.
+
+## 1.5.5 - 2026-07-22
+
+- Fix: Hapus `setOptOutIncludingGrantedScopes(true)` agar Play Services bisa silent refresh token tanpa minta otorisasi ulang tiap kali.
+- Validasi grantedScopes hanya untuk request interaktif (koneksi pertama).
+
+## 1.5.3 - 2026-07-22
+
+- Layout Drive section: grup tombol normal vs destruktif, divider pemisah, tombol merah konsisten.
+
+## 1.5.2 - 2026-07-22
+
+- Fix: Credential Manager timeout "Google tidak merespon" di perangkat Xiaomi/HyperOS. Fallback otomatis ke AccountManager system picker setelah 15 detik -- tanpa permission tambahan.
+- Menambahkan tombol "Hapus data Drive" di Pengaturan untuk menghapus seluruh snapshot KRON dari Google Drive (data lokal tetap aman).
+- Mengubah timeout Credential Manager dari 30s ke 15s agar fallback lebih cepat.
+
+## 1.5.1 - 2026-07-22
+
+- Fix: Validasi seal jurnal untuk pemasukan (income) salah -- cuma bandingkan total split dengan cash outflow (negatif), padahal income punya cash inflow (positif). Setiap tambah pemasukan error "Total split tidak sama dengan nominal transaksi".
+- Fix: Ganti `filter { it.amount < 0 }` dengan `sumOf { abs(it.amount) }` di `LedgerPostingEngine.validateSealable()`.
+
 ## 1.4.7 - 2026-07-22
 
 - Menetapkan KRON 1.3.20 sebagai baseline penyimpanan stabil dan mengembalikan mode passphrase SQLCipher sebagai default permanen.
@@ -56,9 +97,6 @@
 - Integritas: invariant diperiksa untuk setiap akun dan kanal Cash/eBudget. Transfer antar akun selalu memindahkan Main Vault tujuan, sedangkan dana budget terbooking tetap dibatasi di akun aktif yang sama.
 - UX: penyaring laporan tetap account-scoped, teks transfer diperjelas, dan label versi dalam aplikasi menjadi `KRON 1.4.0 Full Release LTS`.
 
-## 1.3.20 - 2026-07-21
-
-- Fix: OnboardingScreen ("Setiap rupiah punya jejak") hanya tampil untuk pengguna baru yang belum punya data. Pengguna lama tidak lagi melihat flash halaman onboarding.
 
 ## 1.3.19 - 2026-07-21
 

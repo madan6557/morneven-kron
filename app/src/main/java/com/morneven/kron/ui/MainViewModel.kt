@@ -32,6 +32,9 @@ import com.morneven.kron.preferences.PrivacyPreferences
 import com.morneven.kron.report.CsvExporter
 import com.morneven.kron.security.ImageCompressor
 import com.morneven.kron.security.ReceiptManager
+import com.morneven.kron.evidence.EvidenceHealth
+import com.morneven.kron.evidence.EvidencePackageManager
+import com.morneven.kron.evidence.EvidenceVerificationResult
 import com.morneven.kron.sync.GoogleAccountIdentity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -138,10 +141,15 @@ class MainViewModel @Inject constructor(
     private val csvExporter: CsvExporter,
     private val receiptManager: ReceiptManager,
     private val imageCompressor: ImageCompressor,
+    private val evidencePackageManager: EvidencePackageManager,
 ) : ViewModel() {
     private val message = MutableStateFlow<String?>(null)
     private val sessionVisibility = MutableStateFlow<Boolean?>(null)
     private val manualRestoreReady = MutableStateFlow(false)
+    private val evidenceHealthState = MutableStateFlow<EvidenceHealth?>(null)
+    val evidenceHealth: StateFlow<EvidenceHealth?> = evidenceHealthState
+    private val evidenceVerificationState = MutableStateFlow<EvidenceVerificationResult?>(null)
+    val evidenceVerification: StateFlow<EvidenceVerificationResult?> = evidenceVerificationState
     val isManualRestoreReady: StateFlow<Boolean> = manualRestoreReady
     val pendingDriveSubjectId: StateFlow<String?> = savedStateHandle.getStateFlow(PENDING_DRIVE_SUBJECT, null)
     val pendingDriveEmail: StateFlow<String?> = savedStateHandle.getStateFlow(PENDING_DRIVE_EMAIL, null)
@@ -255,8 +263,8 @@ class MainViewModel @Inject constructor(
             authLockedUntil = prefs.authLockedUntil,
             budgetAlertsEnabled = prefs.budgetAlertsEnabled,
         )
-    }.retry(Long.MAX_VALUE) { e ->
-        Log.e("KRON_UI", "Flow chain error, restarting", e)
+    }.retry(Long.MAX_VALUE) {
+        Log.e("KRON_UI", "Aliran data UI dimulai ulang")
         true
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), KronUiState())
 
@@ -342,6 +350,35 @@ class MainViewModel @Inject constructor(
         csvExporter.export(uri, current.activities, current.allocations)
     }
 
+    fun refreshEvidenceHealth() = viewModelScope.launch {
+        evidenceHealthState.value = evidencePackageManager.health()
+    }
+
+    fun exportEvidencePackage(uri: Uri, startDay: Long, endDay: Long, passphrase: CharArray) =
+        runAction("Paket bukti terenkripsi berhasil dibuat") {
+            evidencePackageManager.exportPackage(uri, startDay, endDay, passphrase)
+            evidenceHealthState.value = evidencePackageManager.health()
+        }
+
+    fun exportEventEvidencePackage(uri: Uri, eventId: String, passphrase: CharArray) =
+        runAction("Paket bukti transaksi berhasil dibuat") {
+            evidencePackageManager.exportEventPackage(uri, eventId, passphrase)
+            evidenceHealthState.value = evidencePackageManager.health()
+        }
+
+    fun exportEvidencePdf(uri: Uri, startDay: Long, endDay: Long) = runAction("PDF pertanggungjawaban berhasil dibuat") {
+        evidencePackageManager.exportPdf(uri, startDay, endDay)
+    }
+
+    fun verifyEvidencePackage(uri: Uri, passphrase: CharArray) = viewModelScope.launch {
+        runCatching { evidencePackageManager.verifyPackage(uri, passphrase) }
+            .onSuccess {
+                evidenceVerificationState.value = it
+                message.value = it.message
+            }
+            .onFailure { message.value = it.message ?: "Paket bukti tidak valid" }
+    }
+
     private suspend fun saveReceipt(eventId: String, uri: Uri) {
         val resolver = context.contentResolver
         val mimeType = resolver.getType(uri).orEmpty()
@@ -351,23 +388,26 @@ class MainViewModel @Inject constructor(
             if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
         } ?: uri.lastPathSegment ?: "Bukti transaksi"
         resolver.openInputStream(uri)?.use { input ->
-            receiptManager.importReceipt(eventId, displayName, mimeType, input)
+            receiptManager.importReceipt(eventId, displayName, mimeType, input, com.morneven.kron.data.EvidenceOrigin.GALLERY)
         } ?: error("Foto bukti tidak dapat dibuka")
     }
 
     private suspend fun saveCameraReceipt(eventId: String, file: java.io.File) {
-        val noBackup = context.noBackupFilesDir
-        noBackup.mkdirs()
-        val compressed = java.io.File(noBackup, "comp_${file.name}")
         val metadata = imageCompressor.extractMetadata(file)
-        val result = imageCompressor.compress(file, compressed)
-        if (result.error != null) error(result.error)
         val displayName = "Foto kamera ${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.forLanguageTag("id-ID")).format(Date())}"
-        java.io.FileInputStream(compressed).use { input ->
-            val entity = receiptManager.importReceipt(eventId, displayName, "image/jpeg", input)
-            receiptManager.updateMetadata(entity.id, metadata.capturedAt, metadata.latitude, metadata.longitude)
+        java.io.FileInputStream(file).use { input ->
+            receiptManager.importReceipt(
+                eventId = eventId,
+                displayName = displayName,
+                mimeType = "image/jpeg",
+                input = input,
+                origin = com.morneven.kron.data.EvidenceOrigin.CAMERA,
+                capturedAt = metadata.capturedAt,
+                latitude = metadata.latitude,
+                longitude = metadata.longitude,
+            )
         }
-        compressed.delete()
+        check(file.delete() || !file.exists()) { "Salinan foto kamera sementara tidak dapat dibersihkan" }
     }
 
     fun attachReceipt(eventId: String, uri: Uri) = runAction("Foto bukti terenkripsi dan disimpan") {
@@ -550,6 +590,10 @@ class MainViewModel @Inject constructor(
 
     fun reverseEvent(eventId: String, reason: String) = runAction("Event berhasil direvert") {
         repository.reverseEvent(eventId, reason)
+    }
+
+    fun correctEvent(eventId: String, title: String, note: String, reason: String) = runAction("Koreksi transaksi tercatat") {
+        repository.correctEvent(eventId, title, note, reason)
     }
 
     private fun runAction(success: String, block: suspend () -> Unit) = viewModelScope.launch {

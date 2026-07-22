@@ -2,6 +2,7 @@ package com.morneven.kron.sync
 
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -70,6 +71,22 @@ class DriveSyncPolicyTest {
         val rateLimit = DriveErrorClassifier.toException(429, "rateLimitExceeded")
         assertTrue(rateLimit.retryable)
         assertTrue(rateLimit !is DriveBillingRequiredException)
+    }
+
+    @Test
+    fun forbiddenClassifierExplainsSafeReasonsWithoutEchoingServerBody() {
+        val disabled = DriveErrorClassifier.toException(403, "accessNotConfigured token=secret-value")
+        assertTrue(disabled is DriveAuthorizationException)
+        assertTrue(disabled.message.orEmpty().contains("belum aktif"))
+        assertFalse(disabled.message.orEmpty().contains("secret-value"))
+
+        val domain = DriveErrorClassifier.toException(403, "domainPolicy")
+        assertTrue(domain is DriveAuthorizationException)
+        assertTrue(domain.message.orEmpty().contains("Workspace"))
+
+        val unknown = DriveErrorClassifier.toException(403, "forbidden-private-detail")
+        assertFalse(unknown.retryable)
+        assertFalse(unknown.message.orEmpty().contains("private-detail"))
     }
 
     @Test

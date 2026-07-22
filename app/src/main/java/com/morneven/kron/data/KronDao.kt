@@ -25,13 +25,16 @@ interface KronDao {
     @Insert suspend fun insertRule(value: RecurringRuleEntity)
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertOccurrence(value: RecurringOccurrenceEntity): Long
     @Insert suspend fun insertReceipt(value: ReceiptEntity): Long
-    @Query("UPDATE receipts SET capturedAt = :capturedAt, latitude = :latitude, longitude = :longitude WHERE id = :receiptId")
-    suspend fun updateReceiptMetadata(receiptId: Long, capturedAt: Long?, latitude: Double?, longitude: Double?)
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertLedgerAccount(value: LedgerAccountEntity): Long
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertLedgerAccounts(values: List<LedgerAccountEntity>): List<Long>
+    @Insert suspend fun insertLedgerLines(values: List<LedgerLineEntity>)
+    @Insert suspend fun insertJournalSeal(value: JournalSealEntity): Long
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertEvidenceKey(value: EvidenceKeyEntity)
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertActorProfile(value: ActorProfileEntity)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertSyncState(value: SyncStateEntity)
 
     @Update suspend fun updatePeriod(value: BudgetPeriodEntity)
     @Update suspend fun updateAllocation(value: AllocationEntity)
-    @Update suspend fun updateEvent(value: ActivityEventEntity)
     @Update suspend fun updateRule(value: RecurringRuleEntity)
     @Update suspend fun updateSyncState(value: SyncStateEntity)
 
@@ -94,9 +97,9 @@ interface KronDao {
         SELECT al.id, al.periodId, p.portfolioId, pf.name AS portfolioName, pf.isArchived AS portfolioArchived,
                al.categoryId, c.name AS categoryName, c.color, al.fundingChannel,
                al.plannedAmount,
-               COALESCE(SUM(b.amount), 0) - COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND e.reversedByEventId IS NULL AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS bookedAmount,
+               COALESCE(SUM(b.amount), 0) - COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS bookedAmount,
                COALESCE(SUM(b.amount), 0) AS availableAmount,
-               -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND e.reversedByEventId IS NULL AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS spentAmount,
+               -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS spentAmount,
                p.status AS periodStatus, p.startEpochDay, p.endEpochDay
         FROM allocations al
         JOIN budget_periods p ON p.id = al.periodId
@@ -113,9 +116,9 @@ interface KronDao {
         SELECT al.id, al.periodId, p.portfolioId, pf.name AS portfolioName, pf.isArchived AS portfolioArchived,
                al.categoryId, c.name AS categoryName, c.color, al.fundingChannel,
                al.plannedAmount,
-               COALESCE(SUM(b.amount), 0) - COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND e.reversedByEventId IS NULL AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS bookedAmount,
+               COALESCE(SUM(b.amount), 0) - COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS bookedAmount,
                COALESCE(SUM(b.amount), 0) AS availableAmount,
-               -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND e.reversedByEventId IS NULL AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS spentAmount,
+               -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS spentAmount,
                p.status AS periodStatus, p.startEpochDay, p.endEpochDay
         FROM allocations al
         JOIN budget_periods p ON p.id = al.periodId
@@ -131,10 +134,22 @@ interface KronDao {
 
     @Query("""
         SELECT e.id, e.type, e.title, e.note, e.source, e.effectiveEpochDay, e.createdAt,
-               e.relatedEventId, e.reversedByEventId, e.accountId,
+               e.relatedEventId,
+               COALESCE(e.reversedByEventId, (SELECT rv.id FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id ORDER BY rv.createdAt, rv.id LIMIT 1)) AS reversedByEventId,
+               e.accountId,
                COALESCE((SELECT SUM(amount) FROM cash_journal_lines WHERE eventId = e.id), 0) AS cashImpact,
                COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'VAULT'), 0) AS vaultImpact,
-               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND allocationId IS NOT NULL), 0) AS budgetImpact
+               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND allocationId IS NOT NULL), 0) AS budgetImpact,
+               COALESCE((SELECT SUM(amount) FROM ledger_lines WHERE eventId = e.id AND side = 'DEBIT'), 0) AS ledgerDebit,
+               COALESCE((SELECT SUM(amount) FROM ledger_lines WHERE eventId = e.id AND side = 'CREDIT'), 0) AS ledgerCredit,
+               CASE
+                   WHEN EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) THEN 'Reversed'
+                   WHEN e.type = 'CORRECTION' THEN 'Corrected'
+                   WHEN NOT EXISTS(SELECT 1 FROM journal_seals s WHERE s.eventId = e.id) THEN 'Integrity problem'
+                   WHEN EXISTS(SELECT 1 FROM ledger_lines l WHERE l.eventId = e.id AND l.legacyBackfill = 1)
+                     OR EXISTS(SELECT 1 FROM journal_seals s WHERE s.eventId = e.id AND s.legacyBackfill = 1) THEN 'Legacy'
+                   ELSE 'Valid'
+               END AS auditStatus
         FROM activity_events e
         ORDER BY e.effectiveEpochDay DESC, e.createdAt DESC
     """)
@@ -142,10 +157,22 @@ interface KronDao {
 
     @Query("""
         SELECT e.id, e.type, e.title, e.note, e.source, e.effectiveEpochDay, e.createdAt,
-               e.relatedEventId, e.reversedByEventId, e.accountId,
+               e.relatedEventId,
+               COALESCE(e.reversedByEventId, (SELECT rv.id FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id ORDER BY rv.createdAt, rv.id LIMIT 1)) AS reversedByEventId,
+               e.accountId,
                COALESCE((SELECT SUM(amount) FROM cash_journal_lines WHERE eventId = e.id), 0) AS cashImpact,
                COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'VAULT'), 0) AS vaultImpact,
-               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND allocationId IS NOT NULL), 0) AS budgetImpact
+               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND allocationId IS NOT NULL), 0) AS budgetImpact,
+               COALESCE((SELECT SUM(amount) FROM ledger_lines WHERE eventId = e.id AND side = 'DEBIT'), 0) AS ledgerDebit,
+               COALESCE((SELECT SUM(amount) FROM ledger_lines WHERE eventId = e.id AND side = 'CREDIT'), 0) AS ledgerCredit,
+               CASE
+                   WHEN EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) THEN 'Reversed'
+                   WHEN e.type = 'CORRECTION' THEN 'Corrected'
+                   WHEN NOT EXISTS(SELECT 1 FROM journal_seals s WHERE s.eventId = e.id) THEN 'Integrity problem'
+                   WHEN EXISTS(SELECT 1 FROM ledger_lines l WHERE l.eventId = e.id AND l.legacyBackfill = 1)
+                     OR EXISTS(SELECT 1 FROM journal_seals s WHERE s.eventId = e.id AND s.legacyBackfill = 1) THEN 'Legacy'
+                   ELSE 'Valid'
+               END AS auditStatus
         FROM activity_events e
         WHERE e.accountId = :accountId
         ORDER BY e.effectiveEpochDay DESC, e.createdAt DESC
@@ -163,7 +190,8 @@ interface KronDao {
             -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','UNEXPECTED_EXPENSE','AUTOMATION') AND c.amount < 0 THEN c.amount ELSE 0 END), 0) AS expense
         FROM activity_events e
         JOIN cash_journal_lines c ON c.eventId = e.id
-        WHERE e.effectiveEpochDay BETWEEN :startDay AND :endDay AND e.reversedByEventId IS NULL
+        WHERE e.effectiveEpochDay BETWEEN :startDay AND :endDay
+          AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id)
     """)
     fun observeCashflow(startDay: Long, endDay: Long): Flow<CashflowRow>
     @Query("""
@@ -172,7 +200,8 @@ interface KronDao {
             -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','UNEXPECTED_EXPENSE','AUTOMATION') AND c.amount < 0 THEN c.amount ELSE 0 END), 0) AS expense
         FROM activity_events e
         JOIN cash_journal_lines c ON c.eventId = e.id
-        WHERE e.effectiveEpochDay BETWEEN :startDay AND :endDay AND e.reversedByEventId IS NULL AND e.accountId = :accountId
+        WHERE e.effectiveEpochDay BETWEEN :startDay AND :endDay AND e.accountId = :accountId
+          AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id)
     """)
     fun observeCashflow(startDay: Long, endDay: Long, accountId: Long): Flow<CashflowRow>
 
@@ -207,10 +236,26 @@ interface KronDao {
     @Query("SELECT * FROM cash_journal_lines WHERE eventId = :eventId") suspend fun cashLinesForEvent(eventId: String): List<CashJournalLineEntity>
     @Query("SELECT * FROM budget_journal_lines WHERE eventId = :eventId") suspend fun budgetLinesForEvent(eventId: String): List<BudgetJournalLineEntity>
     @Query("SELECT * FROM transaction_splits WHERE eventId = :eventId") suspend fun splitsForEvent(eventId: String): List<TransactionSplitEntity>
+    @Query("SELECT * FROM ledger_lines WHERE eventId = :eventId ORDER BY id") suspend fun ledgerLinesForEvent(eventId: String): List<LedgerLineEntity>
+    @Query("SELECT * FROM journal_seals WHERE eventId = :eventId LIMIT 1") suspend fun sealForEvent(eventId: String): JournalSealEntity?
+    @Query("SELECT * FROM journal_seals ORDER BY sequence DESC LIMIT 1") suspend fun latestSeal(): JournalSealEntity?
+    @Query("SELECT * FROM journal_seals ORDER BY sequence") suspend fun allJournalSeals(): List<JournalSealEntity>
+    @Query("SELECT * FROM ledger_accounts ORDER BY code") suspend fun allLedgerAccounts(): List<LedgerAccountEntity>
+    @Query("SELECT * FROM ledger_lines ORDER BY id") suspend fun allLedgerLines(): List<LedgerLineEntity>
+    @Query("SELECT * FROM evidence_keys ORDER BY createdAt") suspend fun allEvidenceKeys(): List<EvidenceKeyEntity>
+    @Query("SELECT * FROM evidence_keys WHERE id = :id LIMIT 1") suspend fun evidenceKeyById(id: String): EvidenceKeyEntity?
+    @Query("SELECT * FROM actor_profiles WHERE id = 1 LIMIT 1") suspend fun actorProfile(): ActorProfileEntity?
+    @Query("SELECT COUNT(*) FROM activity_events") suspend fun eventCount(): Long
+    @Query("SELECT COUNT(*) FROM journal_seals") suspend fun sealCount(): Long
+    @Query("SELECT COUNT(*) FROM activity_events e WHERE NOT EXISTS(SELECT 1 FROM journal_seals s WHERE s.eventId = e.id)") suspend fun unsealedEventCount(): Long
+    @Query("SELECT * FROM activity_events WHERE NOT EXISTS(SELECT 1 FROM journal_seals s WHERE s.eventId = activity_events.id) ORDER BY createdAt, id") suspend fun unsealedEvents(): List<ActivityEventEntity>
+    @Query("SELECT eventId, COALESCE(SUM(CASE WHEN side = 'DEBIT' THEN amount ELSE 0 END),0) AS debit, COALESCE(SUM(CASE WHEN side = 'CREDIT' THEN amount ELSE 0 END),0) AS credit FROM ledger_lines GROUP BY eventId HAVING debit != credit") suspend fun unbalancedLedgerEvents(): List<LedgerEventBalanceRow>
+    @Query("SELECT EXISTS(SELECT 1 FROM activity_events WHERE type = 'REVERSAL' AND relatedEventId = :eventId)") suspend fun isEventReversed(eventId: String): Boolean
     @Query("SELECT r.* FROM recurring_rules r JOIN accounts a ON a.id = r.accountId WHERE r.isPaused = 0 AND a.isActive = 1 AND a.isArchived = 0 AND r.nextEpochDay <= :today AND (:direction IS NULL OR r.direction = :direction) ORDER BY r.nextEpochDay") suspend fun dueRules(today: Long, direction: String?): List<RecurringRuleEntity>
     @Query("SELECT EXISTS(SELECT 1 FROM recurring_occurrences WHERE ruleId = :ruleId AND dueEpochDay = :dueDay)") suspend fun occurrenceExists(ruleId: String, dueDay: Long): Boolean
     @Query("SELECT * FROM accounts ORDER BY createdAt") suspend fun allAccounts(): List<AccountEntity>
     @Query("SELECT * FROM receipts ORDER BY id") suspend fun allReceipts(): List<ReceiptEntity>
+    @Query("SELECT * FROM receipts WHERE evidenceEventId = :eventId OR (evidenceEventId IS NULL AND eventId = :eventId) ORDER BY id") suspend fun receiptsForEvent(eventId: String): List<ReceiptEntity>
     @Query("SELECT * FROM sync_state WHERE id = 1") suspend fun syncState(): SyncStateEntity?
     @Query("SELECT * FROM categories ORDER BY id") suspend fun allCategories(): List<CategoryEntity>
     @Query("SELECT * FROM portfolios ORDER BY id") suspend fun allPortfolios(): List<PortfolioEntity>
@@ -219,6 +264,7 @@ interface KronDao {
     @Query("SELECT * FROM portfolio_allocation_templates WHERE portfolioId = :portfolioId ORDER BY id") suspend fun templatesForPortfolio(portfolioId: Long): List<PortfolioAllocationTemplateEntity>
     @Query("SELECT * FROM portfolio_allocation_templates ORDER BY id") suspend fun allAllocationTemplates(): List<PortfolioAllocationTemplateEntity>
     @Query("SELECT * FROM activity_events ORDER BY createdAt") suspend fun allEvents(): List<ActivityEventEntity>
+    @Query("SELECT * FROM activity_events WHERE effectiveEpochDay BETWEEN :startDay AND :endDay ORDER BY effectiveEpochDay, createdAt, id") suspend fun eventsBetween(startDay: Long, endDay: Long): List<ActivityEventEntity>
     @Query("SELECT * FROM cash_journal_lines ORDER BY id") suspend fun allCashLines(): List<CashJournalLineEntity>
     @Query("SELECT * FROM budget_journal_lines ORDER BY id") suspend fun allBudgetLines(): List<BudgetJournalLineEntity>
     @Query("SELECT * FROM transaction_splits ORDER BY id") suspend fun allSplits(): List<TransactionSplitEntity>

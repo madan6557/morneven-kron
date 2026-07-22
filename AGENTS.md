@@ -22,7 +22,7 @@
 
 ## Encryption key continuity and data-loss prevention
 
-- Starting with KRON 1.4.6, the production key contract is fixed: Android Keystore alias `kron.database.wrap.v1`, envelope `security/database-key-v1.bin`, profile `security/database-key-profile-v1.bin`, raw-hex key encoding, and SQLCipher 4 compatibility. Treat these identifiers and semantics as shipped migration history.
+- KRON 1.4.6 raw-hex is a historical read contract. Starting with KRON 1.4.7, the permanent production write contract is SQLCipher passphrase bytes with SQLCipher 4 compatibility, Android Keystore alias `kron.database.wrap.v1`, envelope `security/database-key-v1.bin`, and mode-aware profile `security/database-key-profile-v2.bin`. Raw-hex data remains readable but must never be selected for a new database or reinterpreted as passphrase bytes.
 - Treat the production database, its `-wal` and `-shm` files, the wrapped data-key envelope, Android Keystore alias, and encryption metadata as one inseparable data set.
 - Never generate or install a replacement database key when any existing database or encrypted recovery artifact is present. A missing, unreadable, or mismatched key must fail closed into read-only recovery mode.
 - The shipped Android Keystore alias, envelope format, SQLCipher key encoding, cipher parameters, and key derivation behavior are immutable compatibility contracts. Any change requires a new versioned format and an explicit tested migration. Never reinterpret existing key bytes with a new encoding.

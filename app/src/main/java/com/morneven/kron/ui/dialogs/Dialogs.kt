@@ -62,6 +62,9 @@ import com.morneven.kron.data.CategoryEntity
 import com.morneven.kron.data.ExpenseSplitInput
 import com.morneven.kron.data.FundingChannel
 import com.morneven.kron.data.TransactionDirection
+import com.morneven.kron.evidence.EvidenceHealth
+import com.morneven.kron.evidence.EvidencePackageManager
+import com.morneven.kron.evidence.EvidenceVerificationResult
 import com.morneven.kron.ui.theme.KronGold
 import com.morneven.kron.ui.theme.KronGreen
 import com.morneven.kron.ui.theme.KronRed
@@ -110,6 +113,16 @@ fun IncomeDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Str
         )
         OutlinedTextField(title, { title = it }, label = { Text("Judul") }, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(note, { note = it }, label = { Text("Catatan") }, modifier = Modifier.fillMaxWidth())
+        if (money(amount) > 0) {
+            val current = state.accountBalances.firstOrNull { it.id == account?.id }
+            val channelBalance = if (channel == FundingChannel.CASH) current?.cashBalance ?: 0L else current?.eBudgetBalance ?: 0L
+            LedgerPreviewCard(
+                debit = "Aset ${channelLabel(channel)} bertambah ${displayMoney(money(amount), state.valuesVisible)}",
+                credit = "Pemasukan tercatat ${displayMoney(money(amount), state.valuesVisible)}",
+                budget = "Main Vault ${channelLabel(channel)} bertambah. Booking budget tidak berubah.",
+                after = "Saldo kanal setelah transaksi ${displayMoney(channelBalance + money(amount), state.valuesVisible)}",
+            )
+        }
         Text("Foto bukti", style = MaterialTheme.typography.labelLarge)
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onGalleryPick, modifier = Modifier.weight(1f), enabled = receiptUri == null && cameraFile == null) {
@@ -319,6 +332,14 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, St
         }
         OutlinedTextField(title, { title = it }, label = { Text("Judul") }, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(note, { note = it }, label = { Text("Catatan") }, modifier = Modifier.fillMaxWidth())
+        if (splitTotal > 0) {
+            LedgerPreviewCard(
+                debit = "Biaya bertambah ${displayMoney(splitTotal, state.valuesVisible)}",
+                credit = "Aset ${channelLabel(channel)} berkurang ${displayMoney(splitTotal, state.valuesVisible)}",
+                budget = if (unexpected) "Tidak mengurangi budget. Dicatat sebagai pengeluaran tak terduga." else "Sisa kategori terpilih berkurang sesuai setiap split.",
+                after = "Saldo kanal setelah transaksi ${displayMoney(accountBalance - splitTotal, state.valuesVisible)}",
+            )
+        }
         Text("Foto bukti", style = MaterialTheme.typography.labelLarge)
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onGalleryPick, modifier = Modifier.weight(1f), enabled = receiptUri == null && cameraFile == null) {
@@ -368,6 +389,25 @@ fun TransferDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, S
         }
         MoneyField(amount, { amount = it }, "Nominal")
         OutlinedTextField(note, { note = it }, label = { Text("Catatan") }, modifier = Modifier.fillMaxWidth())
+        if (money(amount) > 0 && sourceAccount != null && targetAccount != null) {
+            LedgerPreviewCard(
+                debit = "Aset tujuan ${targetAccount.name} ${channelLabel(toChannel)} bertambah ${displayMoney(money(amount), state.valuesVisible)}",
+                credit = "Aset sumber ${sourceAccount.name} ${channelLabel(fromChannel)} berkurang ${displayMoney(money(amount), state.valuesVisible)}",
+                budget = "Cash flow tidak berubah. Main Vault mengikuti akun dan kanal tujuan.",
+                after = "Saldo sumber setelah transfer ${displayMoney(sourceBalance - money(amount), state.valuesVisible)}",
+            )
+        }
+    }
+}
+
+@Composable
+private fun LedgerPreviewCard(debit: String, credit: String, budget: String, after: String) {
+    HudCard(accent = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.55f)) {
+        Text("Preview pencatatan", style = MaterialTheme.typography.titleMedium)
+        Text("Debit: $debit", style = MaterialTheme.typography.bodySmall)
+        Text("Kredit: $credit", style = MaterialTheme.typography.bodySmall)
+        Text(budget, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(after, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
     }
 }
 
@@ -786,35 +826,57 @@ fun AuditDialog(
     onDismiss: () -> Unit,
     onGalleryPick: (String) -> Unit,
     onCameraCapture: (String) -> Unit,
+    onExportEvidence: (String) -> Unit,
     onRevert: (String, String) -> Unit,
+    onCorrect: (String, String, String, String) -> Unit,
 ) {
     var reason by remember { mutableStateOf("") }
+    var correctionMode by remember { mutableStateOf(false) }
+    var correctedTitle by remember(event.id) { mutableStateOf(event.title) }
+    var correctedNote by remember(event.id) { mutableStateOf(event.note) }
     val lifecycleEvent = event.type in setOf("ARCHIVE", "RESTORE")
     val receipts = state.receipts.filter { it.eventId == event.id }
-    FormDialog("Detail audit", onDismiss, confirmText = "Revert", confirmEnabled = !lifecycleEvent && event.reversedByEventId == null && event.type != "REVERSAL" && reason.isNotBlank(), onConfirm = { onRevert(event.id, reason) }) {
+    val actionEnabled = !lifecycleEvent && event.reversedByEventId == null && event.type != "REVERSAL" &&
+        reason.isNotBlank() && (!correctionMode || correctedTitle.isNotBlank())
+    FormDialog(
+        "Detail audit",
+        onDismiss,
+        confirmText = if (correctionMode) "Simpan koreksi" else "Batalkan dengan reversal",
+        confirmEnabled = actionEnabled,
+        onConfirm = {
+            if (correctionMode) onCorrect(event.id, correctedTitle, correctedNote, reason)
+            else onRevert(event.id, reason)
+        },
+    ) {
         Text(event.title, style = MaterialTheme.typography.titleLarge)
-        Text(event.type.replace('_', ' '), color = MaterialTheme.colorScheme.tertiary)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(event.type.replace('_', ' '), color = MaterialTheme.colorScheme.tertiary)
+            Text(event.auditStatus, color = if (event.auditStatus == "Integrity problem") MaterialTheme.colorScheme.error else KronGreen)
+        }
         Text("Tanggal efektif: ${LocalDate.ofEpochDay(event.effectiveEpochDay)}")
         Text("Sumber: ${event.source}")
         Text("Dampak akun: ${displayMoney(event.cashImpact, state.valuesVisible)}")
         Text("Dampak Vault: ${displayMoney(event.vaultImpact, state.valuesVisible)}")
         Text("Dampak kategori: ${displayMoney(event.budgetImpact, state.valuesVisible)}")
+        Text("Debit: ${displayMoney(event.ledgerDebit, state.valuesVisible)}")
+        Text("Kredit: ${displayMoney(event.ledgerCredit, state.valuesVisible)}")
         if (event.note.isNotBlank()) Text("Catatan: ${event.note}")
         HorizontalDivider()
         Text("Foto bukti (${receipts.size})", style = MaterialTheme.typography.titleMedium)
         if (receipts.isEmpty()) {
             Text("Belum ada foto bukti untuk event ini.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
-            receipts.forEach { receipt ->
+            receipts.take(10).forEach { receipt ->
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(receipt.displayName, style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        "${receipt.mimeType} · ${receipt.byteSize.coerceAtLeast(0) / 1024} KB",
+                        "${receipt.mimeType} · ${receipt.byteSize.coerceAtLeast(0) / 1024} KB · ${receipt.origin}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
+            if (receipts.size > 10) Text("${receipts.size - 10} bukti lain tersedia di Pusat Bukti.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (event.type in setOf("INCOME", "EXPENSE", "UNEXPECTED_EXPENSE")) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -829,9 +891,78 @@ fun AuditDialog(
             }
             Text("Foto disalin ke penyimpanan privat dan dienkripsi.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        OutlinedButton(onClick = { onExportEvidence(event.id) }, modifier = Modifier.fillMaxWidth()) {
+            Text("Ekspor paket bukti transaksi")
+        }
         if (lifecycleEvent) Text("Event lifecycle bersifat read-only. Gunakan tab Arsip untuk memulihkan atau mengarsipkan kembali.", color = MaterialTheme.colorScheme.tertiary)
-        else if (event.reversedByEventId != null) Text("Event sudah direvert", color = MaterialTheme.colorScheme.error)
-        else OutlinedTextField(reason, { reason = it }, label = { Text("Alasan revert") }, modifier = Modifier.fillMaxWidth())
+        else if (event.reversedByEventId != null) Text("Event sudah dibatalkan dengan reversal", color = MaterialTheme.colorScheme.error)
+        else {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = !correctionMode, onClick = { correctionMode = false }, label = { Text("Batalkan") })
+                FilterChip(selected = correctionMode, onClick = { correctionMode = true }, label = { Text("Koreksi") })
+            }
+            if (correctionMode) {
+                OutlinedTextField(correctedTitle, { correctedTitle = it }, label = { Text("Judul pengganti") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(correctedNote, { correctedNote = it }, label = { Text("Catatan pengganti") }, modifier = Modifier.fillMaxWidth())
+                Text("KRON membuat reversal dan event pengganti. Event lama tidak diubah.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            OutlinedTextField(reason, { reason = it }, label = { Text(if (correctionMode) "Alasan koreksi" else "Alasan pembatalan") }, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+@Composable
+fun EvidenceCenterDialog(
+    health: EvidenceHealth?,
+    verification: EvidenceVerificationResult?,
+    onDismiss: () -> Unit,
+    onRefresh: () -> Unit,
+    onExportPdf: (Long, Long) -> Unit,
+    onExportPackage: (Long, Long) -> Unit,
+    onVerifyPackage: () -> Unit,
+) {
+    var startDate by remember { mutableStateOf(LocalDate.now().minusDays(29)) }
+    var endDate by remember { mutableStateOf(LocalDate.now()) }
+    FormDialog("Pusat Bukti", onDismiss, confirmText = "Periksa ulang", confirmEnabled = true, onConfirm = onRefresh) {
+        HudCard {
+            Text(
+                when {
+                    health == null -> "Belum diperiksa"
+                    health.valid -> "Valid"
+                    else -> "Integrity problem"
+                },
+                style = MaterialTheme.typography.titleLarge,
+                color = if (health?.valid == true) KronGreen else MaterialTheme.colorScheme.error,
+            )
+            Text(health?.message ?: "Jalankan pemeriksaan ledger dan bukti.")
+            if (health != null) {
+                Text("Event ${health.eventCount} · Seal ${health.sealCount}")
+                Text("Hilang ${health.missingEvidence} · Berubah ${health.changedEvidence} · Legacy ${health.legacyEvidence}")
+            }
+        }
+        DateField("Tanggal mulai", startDate, { it?.let { selected -> startDate = selected } })
+        DateField("Tanggal akhir", endDate, { it?.let { selected -> endDate = selected } })
+        if (endDate.isBefore(startDate)) Text("Tanggal akhir tidak boleh sebelum tanggal mulai.", color = MaterialTheme.colorScheme.error)
+        Button(
+            onClick = { onExportPdf(startDate.toEpochDay(), endDate.toEpochDay()) },
+            enabled = !endDate.isBefore(startDate),
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Ekspor PDF ringkasan") }
+        Button(
+            onClick = { onExportPackage(startDate.toEpochDay(), endDate.toEpochDay()) },
+            enabled = health?.valid == true && !endDate.isBefore(startDate),
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Ekspor .kronevidence") }
+        OutlinedButton(onClick = onVerifyPackage, modifier = Modifier.fillMaxWidth()) { Text("Verifikasi paket bukti") }
+        if (verification != null) {
+            HudCard(accent = if (verification.valid) KronGreen else MaterialTheme.colorScheme.error) {
+                Text(if (verification.valid) "Paket valid" else "Paket tidak valid", style = MaterialTheme.typography.titleMedium)
+                Text(verification.message)
+                Text("Event ${verification.eventCount} · Bukti ${verification.attachmentCount}")
+                Text("Chain ${verification.chainHead.take(16)}…", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        Text(EvidencePackageManager.DISCLAIMER, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

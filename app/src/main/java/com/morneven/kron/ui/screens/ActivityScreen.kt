@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -26,9 +27,12 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -51,12 +55,16 @@ import com.morneven.kron.ui.components.signedColor
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.min
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 @Composable
 fun ActivityScreen(state: KronUiState, onEvent: (String) -> Unit, modifier: Modifier = Modifier) {
     var typeFilter by rememberSaveable { mutableStateOf(ActivityFilter.ALL) }
     var dateFilter by rememberSaveable { mutableStateOf(ActivityDateRange.ALL) }
     var query by rememberSaveable { mutableStateOf("") }
+    var visibleEventCount by rememberSaveable { mutableIntStateOf(PAGE_SIZE) }
+    val listState = rememberLazyListState()
     val focusManager = LocalFocusManager.current
     val today = LocalDate.now()
     val shown = remember(state.activities, typeFilter, dateFilter, query, today) {
@@ -67,9 +75,24 @@ fun ActivityScreen(state: KronUiState, onEvent: (String) -> Unit, modifier: Modi
                 event.matches(query)
         }
     }
-    val timeline = remember(shown, today) { shown.toTimeline(today) }
+    val visibleEvents = remember(shown, visibleEventCount) { shown.take(visibleEventCount) }
+    val timeline = remember(visibleEvents, today) { visibleEvents.toTimeline(today) }
+
+    LaunchedEffect(typeFilter, dateFilter, query, state.activeAccount?.id) {
+        visibleEventCount = PAGE_SIZE
+    }
+    LaunchedEffect(listState, timeline.size, shown.size) {
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+            .distinctUntilChanged()
+            .collect { lastVisibleIndex ->
+                if (lastVisibleIndex >= timeline.size - LOAD_MORE_THRESHOLD && visibleEventCount < shown.size) {
+                    visibleEventCount = min(visibleEventCount + PAGE_SIZE, shown.size)
+                }
+            }
+    }
 
     LazyColumn(
+        state = listState,
         modifier = modifier,
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -323,3 +346,5 @@ private fun eventTypeLabel(type: String): String = when (type) {
 
 private val fullDateFormat = DateTimeFormatter.ofPattern("EEEE, d MMMM yyyy", Locale.forLanguageTag("id-ID"))
 private val groupDateFormat = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.forLanguageTag("id-ID"))
+private const val PAGE_SIZE = 50
+private const val LOAD_MORE_THRESHOLD = 8

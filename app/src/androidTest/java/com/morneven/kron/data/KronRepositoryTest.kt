@@ -3,6 +3,8 @@ package com.morneven.kron.data
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import com.morneven.kron.audit.EvidenceSigningKeyManager
+import com.morneven.kron.audit.LedgerPostingEngine
 import java.time.LocalDate
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -16,13 +18,15 @@ class KronRepositoryTest {
     private lateinit var database: KronDatabase
     private lateinit var dao: KronDao
     private lateinit var repository: KronRepository
+    private lateinit var postingEngine: LedgerPostingEngine
 
     @Before
     fun setUp() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         database = Room.inMemoryDatabaseBuilder(context, KronDatabase::class.java).allowMainThreadQueries().build()
         dao = database.kronDao()
-        repository = KronRepository(database)
+        postingEngine = LedgerPostingEngine(context, database, EvidenceSigningKeyManager())
+        repository = KronRepository(database, postingEngine)
         runBlocking { repository.seedIfNeeded() }
     }
 
@@ -64,6 +68,39 @@ class KronRepositoryTest {
         assertTrue(dao.auditsForEvent(eventId).single().beforeJson.contains("\"source\":20"))
         assertEquals(dao.cashTotal(), dao.budgetAvailableTotal())
         assertEquals(dao.cashTotal(FundingChannel.CASH), dao.budgetAvailableTotal(FundingChannel.CASH))
+    }
+
+    @Test
+    fun financialPostingReversalAndCorrectionRemainBalancedAndSealed() = runBlocking {
+        val account = dao.activeAccount() ?: error("Akun aktif tidak ditemukan")
+        val category = dao.allCategories().first { it.direction == TransactionDirection.EXPENSE }
+        val incomeId = repository.addIncome(account.id, FundingChannel.CASH, 200, null, "Modal", "")
+        val expenseId = repository.addExpense(
+            account.id,
+            FundingChannel.CASH,
+            50,
+            listOf(ExpenseSplitInput(category.id, null, 50)),
+            "Belanja",
+            "Bukti awal",
+        )
+        repository.transfer(account.id, FundingChannel.CASH, account.id, FundingChannel.EBUDGET, 30, "Ubah kanal")
+        repository.reverseEvent(expenseId, "Transaksi dibatalkan")
+        val replacementId = repository.correctEvent(incomeId, "Modal diperbaiki", "Catatan baru", "Perbaikan deskripsi")
+
+        postingEngine.validateAll()
+        assertTrue(dao.unbalancedLedgerEvents().isEmpty())
+        assertEquals(dao.eventCount(), dao.sealCount())
+        assertTrue(dao.isEventReversed(incomeId))
+        assertEquals("Modal", dao.eventById(incomeId)?.title)
+        assertEquals("Modal diperbaiki", dao.eventById(replacementId)?.title)
+        dao.allEvents().forEach { event ->
+            assertEquals(0L, dao.budgetEventTotal(event.id))
+            val ledger = dao.ledgerLinesForEvent(event.id)
+            assertEquals(
+                ledger.filter { it.side == LedgerSide.DEBIT }.sumOf { it.amount },
+                ledger.filter { it.side == LedgerSide.CREDIT }.sumOf { it.amount },
+            )
+        }
     }
 
     @Test

@@ -217,7 +217,6 @@ class DriveRestV3AppDataClient(
 internal object DriveErrorClassifier {
     fun toException(statusCode: Int, responseBody: String): DriveApiException {
         val normalized = responseBody.lowercase()
-        val message = "Google Drive menolak permintaan (HTTP $statusCode)"
         if (
             statusCode == 402 ||
             "billingnotenabled" in normalized ||
@@ -230,11 +229,41 @@ internal object DriveErrorClassifier {
                 statusCode,
             )
         }
-        if (statusCode == 401 || "insufficientpermissions" in normalized || "invalid credentials" in normalized) {
+        if (
+            statusCode == 401 ||
+            "insufficientpermissions" in normalized ||
+            "insufficient_scope" in normalized ||
+            "invalid credentials" in normalized ||
+            "autherror" in normalized
+        ) {
             return DriveAuthorizationException("Otorisasi Google Drive perlu diperbarui", statusCode)
+        }
+        if (
+            "accessnotconfigured" in normalized ||
+            "servicedisabled" in normalized ||
+            "api has not been used" in normalized
+        ) {
+            return DriveAuthorizationException(
+                "Google Drive API belum aktif pada project OAuth KRON",
+                statusCode,
+            )
+        }
+        if ("domainpolicy" in normalized || "domain policy" in normalized) {
+            return DriveAuthorizationException(
+                "Kebijakan Google Workspace menolak akses Drive KRON",
+                statusCode,
+            )
+        }
+        if ("storagequotaexceeded" in normalized || "storage quota" in normalized) {
+            return DriveApiException("Penyimpanan Google Drive tidak mencukupi", statusCode, retryable = false)
         }
         val retryable = statusCode == 408 || statusCode == 429 || statusCode >= 500 ||
             "ratelimitexceeded" in normalized || "userratelimitexceeded" in normalized
+        val message = if (statusCode == 403) {
+            "Google Drive menolak akses. Periksa Drive API, test user, dan kebijakan akun"
+        } else {
+            "Google Drive menolak permintaan (HTTP $statusCode)"
+        }
         return DriveApiException(message, statusCode, retryable)
     }
 }

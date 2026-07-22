@@ -67,6 +67,7 @@ class MainActivity : FragmentActivity() {
     private var pendingBackupPassword: CharArray? = null
     private var backupUiState by mutableStateOf<BackupUiState>(BackupUiState.Form)
     private var databaseOpening = false
+    private var freshInstall = false
 
     private val createPreUpgradeBackup = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream"),
@@ -102,6 +103,7 @@ class MainActivity : FragmentActivity() {
         bootstrapManager = DatabaseBootstrapManager(this)
         preUpgradeBackupManager = PreUpgradeBackupManager(this)
         val bootstrap = bootstrapManager.inspect()
+        freshInstall = !bootstrap.inspection.exists && !bootstrap.inspection.hasRecoveryArtifacts
         when (bootstrap.state) {
             DatabaseBootstrapState.BACKUP_REQUIRED -> setContent {
                 PreUpgradeBackupScreen(
@@ -131,7 +133,7 @@ class MainActivity : FragmentActivity() {
         pendingBackupPassword?.fill('\u0000')
         pendingBackupPassword = password.toCharArray()
         backupUiState = BackupUiState.WaitingForLocation
-        createPreUpgradeBackup.launch("KRON-pre-upgrade-1.4.7.kronbackup")
+        createPreUpgradeBackup.launch("KRON-pre-upgrade-1.5.0.kronbackup")
     }
 
     private fun openDatabaseAndStart() {
@@ -153,6 +155,7 @@ class MainActivity : FragmentActivity() {
                     return@withContext
                 }
                 DatabaseAccessGate.markReady()
+                if (freshInstall) bootstrapManager.markFreshInstallValidated()
                 bootstrapManager.recordSuccessfulColdLaunch()
                 (application as KronApplication).startDataServices()
                 driveSyncRuntime = if (BuildConfig.DRIVE_SYNC_CONFIGURED) {

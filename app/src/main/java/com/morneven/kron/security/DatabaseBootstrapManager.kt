@@ -26,8 +26,8 @@ class DatabaseBootstrapManager(private val context: Context) {
     private val encryption = DatabaseEncryptionManager(context, keyManager)
     private val database = context.getDatabasePath(KronDatabase.DATABASE_NAME)
     private val securityDirectory = File(context.noBackupFilesDir, "security")
-    private val backupMarker = File(securityDirectory, "pre-upgrade-backup-v1.4.7.done")
-    private val successfulLaunches = File(securityDirectory, "database-bootstrap-v2.launches")
+    private val backupMarker = File(securityDirectory, "pre-upgrade-backup-v1.5.0.done")
+    private val successfulLaunches = File(securityDirectory, "database-bootstrap-v3.launches")
 
     fun inspect(): DatabaseBootstrapStatus {
         val inspection = encryption.inspectPrimaryDatabase(database)
@@ -72,6 +72,8 @@ class DatabaseBootstrapManager(private val context: Context) {
         }
     }
 
+    fun markFreshInstallValidated() = markExternalBackupVerified()
+
     fun recordSuccessfulColdLaunch() {
         securityDirectory.mkdirs()
         val previous = readSuccessfulLaunches()
@@ -87,6 +89,9 @@ class DatabaseBootstrapManager(private val context: Context) {
                 }
             }
             atomicReplace(temporary, successfulLaunches)
+            if (next >= REQUIRED_VERIFIED_LAUNCHES) {
+                encryption.discardValidatedPreUpgradeCopy(database)
+            }
         } finally {
             temporary.delete()
         }
@@ -126,7 +131,7 @@ class DatabaseBootstrapManager(private val context: Context) {
 
     companion object {
         private const val REQUIRED_VERIFIED_LAUNCHES = 2
-        private val BACKUP_MARKER_MAGIC = "KRONBACKUP147".toByteArray(Charsets.US_ASCII)
-        private val LAUNCH_MAGIC = "KRONBOOT2".toByteArray(Charsets.US_ASCII)
+        private val BACKUP_MARKER_MAGIC = "KRONBACKUP150".toByteArray(Charsets.US_ASCII)
+        private val LAUNCH_MAGIC = "KRONBOOT3".toByteArray(Charsets.US_ASCII)
     }
 }

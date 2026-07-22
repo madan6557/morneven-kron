@@ -1,12 +1,15 @@
 package com.morneven.kron.sync
 
 import android.accounts.Account
+import android.accounts.AccountManager
 import android.app.Activity
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import androidx.activity.ComponentActivity
 import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
@@ -26,8 +29,10 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 class AndroidCredentialManagerAccountSelector(
@@ -40,24 +45,11 @@ class AndroidCredentialManagerAccountSelector(
     }
 
     override suspend fun selectAccount(): GoogleAccountIdentity {
-        val googleOption = GetGoogleIdOption.Builder()
-            .setServerClientId(webClientId)
-            .setFilterByAuthorizedAccounts(false)
-            .setAutoSelectEnabled(false)
-            .build()
-        val request = GetCredentialRequest.Builder()
-            .addCredentialOption(googleOption)
-            .build()
-        val credential = try {
-            withTimeout(30_000L) {
-                credentialManager.getCredential(activity, request).credential
-            }
+        return try {
+            selectViaCredentialManager()
         } catch (error: TimeoutCancellationException) {
-            Log.w(TAG, "Credential Manager timed out")
-            throw IllegalStateException(
-                "Pemilihan akun Google tidak merespon. Periksa koneksi internet lalu coba lagi.",
-                error,
-            )
+            Log.w(TAG, "Credential Manager timed out, falling back to account picker")
+            selectViaAccountPicker()
         } catch (error: NoCredentialException) {
             Log.w(TAG, "No Google credential is available")
             throw IllegalStateException(
@@ -75,6 +67,20 @@ class AndroidCredentialManagerAccountSelector(
                 error,
             )
         }
+    }
+
+    private suspend fun selectViaCredentialManager(): GoogleAccountIdentity {
+        val googleOption = GetGoogleIdOption.Builder()
+            .setServerClientId(webClientId)
+            .setFilterByAuthorizedAccounts(false)
+            .setAutoSelectEnabled(false)
+            .build()
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(googleOption)
+            .build()
+        val credential = withTimeout(15_000L) {
+            credentialManager.getCredential(activity, request).credential
+        }
         require(
             credential is CustomCredential &&
                 credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL,
@@ -85,6 +91,45 @@ class AndroidCredentialManagerAccountSelector(
             ?: error("Identitas akun Google kosong")
         val email = google.email?.takeIf(String::isNotBlank) ?: error("Email akun Google kosong")
         return GoogleAccountIdentity(subject, email, google.displayName)
+    }
+
+    private suspend fun selectViaAccountPicker(): GoogleAccountIdentity = withContext(Dispatchers.Main) {
+        suspendCancellableCoroutine { continuation ->
+            val registry = (activity as? ComponentActivity)?.activityResultRegistry
+                ?: run {
+                    continuation.resumeWithException(IllegalStateException("Pemilih akun tidak tersedia"))
+                    return@suspendCancellableCoroutine
+                }
+            val pickerIntent = AccountManager.newChooseAccountIntent(
+                null, null, arrayOf("com.google"),
+                true, "Pilih akun Google untuk KRON", null, null, null,
+            )
+            val key = "account_picker_${System.nanoTime()}"
+            val launcher = registry.register(
+                key,
+                ActivityResultContracts.StartActivityForResult(),
+            ) { result ->
+                val data = result.data
+                if (result.resultCode != Activity.RESULT_OK || data == null) {
+                    continuation.resumeWithException(
+                        IllegalStateException("Pemilihan akun Google dibatalkan"),
+                    )
+                    return@register
+                }
+                val email = data.getStringExtra(AccountManager.KEY_ACCOUNT_NAME)
+                if (email.isNullOrBlank()) {
+                    continuation.resumeWithException(
+                        IllegalStateException("Akun Google tidak ditemukan"),
+                    )
+                    return@register
+                }
+                continuation.resume(GoogleAccountIdentity(email, email, null))
+            }
+            continuation.invokeOnCancellation {
+                try { launcher.unregister() } catch (_: RuntimeException) { }
+            }
+            launcher.launch(pickerIntent)
+        }
     }
 
     companion object {
@@ -111,7 +156,6 @@ class PlayServicesAuthorizationClientBridge(
         require(requestedScopes == setOf(DRIVE_APPDATA_SCOPE)) { "KRON hanya mengizinkan scope appDataFolder" }
         val builder = AuthorizationRequest.builder()
             .setRequestedScopes(requestedScopes.map(::Scope))
-            .setOptOutIncludingGrantedScopes(true)
         if (account != null) {
             builder.setAccount(Account(account.email, GOOGLE_ACCOUNT_TYPE))
         }

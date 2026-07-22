@@ -23,6 +23,28 @@ object LedgerType {
     const val UNEXPECTED_EXPENSE = "UNEXPECTED_EXPENSE"
     const val ARCHIVE = "ARCHIVE"
     const val RESTORE = "RESTORE"
+    const val ATTACH_EVIDENCE = "ATTACH_EVIDENCE"
+    const val CORRECTION = "CORRECTION"
+    const val EVIDENCE_KEY_ROTATION = "EVIDENCE_KEY_ROTATION"
+}
+
+object LedgerSide {
+    const val DEBIT = "DEBIT"
+    const val CREDIT = "CREDIT"
+}
+
+object LedgerAccountKind {
+    const val ASSET = "ASSET"
+    const val EQUITY = "EQUITY"
+    const val INCOME = "INCOME"
+    const val EXPENSE = "EXPENSE"
+    const val CLEARING = "CLEARING"
+}
+
+object EvidenceOrigin {
+    const val CAMERA = "CAMERA"
+    const val GALLERY = "GALLERY"
+    const val LEGACY = "LEGACY"
 }
 
 object BudgetBucket {
@@ -163,7 +185,12 @@ data class PortfolioAllocationTemplateEntity(
 
 @Entity(
     tableName = "activity_events",
-    indices = [Index("effectiveEpochDay"), Index("relatedEventId"), Index("accountId")],
+    indices = [
+        Index("effectiveEpochDay"),
+        Index("relatedEventId"),
+        Index("accountId"),
+        Index(value = ["accountId", "effectiveEpochDay"]),
+    ],
 )
 data class ActivityEventEntity(
     @PrimaryKey val id: String,
@@ -178,6 +205,127 @@ data class ActivityEventEntity(
     val targetAllocationId: Long? = null,
     val accountId: Long = 0,
 )
+
+@Entity(
+    tableName = "ledger_accounts",
+    indices = [
+        Index(value = ["code"], unique = true),
+        Index("accountId"),
+        Index("categoryId"),
+    ],
+)
+data class LedgerAccountEntity(
+    @PrimaryKey val id: String,
+    val code: String,
+    val name: String,
+    val kind: String,
+    val accountId: Long? = null,
+    val fundingChannel: String? = null,
+    val categoryId: Long? = null,
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+@Entity(
+    tableName = "ledger_lines",
+    foreignKeys = [
+        ForeignKey(
+            entity = ActivityEventEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["eventId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+        ForeignKey(
+            entity = LedgerAccountEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["ledgerAccountId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+    ],
+    indices = [
+        Index("eventId"),
+        Index("ledgerAccountId"),
+        Index("accountId"),
+        Index("correlationId"),
+    ],
+)
+data class LedgerLineEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val eventId: String,
+    val ledgerAccountId: String,
+    val side: String,
+    val amount: Long,
+    val accountId: Long? = null,
+    val fundingChannel: String? = null,
+    val categoryId: Long? = null,
+    val correlationId: String? = null,
+    val legacyBackfill: Boolean = false,
+)
+
+@Entity(
+    tableName = "evidence_keys",
+    indices = [Index(value = ["fingerprint"], unique = true)],
+)
+data class EvidenceKeyEntity(
+    @PrimaryKey val id: String,
+    val alias: String,
+    val algorithm: String,
+    val publicKeyBase64: String,
+    val certificateBase64: String,
+    val fingerprint: String,
+    val securityLevel: String,
+    val createdAt: Long = System.currentTimeMillis(),
+    val retiredAt: Long? = null,
+)
+
+@Entity(
+    tableName = "journal_seals",
+    foreignKeys = [
+        ForeignKey(
+            entity = ActivityEventEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["eventId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+        ForeignKey(
+            entity = EvidenceKeyEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["keyId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+    ],
+    indices = [
+        Index(value = ["eventId"], unique = true),
+        Index(value = ["sequence"], unique = true),
+        Index("keyId"),
+    ],
+)
+data class JournalSealEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val eventId: String,
+    val sequence: Long,
+    val previousChainHash: String,
+    val payloadHash: String,
+    val chainHash: String,
+    val signatureBase64: String,
+    val recordedAtUtc: Long,
+    val timezoneId: String,
+    val deviceId: String,
+    val actor: String,
+    val appVersion: String,
+    val keyId: String,
+    val legacyBackfill: Boolean = false,
+)
+
+@Entity(tableName = "actor_profiles")
+data class ActorProfileEntity(
+    @PrimaryKey val id: Int = SINGLETON_ID,
+    val displayName: String = "Pengguna lokal",
+    val updatedAt: Long = System.currentTimeMillis(),
+) {
+    companion object {
+        const val SINGLETON_ID = 1
+    }
+}
 
 @Entity(
     tableName = "cash_journal_lines",
@@ -355,7 +503,7 @@ data class AuditSnapshotEntity(
         childColumns = ["eventId"],
         onDelete = ForeignKey.RESTRICT,
     )],
-    indices = [Index("eventId"), Index(value = ["storageId"], unique = true)],
+    indices = [Index("eventId"), Index(value = ["storageId"], unique = true), Index("evidenceEventId")],
 )
 data class ReceiptEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -372,6 +520,8 @@ data class ReceiptEntity(
     val capturedAt: Long? = null,
     val latitude: Double? = null,
     val longitude: Double? = null,
+    val origin: String = EvidenceOrigin.LEGACY,
+    val evidenceEventId: String? = null,
 )
 
 @Entity(tableName = "sync_state")
@@ -439,6 +589,9 @@ data class ActivityRow(
     val cashImpact: Long,
     val vaultImpact: Long,
     val budgetImpact: Long,
+    val ledgerDebit: Long,
+    val ledgerCredit: Long,
+    val auditStatus: String,
 )
 
 data class EventChannelRow(
@@ -454,4 +607,20 @@ data class CashflowRow(
 data class ChannelBalanceRow(
     val fundingChannel: String,
     val balance: Long,
+)
+
+data class LedgerEventBalanceRow(
+    val eventId: String,
+    val debit: Long,
+    val credit: Long,
+)
+
+data class EvidenceHealthRow(
+    val receiptId: Long,
+    val eventId: String,
+    val displayName: String,
+    val sha256: String,
+    val byteSize: Long,
+    val origin: String,
+    val evidenceEventId: String?,
 )

@@ -15,7 +15,7 @@ class DatabaseEncryptionManager @Inject constructor(
     private val keyManager: DatabaseKeyManager,
 ) {
     private val continuityMarker: File
-        get() = File(context.noBackupFilesDir, "security/database-continuity-v1.4.7.validated")
+        get() = File(context.noBackupFilesDir, "security/database-continuity-v1.5.0.validated")
 
     data class DatabasePreparation(
         val keyMode: DatabaseKeyMode,
@@ -195,13 +195,14 @@ class DatabaseEncryptionManager @Inject constructor(
         }
     }
 
-    fun hasRecoverablePreEncryptionCopy(database: File): Boolean =
-        resolveKnownMode(preUpgradeCopy(database)) != null ||
-            canOpenPlaintext(preUpgradeCopy(database)) ||
-            canOpenEncrypted(preUpgradeCopy(database), ByteArray(0))
+    fun hasRecoverablePreEncryptionCopy(database: File): Boolean = recoveryCopies(database).any { candidate ->
+        resolveKnownMode(candidate) != null || canOpenPlaintext(candidate) || canOpenEncrypted(candidate, ByteArray(0))
+    }
 
     fun restorePreEncryptionCopy(database: File) {
-        val rollback = preUpgradeCopy(database)
+        val rollback = recoveryCopies(database).firstOrNull { candidate ->
+            resolveKnownMode(candidate) != null || canOpenPlaintext(candidate) || canOpenEncrypted(candidate, ByteArray(0))
+        } ?: error("Salinan pra-upgrade tidak tersedia")
         require(hasDatabaseFiles(rollback)) { "Salinan pra-upgrade tidak tersedia" }
         require(
             resolveKnownMode(rollback) != null || canOpenPlaintext(rollback) ||
@@ -219,6 +220,13 @@ class DatabaseEncryptionManager @Inject constructor(
             throw error
         }
     }
+
+    fun discardValidatedPreUpgradeCopy(database: File) {
+        if (!isContinuityValidated()) return
+        deleteDatabaseFiles(preUpgradeCopy(database))
+    }
+
+    fun markFreshDatabaseValidated() = markContinuityValidated()
 
     fun prepareValidatedRestoreKey() {
         val root = keyManager.getOrCreateDatabasePassphrase()
@@ -457,7 +465,12 @@ class DatabaseEncryptionManager @Inject constructor(
     }
 
     private fun preUpgradeCopy(database: File): File =
-        File(database.parentFile, ".${database.name}.pre-1.4.7")
+        File(database.parentFile, ".${database.name}.pre-1.5.0")
+
+    private fun recoveryCopies(database: File): List<File> = listOf(
+        preUpgradeCopy(database),
+        File(database.parentFile, ".${database.name}.pre-1.4.7"),
+    )
 
     private fun hasPrimaryRecoveryArtifacts(database: File): Boolean =
         database.parentFile?.listFiles()?.any { candidate ->
@@ -554,7 +567,7 @@ class DatabaseEncryptionManager @Inject constructor(
     companion object {
         private const val HEX_DIGITS = "0123456789abcdef"
         private const val MIN_DATABASE_BYTES = 16
-        private val CONTINUITY_MAGIC = "KRONCONT147".toByteArray(Charsets.US_ASCII)
+        private val CONTINUITY_MAGIC = "KRONCONT150".toByteArray(Charsets.US_ASCII)
     }
 }
 

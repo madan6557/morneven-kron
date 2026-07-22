@@ -28,10 +28,13 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Security
+import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -102,6 +105,7 @@ fun SettingsScreen(
     onTheme: (String) -> Unit,
     onBackup: () -> Unit,
     onRestore: () -> Unit,
+    onEvidenceCenter: () -> Unit,
     onPauseRule: ((String) -> Unit)?,
     onResumeRule: ((String, Boolean) -> Unit)?,
     modifier: Modifier = Modifier,
@@ -111,6 +115,7 @@ fun SettingsScreen(
     onDisconnectCloud: (() -> Unit)? = null,
     onChangeCloudAccount: (() -> Unit)? = null,
     onWifiOnly: ((Boolean) -> Unit)? = null,
+    onClearDriveData: (() -> Unit)? = null,
     onBudgetAlertsChanged: ((Boolean) -> Unit)? = null,
     onNotificationSettings: (() -> Unit)? = null,
 ) {
@@ -262,12 +267,14 @@ fun SettingsScreen(
                 onDisconnect = onDisconnectCloud,
                 onChangeAccount = onChangeCloudAccount,
                 onWifiOnly = onWifiOnly,
+                onClearDriveData = onClearDriveData,
             )
         }
         item {
             HudCard {
                 SettingRow(Icons.Outlined.Backup, "Buat .kronbackup", "Backup terenkripsi untuk pemulihan atau pindah perangkat", onClick = onBackup)
                 SettingRow(Icons.Outlined.Restore, "Pulihkan .kronbackup", "Data diverifikasi sebelum mengganti database aktif", onClick = onRestore)
+                SettingRow(Icons.Outlined.VerifiedUser, "Pusat Bukti", "Periksa ledger, ekspor PDF, dan verifikasi paket bukti", onClick = onEvidenceCenter)
             }
         }
 
@@ -322,7 +329,7 @@ fun SettingsScreen(
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Icon(Icons.Outlined.Security, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
                     Column(Modifier.weight(1f)) {
-                        Text("KRON ${BuildConfig.VERSION_NAME} Full Release LTS", style = MaterialTheme.typography.titleMedium)
+                        Text("KRON ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.titleMedium)
                     }
                 }
                 Text(
@@ -459,6 +466,7 @@ private fun CloudSyncCard(
     onDisconnect: (() -> Unit)?,
     onChangeAccount: (() -> Unit)?,
     onWifiOnly: ((Boolean) -> Unit)?,
+    onClearDriveData: (() -> Unit)? = null,
 ) {
     val connected = state.status !in setOf(CloudSyncStatus.NOT_CONNECTED, CloudSyncStatus.UNAVAILABLE)
     val actionsBlocked = state.status in setOf(CloudSyncStatus.SYNCING, CloudSyncStatus.RESTART_REQUIRED)
@@ -508,20 +516,40 @@ private fun CloudSyncCard(
                 onWifiOnly,
             )
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            when {
-                !connected && onConnect != null -> Button(onClick = onConnect) { Text("Hubungkan Drive") }
-                connected && onSyncNow != null -> Button(onClick = onSyncNow, enabled = !actionsBlocked && state.status != CloudSyncStatus.FREE_ONLY_BLOCKED) {
-                    Icon(Icons.Outlined.Sync, contentDescription = null)
-                    Text(if (state.status == CloudSyncStatus.CONFLICT) "Pusat Konflik" else "Sinkronkan")
-                }
-            }
-            if (connected && onDisconnect != null && !actionsBlocked) {
-                TextButton(onClick = onDisconnect) { Text("Putuskan") }
+        when {
+            !connected && onConnect != null -> Button(onClick = onConnect) { Text("Hubungkan Drive") }
+            connected && onSyncNow != null -> Button(
+                onClick = onSyncNow,
+                enabled = !actionsBlocked && state.status != CloudSyncStatus.FREE_ONLY_BLOCKED,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Outlined.Sync, contentDescription = null)
+                Text(if (state.status == CloudSyncStatus.CONFLICT) "Pusat Konflik" else "Sinkronkan")
             }
         }
         if (connected && onChangeAccount != null && !actionsBlocked) {
-            TextButton(onClick = onChangeAccount) { Text("Ganti akun Drive") }
+            TextButton(onClick = onChangeAccount, modifier = Modifier.padding(top = 4.dp)) {
+                Text("Ganti akun Drive")
+            }
+        }
+        if (connected && !actionsBlocked) {
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (onDisconnect != null) {
+                    TextButton(
+                        onClick = onDisconnect,
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Putuskan") }
+                }
+                if (onClearDriveData != null) {
+                    TextButton(
+                        onClick = onClearDriveData,
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Hapus data Drive") }
+                }
+            }
         }
     }
 }

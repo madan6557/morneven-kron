@@ -145,7 +145,7 @@ class AuthorizationClientDriveSession(
         interactive: Boolean,
     ): AuthorizationClientResult {
         val result = authorizationClient.authorize(account, setOf(DRIVE_APPDATA_SCOPE), interactive)
-        if (result is AuthorizationClientResult.Granted && DRIVE_APPDATA_SCOPE !in result.grantedScopes) {
+        if (result is AuthorizationClientResult.Granted && interactive && DRIVE_APPDATA_SCOPE !in result.grantedScopes) {
             authorizationClient.clearToken(result.accessToken)
             return AuthorizationClientResult.Failed("Izin appDataFolder tidak diberikan", retryable = false)
         }

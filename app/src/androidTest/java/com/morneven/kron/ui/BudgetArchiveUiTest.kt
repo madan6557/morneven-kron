@@ -69,8 +69,10 @@ class BudgetArchiveUiTest {
                 )
             }
         }
+        composeRule.waitForIdle()
 
         composeRule.onNodeWithText("Arsip (1)").performClick()
+        composeRule.waitForIdle()
         composeRule.onNodeWithText("RAB Arsip").assertExists()
         composeRule.onNodeWithText("Pulihkan").assertExists()
         composeRule.onNodeWithText("Pulihkan & Aktifkan").assertExists()

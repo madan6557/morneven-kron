@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -146,7 +145,7 @@ private fun CameraPreview(
                         imageCapture
                     )
                 } catch (e: Exception) {
-                    Log.e(TAG, "Camera bind error", e)
+                Log.e(TAG, "Camera tidak dapat disiapkan")
                 }
 
                 previewView
@@ -188,13 +187,12 @@ private fun takePhoto(
         cameraExecutor,
         object : ImageCapture.OnImageSavedCallback {
             override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                Log.d(TAG, "Photo saved: ${photoFile.absolutePath}")
                 val uri = Uri.fromFile(photoFile)
                 onPhotoSaved(uri)
             }
 
             override fun onError(exception: ImageCaptureException) {
-                Log.e(TAG, "Photo capture failed: ${exception.imageCaptureError}", exception)
+                Log.e(TAG, "Pengambilan foto gagal dengan kode ${exception.imageCaptureError}")
             }
         }
     )

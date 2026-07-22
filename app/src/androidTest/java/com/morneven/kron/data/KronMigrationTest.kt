@@ -300,4 +300,37 @@ class KronMigrationTest {
             close()
         }
     }
+
+    @Test
+    fun migrationTwelveToThirteenBackfillsBalancedGeneralLedgerWithoutChangingLegacyRows() {
+        val name = "kron-production-12-to-13.db"
+        migrationHelper.createDatabase(name, 12).apply {
+            execSQL("INSERT INTO accounts(id,name,isActive,isArchived,archivedAt,createdAt) VALUES(1,'Akun Utama',1,0,NULL,10)")
+            execSQL("INSERT INTO activity_events(id,type,title,note,source,effectiveEpochDay,createdAt,relatedEventId,reversedByEventId,targetAllocationId,accountId) VALUES('income-legacy','INCOME','Pemasukan lama','','USER',1,10,NULL,NULL,NULL,1)")
+            execSQL("INSERT INTO cash_journal_lines(id,eventId,accountId,fundingChannel,amount) VALUES(1,'income-legacy',1,'CASH',500000)")
+            execSQL("INSERT INTO budget_journal_lines(id,eventId,allocationId,bucket,fundingChannel,amount,accountId) VALUES(1,'income-legacy',NULL,'VAULT','CASH',500000,1)")
+            execSQL("INSERT INTO budget_journal_lines(id,eventId,allocationId,bucket,fundingChannel,amount,accountId) VALUES(2,'income-legacy',NULL,'EXTERNAL','CASH',-500000,1)")
+            close()
+        }
+
+        migrationHelper.runMigrationsAndValidate(name, 13, true, KronDatabase.MIGRATION_12_13).apply {
+            query("SELECT COALESCE(SUM(CASE WHEN side='DEBIT' THEN amount ELSE 0 END),0), COALESCE(SUM(CASE WHEN side='CREDIT' THEN amount ELSE 0 END),0) FROM ledger_lines WHERE eventId='income-legacy'").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(500000L, cursor.getLong(0))
+                assertEquals(500000L, cursor.getLong(1))
+            }
+            query("SELECT amount FROM cash_journal_lines WHERE id=1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(500000L, cursor.getLong(0))
+            }
+            query("SELECT COUNT(*) FROM ledger_lines WHERE legacyBackfill=1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(2, cursor.getInt(0))
+            }
+            assertTrue(runCatching { execSQL("UPDATE activity_events SET title='Diubah' WHERE id='income-legacy'") }.isFailure)
+            assertTrue(runCatching { execSQL("DELETE FROM ledger_lines WHERE eventId='income-legacy'") }.isFailure)
+            query("PRAGMA foreign_key_check").use { cursor -> assertTrue(!cursor.moveToFirst()) }
+            close()
+        }
+    }
 }
