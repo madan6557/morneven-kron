@@ -61,6 +61,7 @@ class BudgetArchiveUiTest {
                     onChannelTransfer = {},
                     onReleaseRollover = {},
                     onDetail = { _, readOnly -> detailReadOnly = readOnly },
+                    onHistory = {},
                     onPause = {},
                     onResume = {},
                     onArchive = {},

@@ -71,7 +71,7 @@ data class CategoryEntity(
     val isArchived: Boolean = false,
 )
 
-@Entity(tableName = "portfolios")
+@Entity(tableName = "portfolios", indices = [Index("accountId")])
 data class PortfolioEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
@@ -163,7 +163,7 @@ data class PortfolioAllocationTemplateEntity(
 
 @Entity(
     tableName = "activity_events",
-    indices = [Index("effectiveEpochDay"), Index("relatedEventId")],
+    indices = [Index("effectiveEpochDay"), Index("relatedEventId"), Index("accountId")],
 )
 data class ActivityEventEntity(
     @PrimaryKey val id: String,
@@ -221,7 +221,7 @@ data class CashJournalLineEntity(
             onDelete = ForeignKey.RESTRICT,
         ),
     ],
-    indices = [Index("eventId"), Index("allocationId"), Index("bucket")],
+    indices = [Index("eventId"), Index("allocationId"), Index("bucket"), Index(value = ["accountId", "fundingChannel"])],
 )
 data class BudgetJournalLineEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

@@ -77,6 +77,7 @@ fun ActivityScreen(state: KronUiState, onEvent: (String) -> Unit, modifier: Modi
         item {
             Text("TRANSAKSI & AUDIT", style = MaterialTheme.typography.headlineMedium)
             Text("Semua kejadian tetap tersimpan dan dapat ditelusuri", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Akun aktif: ${state.activeAccount?.name ?: "Belum ada"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
         }
         item {
             ActivitySearchField(query = query, onQuery = { query = it }, focusManager = focusManager)

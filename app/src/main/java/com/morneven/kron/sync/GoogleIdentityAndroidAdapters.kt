@@ -53,25 +53,25 @@ class AndroidCredentialManagerAccountSelector(
                 credentialManager.getCredential(activity, request).credential
             }
         } catch (error: TimeoutCancellationException) {
-            Log.w(TAG, "CredentialManager.getCredential() timed out after 30s")
+            Log.w(TAG, "Credential Manager timed out")
             throw IllegalStateException(
-                "Pemilihan akun Google tidak merespon. Coba gunakan WiFi lalu sambungkan Drive.",
+                "Pemilihan akun Google tidak merespon. Periksa koneksi internet lalu coba lagi.",
                 error,
             )
         } catch (error: NoCredentialException) {
-            Log.w(TAG, "NoCredentialException: ${error.message}")
+            Log.w(TAG, "No Google credential is available")
             throw IllegalStateException(
                 "Tidak ada akun Google yang tersedia. Tambahkan akun Google di perangkat lalu coba lagi.",
                 error,
             )
         } catch (error: GetCredentialCancellationException) {
-            Log.w(TAG, "GetCredentialCancellationException: ${error.message}")
+            Log.w(TAG, "Credential selection was cancelled")
             throw IllegalStateException("Pemilihan akun Google dibatalkan", error)
         } catch (error: GetCredentialException) {
-            Log.w(TAG, "GetCredentialException type=${error.type} message=${error.message}")
+            Log.w(TAG, "Credential Manager is unavailable")
             throw IllegalStateException(
                 "Pemilih akun Google tidak tersedia (${error.type}). " +
-                    "Perbarui Google Play Services atau gunakan WiFi lalu coba lagi.",
+                    "Perbarui Google Play Services atau periksa koneksi internet.",
                 error,
             )
         }

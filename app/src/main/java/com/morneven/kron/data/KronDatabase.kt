@@ -30,7 +30,7 @@ import com.morneven.kron.security.SqlCipherLibrary
         ReceiptEntity::class,
         SyncStateEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = true,
 )
 abstract class KronDatabase : RoomDatabase() {
@@ -42,7 +42,8 @@ abstract class KronDatabase : RoomDatabase() {
         fun getInstance(context: Context): KronDatabase = instance ?: synchronized(this) {
             instance ?: run {
                 val appContext = context.applicationContext
-                val encryption = DatabaseEncryptionManager(appContext, DatabaseKeyManager(appContext))
+                val keyManager = DatabaseKeyManager(appContext)
+                val encryption = DatabaseEncryptionManager(appContext, keyManager)
                 val dbPath = appContext.getDatabasePath(DATABASE_NAME).absolutePath
                 val guard = encryption.preparePrimaryDatabase(appContext.getDatabasePath(DATABASE_NAME))
                 try {
@@ -56,8 +57,9 @@ abstract class KronDatabase : RoomDatabase() {
                     LegacyReceiptEncryption.migrate(
                         appContext,
                         writableDatabase,
-                        EncryptedAttachmentStore(appContext, DatabaseKeyManager(appContext)),
+                        EncryptedAttachmentStore(appContext, keyManager),
                     )
+                    keyManager.confirmRawKeyProfile()
                     guard?.commit()
                     opened.also { instance = it }
                 } catch (error: Exception) {
@@ -328,6 +330,179 @@ abstract class KronDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Reconstruct ownership erased by the shipped 10 -> 11 migration. Amounts,
+         * journal IDs, and audit records stay untouched. A dedicated legacy account
+         * holds only records for which no defensible owner can be inferred.
+         */
+        val MIGRATION_11_12: Migration = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_portfolios_accountId ON portfolios(accountId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_activity_events_accountId ON activity_events(accountId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_budget_journal_lines_accountId_fundingChannel ON budget_journal_lines(accountId, fundingChannel)")
+
+                // Cash-backed lines can be mapped precisely, including transfers
+                // whose source and destination use different channels.
+                db.execSQL(
+                    """
+                    UPDATE budget_journal_lines
+                    SET accountId = (
+                        SELECT c.accountId
+                        FROM cash_journal_lines c
+                        WHERE c.eventId = budget_journal_lines.eventId
+                          AND c.fundingChannel = budget_journal_lines.fundingChannel
+                          AND ((budget_journal_lines.amount < 0 AND c.amount < 0)
+                            OR (budget_journal_lines.amount > 0 AND c.amount > 0))
+                        ORDER BY c.id
+                        LIMIT 1
+                    )
+                    WHERE accountId = 0
+                      AND EXISTS(
+                        SELECT 1
+                        FROM cash_journal_lines c
+                        WHERE c.eventId = budget_journal_lines.eventId
+                          AND c.fundingChannel = budget_journal_lines.fundingChannel
+                          AND ((budget_journal_lines.amount < 0 AND c.amount < 0)
+                            OR (budget_journal_lines.amount > 0 AND c.amount > 0))
+                      )
+                    """.trimIndent(),
+                )
+
+                // A portfolio is safe to assign only when all attributed journal
+                // lines agree on exactly one account.
+                db.execSQL(
+                    """
+                    UPDATE portfolios
+                    SET accountId = (
+                        SELECT MIN(b.accountId)
+                        FROM allocations al
+                        JOIN budget_periods p ON p.id = al.periodId
+                        JOIN budget_journal_lines b ON b.allocationId = al.id
+                        WHERE p.portfolioId = portfolios.id AND b.accountId != 0
+                    )
+                    WHERE accountId = 0
+                      AND 1 = (
+                        SELECT COUNT(DISTINCT b.accountId)
+                        FROM allocations al
+                        JOIN budget_periods p ON p.id = al.periodId
+                        JOIN budget_journal_lines b ON b.allocationId = al.id
+                        WHERE p.portfolioId = portfolios.id AND b.accountId != 0
+                      )
+                    """.trimIndent(),
+                )
+
+                db.execSQL(
+                    """
+                    UPDATE budget_journal_lines
+                    SET accountId = (
+                        SELECT pf.accountId
+                        FROM allocations al
+                        JOIN budget_periods p ON p.id = al.periodId
+                        JOIN portfolios pf ON pf.id = p.portfolioId
+                        WHERE al.id = budget_journal_lines.allocationId
+                    )
+                    WHERE accountId = 0
+                      AND allocationId IS NOT NULL
+                      AND EXISTS(
+                        SELECT 1
+                        FROM allocations al
+                        JOIN budget_periods p ON p.id = al.periodId
+                        JOIN portfolios pf ON pf.id = p.portfolioId
+                        WHERE al.id = budget_journal_lines.allocationId
+                          AND pf.accountId != 0
+                      )
+                    """.trimIndent(),
+                )
+
+                db.execSQL(
+                    """
+                    UPDATE activity_events
+                    SET accountId = COALESCE(
+                        (
+                            SELECT c.accountId
+                            FROM cash_journal_lines c
+                            WHERE c.eventId = activity_events.id AND c.amount < 0
+                            ORDER BY c.id
+                            LIMIT 1
+                        ),
+                        (
+                            SELECT c.accountId
+                            FROM cash_journal_lines c
+                            WHERE c.eventId = activity_events.id
+                            ORDER BY c.id
+                            LIMIT 1
+                        )
+                    )
+                    WHERE accountId = 0
+                      AND EXISTS(SELECT 1 FROM cash_journal_lines c WHERE c.eventId = activity_events.id)
+                    """.trimIndent(),
+                )
+
+                db.execSQL(
+                    """
+                    UPDATE activity_events
+                    SET accountId = (
+                        SELECT MIN(b.accountId)
+                        FROM budget_journal_lines b
+                        WHERE b.eventId = activity_events.id AND b.accountId != 0
+                    )
+                    WHERE accountId = 0
+                      AND 1 = (
+                        SELECT COUNT(DISTINCT b.accountId)
+                        FROM budget_journal_lines b
+                        WHERE b.eventId = activity_events.id AND b.accountId != 0
+                      )
+                    """.trimIndent(),
+                )
+
+                db.execSQL(
+                    """
+                    UPDATE budget_journal_lines
+                    SET accountId = (
+                        SELECT e.accountId
+                        FROM activity_events e
+                        WHERE e.id = budget_journal_lines.eventId
+                    )
+                    WHERE accountId = 0
+                      AND EXISTS(
+                        SELECT 1 FROM activity_events e
+                        WHERE e.id = budget_journal_lines.eventId AND e.accountId != 0
+                      )
+                    """.trimIndent(),
+                )
+
+                val needsLegacyAccount = db.query(
+                    """
+                    SELECT EXISTS(
+                        SELECT 1 FROM portfolios WHERE accountId = 0
+                        UNION ALL SELECT 1 FROM activity_events WHERE accountId = 0
+                        UNION ALL SELECT 1 FROM budget_journal_lines WHERE accountId = 0
+                        UNION ALL SELECT 1 FROM recurring_rules WHERE accountId = 0
+                    )
+                    """.trimIndent(),
+                ).use { cursor -> cursor.moveToFirst() && cursor.getInt(0) == 1 }
+                if (needsLegacyAccount) {
+                    db.execSQL(
+                        """
+                        INSERT INTO accounts(name, isActive, isArchived, archivedAt, createdAt)
+                        SELECT 'Data KRON Lama', 0, 0, NULL, strftime('%s', 'now') * 1000
+                        WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE name = 'Data KRON Lama')
+                        """.trimIndent(),
+                    )
+                    val legacyAccountId = db.query(
+                        "SELECT id FROM accounts WHERE name = 'Data KRON Lama' ORDER BY id LIMIT 1",
+                    ).use { cursor ->
+                        require(cursor.moveToFirst()) { "Akun data lama tidak dapat dibuat" }
+                        cursor.getLong(0)
+                    }
+                    db.execSQL("UPDATE portfolios SET accountId = ? WHERE accountId = 0", arrayOf(legacyAccountId))
+                    db.execSQL("UPDATE activity_events SET accountId = ? WHERE accountId = 0", arrayOf(legacyAccountId))
+                    db.execSQL("UPDATE budget_journal_lines SET accountId = ? WHERE accountId = 0", arrayOf(legacyAccountId))
+                    db.execSQL("UPDATE recurring_rules SET accountId = ? WHERE accountId = 0", arrayOf(legacyAccountId))
+                }
+            }
+        }
+
         private val ALL_MIGRATIONS = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
@@ -339,6 +514,7 @@ abstract class KronDatabase : RoomDatabase() {
             MIGRATION_8_9,
             MIGRATION_9_10,
             MIGRATION_10_11,
+            MIGRATION_11_12,
         )
 
         private val SYNC_TRIGGER_CALLBACK = object : Callback() {
@@ -428,6 +604,37 @@ abstract class KronDatabase : RoomDatabase() {
                 )
                 require(cash == available) { "Invariant kanal $channel tidak seimbang" }
             }
+            val accountIds = db.query("SELECT id FROM accounts").use { cursor ->
+                buildList {
+                    while (cursor.moveToNext()) add(cursor.getLong(0))
+                }
+            }
+            accountIds.forEach { accountId ->
+                val cash = scalar(
+                    db,
+                    "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines WHERE accountId=$accountId",
+                )
+                val available = scalar(
+                    db,
+                    "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE accountId=$accountId " +
+                        "AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)",
+                )
+                require(cash == available) { "Invariant akun database tidak seimbang" }
+                listOf(FundingChannel.CASH, FundingChannel.EBUDGET).forEach { channel ->
+                    val channelCash = scalar(
+                        db,
+                        "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines " +
+                            "WHERE accountId=$accountId AND fundingChannel='$channel'",
+                    )
+                    val channelAvailable = scalar(
+                        db,
+                        "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines " +
+                            "WHERE accountId=$accountId AND fundingChannel='$channel' " +
+                            "AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)",
+                    )
+                    require(channelCash == channelAvailable) { "Invariant kanal akun database tidak seimbang" }
+                }
+            }
         }
 
         private fun scalar(db: SupportSQLiteDatabase, sql: String): Long = db.query(sql).use { cursor ->
@@ -436,5 +643,6 @@ abstract class KronDatabase : RoomDatabase() {
         }
 
         const val DATABASE_NAME = "kron-v4.db"
+        const val SCHEMA_VERSION = 12
     }
 }

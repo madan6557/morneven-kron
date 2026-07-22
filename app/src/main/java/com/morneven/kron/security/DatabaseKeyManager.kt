@@ -7,7 +7,9 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.security.KeyStore
+import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -25,23 +27,138 @@ class DatabaseKeyManager @Inject constructor(
     private val envelopeFile: File
         get() = File(context.noBackupFilesDir, "security/database-key-v1.bin")
 
+    private val profileFile: File
+        get() = File(context.noBackupFilesDir, "security/database-key-profile-v1.bin")
+
+    private val initializationMarkerFile: File
+        get() = File(context.noBackupFilesDir, "security/database-key-initialization-v1.pending")
+
     @Synchronized
     fun getOrCreateDatabasePassphrase(): ByteArray {
-        val wrappingKey = getOrCreateWrappingKey()
         val file = envelopeFile
-        if (file.exists()) return unwrap(file, wrappingKey)
+        if (file.exists()) {
+            return loadAndVerify(file)
+        }
 
+        check(!profileFile.exists()) {
+            "Profil kunci KRON tersedia tanpa envelope kunci. Pembuatan kunci baru diblokir."
+        }
+        check(!hasProtectedDataArtifacts()) {
+            "Data KRON lama ditemukan tanpa envelope kunci. Pembuatan kunci baru diblokir."
+        }
+
+        markNewDatabaseInitialization()
+        return createDatabasePassphrase()
+    }
+
+    /**
+     * Creates a key only after the caller has positively validated the primary
+     * database as a readable legacy plaintext or empty-key database.
+     */
+    @Synchronized
+    fun getOrCreateForValidatedLegacyDatabase(): ByteArray {
+        if (envelopeFile.exists()) return loadAndVerify(envelopeFile)
+        check(!profileFile.exists()) {
+            "Profil kunci KRON tersedia tanpa envelope kunci. Migrasi diblokir."
+        }
+        check(!hasEncryptedAttachmentArtifacts()) {
+            "Lampiran terenkripsi ditemukan tanpa envelope kunci. Migrasi diblokir."
+        }
+        return createDatabasePassphrase()
+    }
+
+    @Synchronized
+    fun confirmRawKeyProfile() {
+        val root = loadExistingDatabasePassphrase() ?: throw DatabaseKeyUnavailableException(
+            "Envelope kunci database KRON tidak tersedia.",
+        )
+        try {
+            if (profileFile.exists()) {
+                verifyProfile(profileFile, root)
+                initializationMarkerFile.delete()
+                return
+            }
+            profileFile.parentFile?.mkdirs()
+            val temporary = File(profileFile.parentFile, "${profileFile.name}.new")
+            try {
+                val fingerprint = fingerprint(root)
+                FileOutputStream(temporary).use { output ->
+                    DataOutputStream(output).use { data ->
+                        data.write(PROFILE_MAGIC)
+                        data.writeByte(RAW_HEX_SQLCIPHER_4_ENCODING)
+                        data.write(fingerprint)
+                        data.flush()
+                        output.fd.sync()
+                    }
+                }
+                atomicReplace(temporary, profileFile)
+                verifyProfile(profileFile, root)
+                initializationMarkerFile.delete()
+            } finally {
+                temporary.delete()
+            }
+        } finally {
+            root.fill(0)
+        }
+    }
+
+    fun isRawKeyProfileProvisioned(): Boolean = profileFile.exists()
+
+    fun isNewDatabaseInitializationPending(): Boolean =
+        initializationMarkerFile.exists() && runCatching {
+            initializationMarkerFile.readBytes().contentEquals(INITIALIZATION_MAGIC)
+        }.getOrDefault(false)
+
+    fun isExistingRawKeyProfileValid(): Boolean {
+        if (!profileFile.exists()) return false
+        val root = runCatching { loadExistingDatabasePassphrase() }.getOrNull() ?: return false
+        return try {
+            runCatching { verifyProfile(profileFile, root) }.isSuccess
+        } finally {
+            root.fill(0)
+        }
+    }
+
+    private fun createDatabasePassphrase(): ByteArray {
+        val wrappingKey = getOrCreateWrappingKey()
         val key = ByteArray(DATA_KEY_BYTES).also(SecureRandom()::nextBytes)
-        file.parentFile?.mkdirs()
-        val temporary = File(file.parentFile, "${file.name}.new")
+        envelopeFile.parentFile?.mkdirs()
+        val temporary = File(envelopeFile.parentFile, "${envelopeFile.name}.new")
         try {
             wrap(temporary, wrappingKey, key)
-            atomicReplace(temporary, file)
+            atomicReplace(temporary, envelopeFile)
             return key.copyOf()
         } finally {
             key.fill(0)
             temporary.delete()
         }
+    }
+
+    private fun markNewDatabaseInitialization() {
+        if (isNewDatabaseInitializationPending()) return
+        initializationMarkerFile.parentFile?.mkdirs()
+        val temporary = File(initializationMarkerFile.parentFile, "${initializationMarkerFile.name}.new")
+        try {
+            FileOutputStream(temporary).use { output ->
+                output.write(INITIALIZATION_MAGIC)
+                output.flush()
+                output.fd.sync()
+            }
+            atomicReplace(temporary, initializationMarkerFile)
+        } finally {
+            temporary.delete()
+        }
+    }
+
+    /**
+     * Reads the current device key without generating a replacement. Existing
+     * encrypted data must never cause a new key envelope to be created.
+     */
+    @Synchronized
+    fun loadExistingDatabasePassphrase(): ByteArray? {
+        val file = envelopeFile
+        if (!file.exists()) return null
+        return loadAndVerify(file)
     }
 
     fun deriveSubkey(label: String): SecretKeySpec {
@@ -57,9 +174,63 @@ class DatabaseKeyManager @Inject constructor(
 
     fun isProvisioned(): Boolean = envelopeFile.exists()
 
-    private fun getOrCreateWrappingKey(): SecretKey {
+    private fun loadAndVerify(file: File): ByteArray {
+        val wrappingKey = existingWrappingKey() ?: throw DatabaseKeyUnavailableException(
+            "Kunci perangkat untuk database KRON tidak tersedia.",
+        )
+        val root = unwrap(file, wrappingKey)
+        try {
+            if (profileFile.exists()) verifyProfile(profileFile, root)
+            return root
+        } catch (error: Exception) {
+            root.fill(0)
+            throw error
+        }
+    }
+
+    private fun verifyProfile(source: File, root: ByteArray) {
+        val expectedFingerprint = fingerprint(root)
+        source.inputStream().buffered().use { input ->
+            DataInputStream(input).use { data ->
+                val magic = ByteArray(PROFILE_MAGIC.size).also(data::readFully)
+                require(magic.contentEquals(PROFILE_MAGIC)) { "Profil kunci KRON tidak valid" }
+                require(data.readUnsignedByte() == RAW_HEX_SQLCIPHER_4_ENCODING) {
+                    "Encoding kunci database KRON tidak didukung"
+                }
+                val storedFingerprint = ByteArray(KEY_FINGERPRINT_BYTES).also(data::readFully)
+                require(data.read() == -1) { "Profil kunci KRON memiliki data tambahan" }
+                require(MessageDigest.isEqual(storedFingerprint, expectedFingerprint)) {
+                    "Envelope dan profil kunci database KRON tidak cocok"
+                }
+            }
+        }
+    }
+
+    private fun fingerprint(root: ByteArray): ByteArray =
+        MessageDigest.getInstance("SHA-256").digest(root)
+
+    private fun hasProtectedDataArtifacts(): Boolean {
+        val primary = context.getDatabasePath(PRIMARY_DATABASE_NAME)
+        val databaseArtifacts = primary.parentFile?.listFiles()?.any { candidate ->
+            candidate.name.startsWith(primary.name) || candidate.name.startsWith(".${primary.name}")
+        } == true
+        return databaseArtifacts ||
+            File(context.filesDir, PENDING_RESTORE_DIRECTORY).exists() ||
+            hasEncryptedAttachmentArtifacts()
+    }
+
+    private fun hasEncryptedAttachmentArtifacts(): Boolean =
+        File(context.noBackupFilesDir, RECEIPTS_DIRECTORY)
+            .listFiles()
+            ?.any { it.isFile } == true
+
+    private fun existingWrappingKey(): SecretKey? {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        (keyStore.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
+        return keyStore.getKey(KEY_ALIAS, null) as? SecretKey
+    }
+
+    private fun getOrCreateWrappingKey(): SecretKey {
+        existingWrappingKey()?.let { return it }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
         generator.init(
             KeyGenParameterSpec.Builder(
@@ -80,12 +251,14 @@ class DatabaseKeyManager @Inject constructor(
         val cipher = Cipher.getInstance(AES_GCM)
         cipher.init(Cipher.ENCRYPT_MODE, wrappingKey, GCMParameterSpec(GCM_TAG_BITS, nonce))
         val encrypted = cipher.doFinal(dataKey)
-        target.outputStream().buffered().use { output ->
+        FileOutputStream(target).use { output ->
             DataOutputStream(output).use { data ->
                 data.write(MAGIC)
                 data.write(nonce)
                 data.writeInt(encrypted.size)
                 data.write(encrypted)
+                data.flush()
+                output.fd.sync()
             }
         }
     }
@@ -130,6 +303,15 @@ class DatabaseKeyManager @Inject constructor(
         private const val GCM_NONCE_BYTES = 12
         private const val GCM_TAG_BITS = 128
         private const val MAX_ENVELOPE_BYTES = 1024
+        private const val PRIMARY_DATABASE_NAME = "kron-v4.db"
+        private const val PENDING_RESTORE_DIRECTORY = "pending-restore-v2"
+        private const val RECEIPTS_DIRECTORY = "receipts"
+        private const val RAW_HEX_SQLCIPHER_4_ENCODING = 1
+        private const val KEY_FINGERPRINT_BYTES = 32
         private val MAGIC = "KRONKEY1".toByteArray(Charsets.US_ASCII)
+        private val PROFILE_MAGIC = "KRONDBP1".toByteArray(Charsets.US_ASCII)
+        private val INITIALIZATION_MAGIC = "KRONINIT1".toByteArray(Charsets.US_ASCII)
     }
 }
+
+class DatabaseKeyUnavailableException(message: String) : IllegalStateException(message)

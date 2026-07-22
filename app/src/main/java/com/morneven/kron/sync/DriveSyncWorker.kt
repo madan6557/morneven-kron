@@ -55,7 +55,7 @@ class DriveSyncWorker(
 }
 
 object DriveSyncScheduler {
-    fun schedulePeriodic(context: Context, wifiOnly: Boolean = true) {
+    fun schedulePeriodic(context: Context, wifiOnly: Boolean = false) {
         val request = PeriodicWorkRequestBuilder<DriveSyncWorker>(
             12,
             TimeUnit.HOURS,
@@ -69,7 +69,7 @@ object DriveSyncScheduler {
         )
     }
 
-    fun syncNow(context: Context, wifiOnly: Boolean = true) {
+    fun syncNow(context: Context, wifiOnly: Boolean = false) {
         val request = OneTimeWorkRequestBuilder<DriveSyncWorker>()
             .setConstraints(constraints(wifiOnly, requireBatteryNotLow = false))
             .build()
@@ -80,7 +80,7 @@ object DriveSyncScheduler {
         )
     }
 
-    fun scheduleAfterChange(context: Context, wifiOnly: Boolean = true) {
+    fun scheduleAfterChange(context: Context, wifiOnly: Boolean = false) {
         val request = OneTimeWorkRequestBuilder<DriveSyncWorker>()
             .setConstraints(constraints(wifiOnly, requireBatteryNotLow = true))
             .setInitialDelay(30, TimeUnit.SECONDS)

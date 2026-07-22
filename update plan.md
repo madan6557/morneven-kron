@@ -13,7 +13,7 @@
 **Target pengguna**: Individu dan keluarga yang ingin mencatat keuangan pribadi secara privat dan aman
 **Filosofi**: Local-first, no backend, end-to-end encrypted, open data via backup/sync
 **Tech stack**: Kotlin, Android SDK 37, Jetpack Compose + Material3, Room + SQLCipher, Hilt, WorkManager, DataStore, Biometric, Google Drive API
-**Versi saat ini**: 1.1.5 (versionCode 27, LTS baseline 1.0.21)
+**Versi saat ini**: 1.4.6 (versionCode 58, profil kunci SQLCipher permanen, baseline kompatibilitas 1.0.21)
 
 **Fitur utama yang sudah ada:**
 - Buku besar double-entry dengan jurnal append-only
@@ -33,8 +33,17 @@
 ## Status Diskusi
 
 - **Tanggal Mulai**: 2026-07-20
-- **Fase**: Perencanaan implementasi
-- **Versi Saat Ini**: 1.1.5 (versionCode 27)
+- **Fase**: Implementasi lanjutan -- perbaikan UI/UX
+- **Versi Saat Ini**: 1.4.6 (versionCode 58)
+
+---
+
+## Status Fitur Saat Ini
+
+- **Sync Google Drive**: OPSIONAL. Account dipilih melalui Credential Manager lalu diberi izin hanya untuk `drive.appdata`. Data seluler diizinkan secara bawaan. Build tetap memerlukan konfigurasi OAuth eksternal yang valid.
+- **Backup/Restore (.kronbackup)**: TERVALIDASI DI STAGING. Backup v1/v2 tetap diterima, kandidat restore dimigrasikan, diperiksa, dienkripsi SQLCipher, lalu dijadwalkan untuk swap atomik saat cold start.
+- **Kamera (foto bukti)**: SUDAH BERFUNGSI. Menggunakan CameraX (bukan delegasi intent). Izin CAMERA diminta runtime.
+- **Isolasi akun**: Setiap akun punya portfolio, transaksi, Vault, receipt, dan laporan sendiri. Data lama yang ambigu ditempatkan pada akun nonaktif `Data KRON Lama`, tidak ditampilkan pada akun operasional.
 
 ---
 
@@ -43,7 +52,7 @@
 ### P1 - Prioritas Tinggi
 
 - [x] **F1 - Laporan: Indikator perubahan (+ / -) dan (+^ / -v)**
-  - **Status**: Desain selesai, menunggu implementasi
+  - **Status**: SELESAI (v1.2.x)
   - **Lokasi**:
     - Ringkasan utama (Masuk/Keluar/Net) -- bandingkan periode sebelumnya dengan durasi sama
     - Tiap baris di mode **Tabel** per periode -- bandingkan dengan bucket sebelumnya
@@ -88,36 +97,28 @@
 
 - [x] **F2 - Input Pengeluaran Budget: Perbaikan UX** (SUDAH FIX, tidak perlu dikerjakan)
 
-- [x] **F3 - Upload/Ambil Gambar pada Transaksi** (Desain selesai)
-  - **Status saat ini**: Gallery picker sudah ada (PickVisualMedia di KronApp.kt:389), backend enkripsi sudah berfungsi (ReceiptManager + EncryptedAttachmentStore), tombol foto sudah terhubung di AuditDialog (KronApp.kt:672-674)
-  - **Yang perlu ditambahkan**:
-    1. **Camera capture**: ActivityResultContracts.TakePicture + izin CAMERA runtime
-    2. **Kompresi gambar**: Resize max 1920px longest side, maintain aspect ratio, JPEG quality 80, target 200-500KB
-    3. **EXIF metadata**: 
-       - Kamera: timestamp dari file creation time, geotag via FusedLocationProviderClient (opsional, butuh izin ACCESS_FINE_LOCATION)
-       - Galeri: baca EXIF DateTimeOriginal, GPSLatitude, GPSLongitude via ExifInterface
-       - Fallback: timestamp saat import
-       - Disimpan di field baru ReceiptEntity (capturedAt, latitude, longitude) -- tidak di dalam file enkripsi
-    4. **Field baru di ReceiptEntity**: `capturedAt: Long?`, `latitude: Double?`, `longitude: Double?` -> butuh Room migration 6→7
-    5. **Preview thumbnail** di AuditDialog: dekripsi file -> resize utk thumbnail -> tampilkan. Butuh FileProvider.
-    6. **Pilihan sumber**: Dialog kecil "Ambil dari: [Kamera] [Galeri]" saat tombol foto ditekan
+- [x] **F3 - Upload/Ambil Gambar pada Transaksi** (SELESAI)
+  - **Status saat ini**: CameraX internal (v1.3.14+), kompresi JPEG, enkripsi, dan preview thumbnail sudah berfungsi. Galeri via PickVisualMedia juga sudah ada.
+  - **Implementasi**:
+    1. **Camera**: CameraX internal (v1.3.14+) -- lebih stabil dari intent-based
+    2. **Kompresi**: Resize max 1920px longest side + JPEG quality 80 via ImageCompressor.kt
+    3. **Izin**: CAMERA runtime (wajib untuk CameraX)
+    4. **EXIF / geotag**: Belum diimplementasikan (ditunda)
+    5. **Tombol foto**: Hanya muncul untuk INCOME/EXPENSE (v1.3.15)
   - **Alur**:
     ```
     AuditDialog → tekan "Tambahkan foto bukti"
     → Dialog pilih: [Kamera] [Galeri]
-    → Kamera: buka kamera → ambil foto → file sementara
-    → Galeri: buka picker → pilih gambar
+    → Kamera: CameraX preview + capture
+    → Galeri: PickVisualMedia
     → Kompresi (resize 1920px + JPEG 80)
-    → Ekstrak EXIF (timestamp + geotag)
     → Enkripsi AES-256-GCM via EncryptedAttachmentStore
-    → Simpan ReceiptEntity + metadata ke database
-    → Tampilkan thumbnail + info (timestamp, ukuran) di AuditDialog
+    → Simpan ReceiptEntity ke database
+    → Tampilkan thumbnail di AuditDialog
     ```
-  - **Izin baru**: CAMERA (wajib), ACCESS_FINE_LOCATION (opsional untuk geotag kamera)
-  - **Keperluan tambahan**: FileProvider di AndroidManifest.xml, file_paths.xml
-  - **File terkait**: `data/Entities.kt` (ReceiptEntity + migration 6→7), `security/ReceiptManager.kt`, `security/EncryptedAttachmentStore.kt`, `ui/KronApp.kt`, `ui/dialogs/Dialogs.kt` (AuditDialog), AndroidManifest.xml
+  - **File terkait**: `data/Entities.kt`, `security/ReceiptManager.kt`, `security/EncryptedAttachmentStore.kt`, `security/ImageCompressor.kt`, `ui/KronApp.kt`, `ui/dialogs/Dialogs.kt`
 
-- [x] **F4 - Kategori Khusus Pengeluaran Tak Terduga** (Desain selesai)
+- [x] **F4 - Kategori Khusus Pengeluaran Tak Terduga** (SELESAI)
   - **Opsi A (dipilih)**: Hanya tampilkan 7 kategori seed EXPENSE + opsi "Buat custom" di akhir
   - **Daftar kategori seed EXPENSE**: Belanja, Makanan, Transportasi, Tagihan, Kesehatan, Hiburan, Lainnya
   - **Kategori dari portfolio TIDAK ditampilkan** (tidak campur aduk)
@@ -139,7 +140,7 @@
     - State baru: `customCategoryName: String`, `usingCustomCategory: Boolean`
   - **File terkait**: `ui/dialogs/Dialogs.kt` (ExpenseDialog bagian unexpected)
 
-- [x] **F6 - Perbaikan Layout BudgetDetailDialog** (Desain selesai)
+- [x] **F6 - Perbaikan Layout BudgetDetailDialog** (SELESAI)
   - **Masalah** (current code line 340-350):
     - Badge (Cash/eBudget) dan category name dalam 1 Row -> nama terpotong kalau panjang
     - Info "Rencana/Booking/Terpakai/Sisa" bercampur dalam baris teks yang panjang -> susah dibaca
@@ -165,31 +166,28 @@
   - **Koreksi form**: Setelah tombol diklik, muncul di bawah card (current behavior OK, hanya perlu penyesuaian padding)
   - **File terkait**: `ui/dialogs/Dialogs.kt` (BudgetDetailDialog, baris 340-361)
 
-- [ ] **F7 - Isolasi Data per Akun (Account Isolation)** (Sedang dianalisis)
-  - **Masalah**: Portfolio, riwayat transaksi, vault, dan laporan saat ini global (tidak per-akun). Hanya saldo akun yang terpisah.
-  - **Akar masalah**: `ActivityEventEntity`, `PortfolioEntity`, dan `BudgetJournalLineEntity` (bucket) tidak memiliki `accountId`
-  - **Dampak**: Budget, laporan, dan riwayat transaksi dari semua akun tercampur jadi satu
-  - **Perubahan schema**: Migration untuk tambah `accountId` di:
-    1. `ActivityEventEntity` -- backfill via `cash_journal_lines.accountId`
-    2. `PortfolioEntity` -- backfill assign ke akun aktif saat migrasi
-    3. `BudgetJournalLineEntity` (bucket entries) -- backfill via allocation → period → portfolio
-  - **Keamanan data existing**: Data tidak rusak. Semua existing event bisa dilacak ke account via cash_journal_lines. Portfolio diassign ke akun aktif.
-  - **File terkait**: `data/Entities.kt` (3 entity + migration), `data/KronDao.kt` (update queries), `data/KronRepository.kt`, `ui/MainViewModel.kt`
+- [x] **F7 - Isolasi Data per Akun (Account Isolation)** (SELESAI)
+  - **Status**: Selesai. Migration 8->9 (hardcode portfolio ke akun aktif, cascade ke budget lines) + Migration 10->11 (reset accountId=0 untuk data netral antar akun).
+  - **Rincian**:
+    - `ActivityEventEntity`, `PortfolioEntity`, `BudgetJournalLineEntity` punya `accountId`
+    - DAO queries pakai `accountId IN (0, :accountId)` untuk vault/unallocated/rollover/cashflow
+    - Repository filters include `it.accountId == 0L`
+    - Data migrasi (v1.1.5) tampil di akun mana pun via accountId=0
+  - **File terkait**: `data/Entities.kt`, `data/KronDatabase.kt` (MIGRATION_8_9, MIGRATION_10_11), `data/KronDao.kt`, `data/KronRepository.kt`, `ui/MainViewModel.kt`
 
 - [ ] **F5 - Akun Team / Kolaborasi** (PERTIMBANGAN -- tidak akan diimplementasikan sampai diputuskan siap)
   - **Target**: Keluarga/teman, 1-5 orang
   - **MVP**: Shared viewer (read-only), edit menyusul di Fase 2
   - **Arsitektur**: Drive-based sharing (tanpa server eksternal)
   - **Status**: Desain dan analisis teknis sudah dilakukan, tetapi implementasi ditunda. Tidak ada timeline.
-  - **Perubahan data layer**:
+  - **Catatan**: Nomor migration di desain ini (7->8) tidak relevan lagi. Jika implementasi dilanjutkan, perlu disesuaikan dengan schema terbaru (saat ini sudah di migration 11).
+  - **Perubahan data layer (desain lama)**:
     - Field baru di `AccountEntity`:
-      - `isTeam: Boolean = false` -- apakah akun team
-      - `teamFileId: String?` -- Google Drive file ID dari encrypted team blob
-      - `teamEncryptedKey: String?` -- wrapped encryption key (AES-256-GCM)
-      - `isTeamOwner: Boolean = false` -- apakah device ini adalah owner
-    - Opsional: tabel `TeamMemberEntity` (di device owner) untuk tracking:
-      - `accountId`, `memberEmail`, `joinedAt`, `authority` (VIEWER/EDITOR)
-    - Room migration 7->8 (jika aplikasi sudah di Fase 2 v1.3.0)
+      - `isTeam: Boolean = false`
+      - `teamFileId: String?`
+      - `teamEncryptedKey: String?`
+      - `isTeamOwner: Boolean = false`
+    - Opsional: tabel `TeamMemberEntity`
   - **Format invite code**: `KRON-TM-{base64url(fileId)}-{base64url(wrappedKey)}-{checksum2char}`
     - fileId: Google Drive file ID
     - wrappedKey: AES key dienkripsi dengan passphrase sementara, atau pakai base64 raw key (risiko)
@@ -389,7 +387,7 @@ User mengonfirmasi bahwa **F2 sudah fix di versi 1.1.5 saat ini**. Tidak perlu d
 - Hanya `CashJournalLineEntity` dan `RecurringRuleEntity` yang punya `accountId` → saldo akun sudah benar
 
 **Keputusan Desain F7:**
-- Migration 7->8 untuk tambah `accountId` di 3 entity
+- Migration 7->8 untuk tambah `accountId` di 3 entity (realisasi: 8->9, 9->10, 10->11)
 - Backfill deterministik: ActivityEvent via JOIN cash_journal_lines, Portfolio assign ke akun aktif, BudgetJournalLine bucket via allocation→period→portfolio
 - Update DAO queries + ViewModel untuk filter by `activeAccountId`
 - Data existing TIDAK rusak -- semua bisa dilacak secara deterministik
@@ -403,110 +401,50 @@ User mengonfirmasi bahwa **F2 sudah fix di versi 1.1.5 saat ini**. Tidak perlu d
 
 Fitur akan dirilis dalam beberapa fase untuk menjaga stabilitas dan memudahkan testing:
 
-| Fase | Versi | Fitur | Kebutuhan Migration | Estimasi |
-|:----:|:-----:|-------|:-------------------:|:--------:|
-| 1 | 1.2.0 | F1 + F4 + F6 | Tidak ada | Ringan (4-5 hari) |
-| 2 | 1.3.0 | F3 | Room 6 -> 7 | Sedang (5-7 hari) |
-| 3 | 1.3.0 | F7 — Isolasi Data per Akun | Room 7 -> 8 | Sedang (5-7 hari) |
-| F5 | Ditunda | F5 — Akun Team | (tidak dijadwalkan) | (tidak diestimasi) |
+| Fase | Versi | Fitur | Kebutuhan Migration | Status |
+|:----:|:-----:|-------|:-------------------:|:------:|
+| 1 | 1.2.0-1.2.2 | F1 + F4 + F6 | Tidak ada | RILIS |
+| 2 | 1.3.7-1.3.13 | F3 (kamera intent) + F7 (isolasi akun) | Room 8->9, 9->10, 10->11 | RILIS |
+| 2b | 1.3.14 | F3 CameraX (ganti intent-based) | Izin CAMERA | RILIS |
+| 2c | 1.3.15 | Foto bukti hanya INCOME/EXPENSE | Tidak ada | RILIS |
+| 2d | 1.3.16 | Theme UI: container, icon, light mode muted | Tidak ada | RILIS |
+| 2e | 1.3.17-1.3.18 | Riwayat budget + grafik batang | Tidak ada | RILIS |
+| 2f | 1.3.19 | Perbaikan theme container + icon sistem | Tidak ada | RILIS |
+| F5 | Ditunda | F5 - Akun Team | (tidak dijadwalkan) | DITUNDA |
 
-### Fase 1 (v1.2.0) -- F1 + F4 + F6
+### Fase 1 (v1.2.0-1.2.2) -- F1 + F4 + F6 ✅ SELESAI
 
-**Target**: Rilis cepat dengan improvement langsung terasa (0 migration).
+Semua fitur F1, F4, F6 sudah diimplementasi dan dirilis.
 
-#### F1 -- Indikator +^ / -v di Laporan (Estimasi: 2-3 hari)
-1. **Data layer**: Di `ReportsScreen.kt`, perluas komputasi untuk menghitung total periode sebelumnya
-   - `previousStart = start - (end - start + 1) days`
-   - `previousEnd = start - 1 day`
-   - Filter `state.activities` untuk range sebelumnya dengan logic yang sama
-   - Simpan hasil: `previousIncome`, `previousExpense`, `previousNet`
-2. **Komponen**: Buat komposable `ChangeIndicator` di ReportsScreen atau Components.kt
-   - Input: current value, previous value, label, tipe (MASUK/KELUAR/NET)
-   - Output: composable dengan format `{icon} {compactNominal} ({persentase})`
-   - handle edge cases (hidden, baru, nol)
-3. **UI Ringkasan**: Modifikasi `ReportMetric` untuk menyisipkan `ChangeIndicator` di bawah nilai utama
-   - Tambah divider tipis antara nilai dan indikator
-   - Indikator bodySmall, warna sesuai arah
-4. **UI Tabel**: Update `BucketDetails` untuk menampilkan perubahan dari bucket sebelumnya
-   - Iterasi buckets, setiap bucket bandingkan dengan bucket index-1
-   - Tampilkan sebagai baris tambahan
-5. **Testing**: Skenario naik, turun, nol, previous=0, data kosong, valuesHidden
+### Fase 2 (v1.3.7-1.3.19) -- F3 + F7 + Perbaikan UI ✅ SELESAI
 
-#### F4 -- Kategori General untuk Tak Terduga (Estimasi: 1 hari)
-1. **Identifikasi seed categories**: Filter `categories` dengan list nama seed
-   - `val seedNames = setOf("Belanja", "Makanan", "Transportasi", "Tagihan", "Kesehatan", "Hiburan", "Lainnya")`
-   - `val seedCategories = categories.filter { it.name in seedNames }`
-2. **Custom category**: Tambah state `customMode` dan `customName` di ExpenseDialog
-   - Jika user pilih "Buat kategori custom...", sembunyikan dropdown, tampilkan TextField
-   - Simpan nama custom di note: `"${existingNote} [Kategori: {nama}]"`
-   - CategoryId = null (tidak terikat kategori manapun)
-3. **UI**: Update bagian unexpected ExpenseDialog
-   - Ganti `ChoiceField("Kategori", ...)` dengan custom list + opsi custom
-4. **Testing**: Unexpected expense dengan seed category, dengan custom category, verifikasi note
+**F3 -- Kamera/Galeri foto bukti**: Sudah berfungsi penuh.
+- Awal: ActivityResultContracts.TakePicture + ACTION_IMAGE_CAPTURE (1.3.7-1.3.13)
+- Sekarang: **CameraX** (1.3.14+) -- preview + capture langsung, tidak force close
+- Izin CAMERA diminta runtime (1.3.14+)
+- Tombol foto bukti hanya muncul untuk INCOME/EXPENSE (1.3.15)
+- Kompresi + enkripsi receipt sudah berfungsi
 
-#### F6 -- Perbaikan Layout BudgetDetailDialog (Estimasi: 1 hari)
-1. **Restruktur card** (Dialogs.kt:340-361):
-   - Baris 1: `ChannelBadge(row.fundingChannel)` sendiri
-   - Baris 2: `Text(row.categoryName)` full width, style titleMedium, maxLines=2
-   - Spacer 8.dp
-   - Baris 3: `Text("Rencana")` + `Text(money(row.plannedAmount))` dalam Row dengan label-value
-   - Baris 4: `Text("Terpakai")` + `Text(money(row.spentAmount))` dalam Row
-   - HorizontalDivider
-   - Baris 5: `Text("Sisa")` + `Text(money(row.availableAmount))` + `TextButton("Koreksi")` dalam Row
-2. **Compact nominal**: Jika >= 1jt pake compactIdr(), < 1jt format biasa
-3. **Warna Sisa**: error jika < 0, KronGreen jika > 0, default jika 0
-4. **Koreksi form**: tetap di bawah card setelah divider (existing behavior, OK)
-5. **Testing**: Nama kategori panjang, nominal besar (jt/M/T), status minus/surplus
+**F7 -- Isolasi Data per Akun**: Sudah berfungsi penuh.
+- Migration 8->9, 9->10, 10->11 untuk accountId
+- DAO queries pakai `IN (0, :accountId)`, repository filter `it.accountId == 0L`
+- Data v1.1.5 netral (accountId=0) tampil di semua akun
 
-### Fase 2 (v1.3.0) -- F3 Upload/Ambil Gambar
+**Catatan**: Fitur kompresi gambar (resize 1920px + JPEG 80) sudah ada di ImageCompressor.kt. EXIF extraction dan geotag belum diimplementasikan (ditunda).
 
-**Target**: Aktivasi fitur foto dengan kompresi dan metadata EXIF.
+### Fase 2b -- Perbaikan UI/UX (1.3.16-1.3.19)
 
-#### F3 -- Upload/Ambil Gambar (Estimasi: 5-7 hari)
-1. **Room migration 6->7**:
-   - Tambah field: `capturedAt: Long?`, `latitude: Double?`, `longitude: Double?`
-   - Tulis migration SQL: ALTER TABLE receipts ADD COLUMN capturedAt INTEGER
-   - Export schema v7: jalankan task room schema export
-   - Buat fixture database v6 untuk migration test
-   - Update migration test include v6->v7
-2. **Kompresi gambar** (`security/ImageCompressor.kt`):
-   - Baca input stream -> decode Bitmap dengan inSampleSize untuk downsampling
-   - Hitung dimensi: max 1920px longest side (maintain aspect ratio)
-   - Compress ke JPEG quality 80 -> output stream
-   - Target ukuran: 200-500KB
-   - Return: File hasil kompresi + dimensi asli
-3. **Camera capture**:
-   - Tambah FileProvider + file_paths.xml di res/xml
-   - ActivityResultContracts.TakePicture di KronApp.kt
-   - Simpan foto ke File sementara di cache dir
-   - Izin CAMERA: runtime permission request
-   - Setelah foto: kompres -> ekstrak EXIF -> enkripsi -> simpan
-4. **EXIF handling**:
-   - Pakai `androidx.exifinterface.media.ExifInterface`
-   - Baca: `TAG_DATETIME_ORIGINAL`, `TAG_GPS_LATITUDE`, `TAG_GPS_LONGITUDE`, `TAG_GPS_LATITUDE_REF`, `TAG_GPS_LONGITUDE_REF`
-   - Kamera: timestamp dari `System.currentTimeMillis()`, geotag dari FusedLocationProviderClient (opsional)
-   - Galeri: parse EXIF, fallback ke System.currentTimeMillis()
-   - Simpan ke ReceiptEntity.capturedAt, .latitude, .longitude
-5. **UI Preview**:
-   - Update AuditDialog: setelah receipt terupload, tampilkan card dengan thumbnail
-   - Thumbnail: dekripsi file -> resize 200px -> Bitmap -> Image composable
-   - Loading: CircularProgressIndicator saat dekripsi
-   - Tap thumbnail: buka Activity/fragment viewer via FileProvider Intent
-6. **Dialog pilih sumber**:
-   - BottomSheet atau AlertDialog kecil: "Ambil dari"
-   - [Kamera] [Galeri] [Batal]
-   - Jika kamera dipilih tapi izin CAMERA belum diberikan -> request permission dulu
-7. **Testing**:
-   - Unit test kompresi (berbagai ukuran gambar input)
-   - Test migration 6->7
-   - UI test: tap tombol foto, verifikasi dialog muncul
-   - Test receipt dengan EXIF lengkap vs tanpa EXIF
+- **Theme container**: LazyRow sekarang `fillMaxWidth` rata kiri/kanan (1.3.19)
+- **Theme icons**: LightMode (matahari), DarkMode (bulan), Settings (gear) muncul di semua chip (1.3.16)
+- **Light mode colors**: primaryContainer, surface, background dimuted (1.3.16)
+- **Riwayat budget**: BudgetHistoryDialog dengan daftar semua periode (1.3.17)
+- **Grafik batang**: Planned vs spent per periode (1.3.18)
 
-### Fase 3 (v1.3.0) -- F7 Isolasi Data per Akun
+### Fase 3 -- Sync dan Backup (BERMASALAH)
 
-**Target**: Isolasi data per akun, migration 7->8.
+**Google Drive Sync**: DINONAKTIFKAN. Kode tetap ada tapi tidak dapat digunakan karena infrastruktur OAuth/credential manager belum berfungsi dengan baik. Tidak ada target perbaikan saat ini.
 
-TBD -- lihat rekomendasi di bagian Analisis Teknis.
+**Backup/Restore (.kronbackup)**: BERMASALAH. Proses restore rentan gagal di tengah, tidak ada rollback solid. Validasi backup lama belum sempurna. Perlu perbaikan menyeluruh sebelum bisa diandalkan untuk pemulihan data.
 
 ### Fase 4 -- F5 Akun Team (DITUNDA)
 
@@ -522,7 +460,7 @@ Desain dan analisis F5 tetap didokumentasikan di bawah ini untuk referensi jika 
      - `teamEncryptedKey: String? = null`
      - `isTeamOwner: Boolean = false`
    - Definisikan ulang jenis akun: isTeam menentukan apakah akun privat atau team
-    - Migration 8->9 (asumsi F3 (6->7) dan F7 (7->8) sudah release)
+    - ~~Migration 8->9~~ (tidak relevan -- F5 ditunda, schema sudah jauh berkembang)
 2. **Enkripsi blob** (`sync/TeamSnapshotManager.kt`):
    - Generate AES-256-GCM key random
    - Ekspor data akun team (transaksi terkait, allocation terkait, saldo) ke format JSON
@@ -569,37 +507,37 @@ Desain dan analisis F5 tetap didokumentasikan di bawah ini untuk referensi jika 
    - Enkripsi/dekripsi blob dengan berbagai dataset
    - Parse invite code valid dan invalid
    - Mock Drive API: upload, download, file not found, permission denied
-   - Read-only enforcement: coba semua aksi sebagai member
-   - Migration 7->8 test
+    - Read-only enforcement: coba semua aksi sebagai member
+    - Migration test (nomor migration perlu disesuaikan dengan schema terbaru jika implementasi dilanjutkan)
 
 ### Catatan Lintas Fase
 
 - Setiap rilis harus mengikuti aturan AGENTS.md: migration test, backup round trip, financial invariants, lint, release build
 - F2 sudah selesai di 1.1.5
-- F5 tergantung infrastruktur Drive yang sudah ada (DriveSyncRuntime, DriveAppDataClient, DriveSnapshotCrypto)
-- Untuk F5 Fase 2 (edit oleh member): perlu desain ulang conflict resolution karena Drive-based sharing tidak real-time. Pendekatan: last-write-wins + backup versi sebelumnya
-- F3 butuh izin runtime baru: CAMERA (wajib), ACCESS_FINE_LOCATION (opsional untuk geotag)
-- F5 tidak perlu izin baru (Drive sync sudah ada)
+- F3 (CameraX) sudah berfungsi. Izin CAMERA runtime diperlukan. ACCESS_FINE_LOCATION untuk geotag belum diimplementasi.
+- F5 (Akun Team): DITUNDA. Infrastruktur Drive (DriveSyncRuntime, DriveAppDataClient, DriveSnapshotCrypto) ada tapi tidak bisa dipakai karena OAuth bermasalah. Jika dilanjutkan, perlu redesain arsitektur (lihat Rekomendasi F5 di Analisis Teknis).
+- Google Drive Sync (privat) dinonaktifkan karena OAuth/Credential Manager tidak berfungsi.
+- Backup/Restore (.kronbackup) bermasalah -- rentan gagal di tengah, tanpa rollback solid.
 
 ---
 
 ## Analisis Teknis dan Rekomendasi Tambahan
 
 > **Tanggal analisis**: 2026-07-20  
-> **Status**: Rekomendasi arsitektur sebelum implementasi  
+> **Status**: DOKUMEN HISTORIS -- analisis ini ditulis sebelum implementasi. Sebagian besar rekomendasi sudah terealisasi (F1, F3, F4, F6, F7). F5 ditunda. Bagian ini dipertahankan sebagai referensi arsitektur dan pertimbangan desain.
 > **Kesimpulan umum**: Rencana F1, F3, F4, dan F6 layak dilanjutkan setelah beberapa koreksi. F5 belum aman untuk langsung diimplementasikan karena desain penyimpanan Drive saat ini memiliki hambatan teknis yang bersifat blocking.
 
 ### Ringkasan Penilaian
 
 | Area | Penilaian | Keputusan yang disarankan |
 |------|-----------|---------------------------|
-| F1 — Indikator laporan | Layak, risiko rendah–sedang | Lanjutkan, tetapi pindahkan agregasi dari composable ke data/domain layer dan perjelas semantik warna |
-| F4 — Kategori tak terduga | Layak sebagai solusi sementara | Lanjutkan dengan penandaan technical debt; jangan jadikan parsing `note` sebagai model permanen |
-| F6 — Layout budget | Layak, risiko rendah | Lanjutkan pada v1.2.0 |
-| F3 — Foto bukti | Layak, risiko sedang | Lanjutkan setelah memperbaiki alur permission, EXIF, orientasi, kompresi, dan privasi lokasi |
-| F5 — Akun team | **Belum layak dengan rancangan saat ini** | Redesign penyimpanan Drive, pertukaran kunci, cache read-only, recovery, dan revocation sebelum coding |
+| F1 - Indikator laporan | Layak, risiko rendah–sedang | Lanjutkan, tetapi pindahkan agregasi dari composable ke data/domain layer dan perjelas semantik warna |
+| F4 - Kategori tak terduga | Layak sebagai solusi sementara | Lanjutkan dengan penandaan technical debt; jangan jadikan parsing `note` sebagai model permanen |
+| F6 - Layout budget | Layak, risiko rendah | Lanjutkan pada v1.2.0 |
+| F3 - Foto bukti | Layak, risiko sedang | Lanjutkan setelah memperbaiki alur permission, EXIF, orientasi, kompresi, dan privasi lokasi |
+| F5 - Akun team | **Belum layak dengan rancangan saat ini** | Redesign penyimpanan Drive, pertukaran kunci, cache read-only, recovery, dan revocation sebelum coding |
 
-### Temuan Blocking — F5 Tidak Dapat Menggunakan `appDataFolder` untuk Berbagi
+### Temuan Blocking - F5 Tidak Dapat Menggunakan `appDataFolder` untuk Berbagi
 
 Google Drive `appDataFolder` bersifat khusus untuk aplikasi dan akun Google yang membuatnya. File atau folder di dalamnya **tidak dapat dibagikan**. Karena itu, anggota dengan akun Google berbeda tidak akan bisa mengunduh blob hanya menggunakan `fileId` dan invite code.
 
@@ -618,7 +556,7 @@ Google Drive `appDataFolder` bersifat khusus untuk aplikasi dan akun Google yang
 5. Jangan gunakan permission `anyoneWithLink` karena tidak sesuai dengan tujuan privasi aplikasi.
 6. Invite harus memuat identitas workspace dan material kriptografi yang diperlukan, sedangkan akses file tetap dibatasi oleh ACL Google Drive.
 
-### Rekomendasi F1 — Indikator Perubahan Laporan
+### Rekomendasi F1 - Indikator Perubahan Laporan
 
 #### 1. Jangan Melakukan Agregasi Besar di Composable
 
@@ -723,7 +661,7 @@ Jika semua baris tabel harus memiliki pembanding, query perlu mengambil **satu b
 - Urutan data yang tidak kronologis;
 - Dataset besar untuk memastikan recomposition tidak memicu agregasi berulang.
 
-### Rekomendasi F4 — Kategori Pengeluaran Tak Terduga
+### Rekomendasi F4 - Kategori Pengeluaran Tak Terduga
 
 #### 1. Filter Berdasarkan Nama Hanya Cocok sebagai Solusi Transisi
 
@@ -775,7 +713,7 @@ adHocCategoryName: String?
 - normalisasi perbandingan menggunakan lowercase locale-independent;
 - tentukan perilaku saat nama custom sama dengan kategori portfolio.
 
-### Rekomendasi F6 — BudgetDetailDialog
+### Rekomendasi F6 - BudgetDetailDialog
 
 Rancangan baru sudah tepat. Tambahan yang disarankan:
 
@@ -787,7 +725,7 @@ Rancangan baru sudah tepat. Tambahan yang disarankan:
 6. Tambahkan semantics “defisit” saat nilai negatif agar informasi tidak hanya disampaikan melalui warna.
 7. Uji font scale besar, mode landscape, bahasa dengan label lebih panjang, dan nominal negatif besar.
 
-### Rekomendasi F3 — Foto Bukti
+### Rekomendasi F3 - Foto Bukti
 
 #### 1. `CAMERA` Permission Tidak Wajib untuk Kamera Eksternal
 
@@ -894,11 +832,27 @@ Karena database memakai SQLCipher, metadata tetap terenkripsi saat tersimpan. Na
 - restore backup berisi attachment dan metadata;
 - thumbnail tidak membocorkan file decrypted ke storage publik.
 
-### Rekomendasi F7 — Isolasi Data per Akun
+### Rekomendasi F7 - Isolasi Data per Akun
+
+> **Catatan**: F7 sudah diimplementasi dan dirilis (v1.3.7-1.3.13). Bagian ini adalah dokumentasi analisis pra-implementasi. Realisasi implementasi berbeda dalam beberapa detail -- lihat ringkasan di bawah.
 
 **Temuan**: `ActivityEventEntity`, `PortfolioEntity`, dan `BudgetJournalLineEntity` (bucket VAULT/UNALLOCATED/ROLLOVER) tidak memiliki `accountId`. Hanya `CashJournalLineEntity` dan `RecurringRuleEntity` yang memiliki `accountId`. Akibatnya, budget, riwayat, vault, dan laporan mencampur data dari semua akun.
 
-#### 1. Dampak Terhadap Data Existing
+#### 1. Realisasi Implementasi vs Rencana
+
+| Aspek | Rencana Awal | Realisasi |
+|-------|-------------|-----------|
+| Migration | 7->8 (1 migration) | 8->9 (add accountId) + 9->10 (fix quirk) + 10->11 (reset accountId=0 untuk data netral) |
+| Filter DAO | `WHERE accountId = :activeAccountId` | `WHERE accountId IN (0, :accountId)` -- data netral (migrasi) tampil di semua akun |
+| Repository | Filter ketat per akun | `it.accountId == 0L` untuk data lintas akun |
+
+**Detail implementasi final** (v1.3.13):
+- `ActivityEventEntity`, `PortfolioEntity`, `BudgetJournalLineEntity` punya `accountId`
+- DAO queries: `accountId IN (0, :accountId)` untuk vault/unallocated/rollover/cashflow
+- Repository: filter include `it.accountId == 0L` -- data migrasi dari v1.1.5 (netral) tampil di akun mana pun
+- File terkait: `data/Entities.kt`, `data/KronDatabase.kt` (MIGRATION_8_9, MIGRATION_10_11), `data/KronDao.kt`, `data/KronRepository.kt`, `ui/MainViewModel.kt`
+
+#### 2. Dampak Terhadap Data Existing
 
 | Entity | Data per akun? | Risiko jika tidak diperbaiki |
 |--------|:--------------:|------------------------------|
@@ -909,11 +863,11 @@ Karena database memakai SQLCipher, metadata tetap terenkripsi saat tersimpan. Na
 | BudgetJournalLineEntity (bucket) | **Belum** | VAULT/UNALLOCATED global, vault akun A dan B jadi satu |
 | RecurringRuleEntity | Sudah (accountId) | Aman |
 
-#### 2. Strategi Backfill
+#### 3. Strategi Backfill (realisasi)
 
 Semua data existing dapat dilacak ke account masing-masing tanpa kehilangan:
 
-1. **ActivityEventEntity**: JOIN dengan `cash_journal_lines` pada `eventId` — setiap event pasti memiliki minimal 1 cash journal line yang punya `accountId`. Deterministik, zero loss.
+1. **ActivityEventEntity**: JOIN dengan `cash_journal_lines` pada `eventId` -- setiap event pasti memiliki minimal 1 cash journal line yang punya `accountId`. Deterministik, zero loss.
 
 2. **PortfolioEntity**: Tidak ada jejak langsung ke account. Solusi: assign ke akun yang aktif dipilih user saat migration pertama kali dijalankan. Jika hanya ada 1 akun, assign ke akun tersebut. Jika ada >1 akun aktif, assign ke akun yang terakhir dipilih (stored di DataStore/preferences) atau akun pertama.
 
@@ -923,43 +877,22 @@ Semua data existing dapat dilacak ke account masing-masing tanpa kehilangan:
 
 **Verifikasi backfill**: Migration test harus membandingkan total debit/credit per account sebelum dan sesudah migration untuk memastikan tidak ada data yang hilang atau bergeser.
 
-#### 3. Perubahan Schema
+#### 4. Perubahan DAO (realisasi)
 
-Migration 7->8:
-```sql
-ALTER TABLE activity_events ADD COLUMN accountId INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE portfolios ADD COLUMN accountId INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE budget_journal_lines ADD COLUMN accountId INTEGER NOT NULL DEFAULT 0;
-
--- Update activity_events.accountId dari cash_journal_lines
-UPDATE activity_events SET accountId = (
-  SELECT accountId FROM cash_journal_lines 
-  WHERE cash_journal_lines.eventId = activity_events.eventId 
-  LIMIT 1
-);
-
--- Update portfolios.accountId ke akun aktif (dari preferences)
--- Dilakukan di kotlin code migration, bukan SQL murni
-```
-
-Catatan: DEFAULT 0 digunakan agar SQL migration dapat dijalankan, lalu segera diperbaiki via backfill. Setelah backfill, kolom tidak boleh bernilai 0.
-
-#### 4. Perubahan DAO
-
-Semua query yang melibatkan 3 entity di atas perlu ditambahkan filter `accountId = :activeAccountId`:
+Semua query melibatkan 3 entity di atas menggunakan filter `accountId IN (0, :activeAccountId)`:
 
 - `KronDao.kt`: `getActivities()`, `getCashFlowEvents()`, `getPortfolios()`, `getAllocations()`, `getBudgetSummary()`, `getBudgetJournalLines()`, dll.
-- Alternatif: gunakan default parameter `accountId: Long? = null` untuk backward compatibility saat semua akun ingin ditampilkan (misalnya di backup export).
+- Data dengan `accountId = 0` (hasil migrasi dari v1.1.5) tampil di semua akun sebagai data netral.
 
-#### 5. Perubahan ViewModel / Repository
+#### 5. Perubahan ViewModel / Repository (realisasi)
 
 `KronRepository.kt` dan `MainViewModel.kt`:
 
-- `KronUiState` perlu `activeAccountId: Long`
+- `KronUiState` menyertakan `activeAccountId: Long`
 - `observeCashBalance(accountId)` sudah ada pola yang benar
-- `observeActivities()` perlu parameter `accountId`
-- `observePortfolios()` perlu parameter `accountId`
-- Saat user ganti akun, semua observer perlu di-restart dengan `accountId` baru
+- `observeActivities()` parameternya `accountId`
+- `observePortfolios()` parameternya `accountId`
+- Repository: filter tambahan `it.accountId == 0L` untuk vault/unallocated/rollover/cashflow menampilkan data netral lintas akun
 
 #### 6. Prioritas vs F5
 
@@ -969,9 +902,7 @@ F7 adalah **prasyarat konseptual** untuk F5. Tanpa isolasi data per akun:
 - Tidak bisa membedakan "data team" vs "data pribadi"
 - Backup/restore per akun tidak mungkin
 
-Rekomendasi: **F7 dikerjakan sebelum F5**, idealnya di versi yang sama dengan F3 (1.3.0) karena keduanya butuh migration schema.
-
-#### 7. Risiko dan Mitigasi
+#### 7. Risiko dan Mitigasi (realisasi)
 
 | Risiko | Dampak | Mitigasi |
 |--------|--------|----------|
@@ -982,7 +913,7 @@ Rekomendasi: **F7 dikerjakan sebelum F5**, idealnya di versi yang sama dengan F3
 
 #### 8. Skenario Tes F7
 
-- Migration 7->8 dengan berbagai kombinasi data multi-akun
+- Migration 8->9, 9->10, 10->11 dengan berbagai kombinasi data multi-akun
 - Backfill ActivityEvent yang punya 1 vs banyak cash_journal_lines
 - Portfolio dengan 0, 1, atau >1 allocation periods
 - Bucket dengan dan tanpa allocationId
@@ -993,7 +924,7 @@ Rekomendasi: **F7 dikerjakan sebelum F5**, idealnya di versi yang sama dengan F3
 - Financial invariants per account setelah migration
 - Rollback migration jika terjadi error
 
-### Redesign F5 — Akun Team yang Direkomendasikan
+### Redesign F5 - Akun Team yang Direkomendasikan
 
 #### 1. Pisahkan Konsep Workspace dari Account
 
@@ -1169,13 +1100,15 @@ Sebelum model merge selesai, pertahankan **single writer: owner**.
 
 ### Rekomendasi Roadmap Revisi
 
+> **Catatan**: Roadmap di bawah adalah usulan pra-implementasi. Realisasi rilis berbeda (lihat tabel Strategi Rilis di bagian Rencana Implementasi).
+
 | Fase | Versi yang disarankan | Isi | Catatan |
 |:----:|:---------------------:|-----|---------|
 | 0 | sebelum 1.2.0 | Tambah test clock/date range, formatter, dan report domain model | Mengurangi bug F1 dan regresi finansial |
 | 1 | 1.2.0 | F1 + F6 + F4 transisi | F4 marker note harus diberi technical-debt ticket |
 | 2A | 1.3.0 | F3 tanpa geotag default dan tanpa CAMERA permission bila memakai kamera eksternal | Migration 6->7 untuk field metadata receipt |
-| 2B | 1.3.0 | F7 — Isolasi Data per Akun | Migration 7->8 untuk accountId di 3 entity; backfill deterministik; update DAO/ViewModel |
-| F5 | Ditunda | F5 — Akun Team (fondasi, hardening, editor) | Implementasi ditunda sampai diputuskan siap. Desain dan analisis sudah ada di dokumen ini. |
+| 2B | 1.3.0 | F7 - Isolasi Data per Akun | Migration 7->8 untuk accountId di 3 entity; backfill deterministik; update DAO/ViewModel |
+| F5 | Ditunda | F5 - Akun Team (fondasi, hardening, editor) | Implementasi ditunda sampai diputuskan siap. Desain dan analisis sudah ada di dokumen ini. |
 
 Estimasi F5 sebesar 10–14 hari dinilai terlalu optimistis jika mencakup Drive ACL, auth multi-user, E2EE key exchange, recovery, revocation, cache, migration, notifikasi, dan pengujian. Lebih aman memecahnya menjadi fondasi read-only dan hardening, lalu menetapkan estimasi setelah spike/prototype Drive sharing berhasil.
 
@@ -1246,23 +1179,48 @@ Sebuah fitur dianggap selesai hanya jika:
 
 ### Referensi Teknis Resmi yang Digunakan untuk Verifikasi
 
-- [Google Drive — Store application-specific data](https://developers.google.com/workspace/drive/api/guides/appdata)
-- [Google Drive — Share files, folders, and drives](https://developers.google.com/workspace/drive/api/guides/manage-sharing)
-- [Google Drive — Choose Drive API scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-auth)
-- [Android — Minimize permission requests](https://developer.android.com/privacy-and-security/minimize-permission-requests)
-- [Android — Define WorkManager requests](https://developer.android.com/develop/background-work/background-tasks/persistent/getting-started/define-work)
-- [Android — Android Keystore system](https://developer.android.com/privacy-and-security/keystore)
-- [Android — EncryptedSharedPreferences API](https://developer.android.com/reference/kotlin/androidx/security/crypto/EncryptedSharedPreferences)
-- [Android — ExifInterface API](https://developer.android.com/reference/kotlin/androidx/exifinterface/media/ExifInterface)
-- [Android — Photo Picker](https://developer.android.com/training/data-storage/shared/photo-picker)
+- [Google Drive - Store application-specific data](https://developers.google.com/workspace/drive/api/guides/appdata)
+- [Google Drive - Share files, folders, and drives](https://developers.google.com/workspace/drive/api/guides/manage-sharing)
+- [Google Drive - Choose Drive API scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-auth)
+- [Android - Minimize permission requests](https://developer.android.com/privacy-and-security/minimize-permission-requests)
+- [Android - Define WorkManager requests](https://developer.android.com/develop/background-work/background-tasks/persistent/getting-started/define-work)
+- [Android - Android Keystore system](https://developer.android.com/privacy-and-security/keystore)
+- [Android - EncryptedSharedPreferences API](https://developer.android.com/reference/kotlin/androidx/security/crypto/EncryptedSharedPreferences)
+- [Android - ExifInterface API](https://developer.android.com/reference/kotlin/androidx/exifinterface/media/ExifInterface)
+- [Android - Photo Picker](https://developer.android.com/training/data-storage/shared/photo-picker)
 
 ---
 
 ## Kredit Analisis
 
 **Analisis teknis, review arsitektur, dan rekomendasi tambahan:**  
-**ChatGPT — GPT-5.6 Thinking, OpenAI**
+**ChatGPT - GPT-5.6 Thinking, OpenAI**
 
 **Tanggal:** 20 Juli 2026
 
 > Kredit ini menjelaskan pihak yang menyusun bagian “Analisis Teknis dan Rekomendasi Tambahan”. Keputusan implementasi akhir tetap berada pada pemilik dan pengembang aplikasi KRON.
+
+---
+
+### 2026-07-21 - Sesi 2: Implementasi F3 + F7 + Perbaikan UI
+
+**Ringkasan sesi:**
+- Implementasi F3 kamera (gagal dengan intent-based, sukses dengan CameraX)
+- Implementasi F7 isolasi akun (migration 8->9->10->11, DAO/Repository filter)
+- Perbaikan unexpected expense (VAULT bucket instead of UNEXPECTED)
+- Flow resilience (retry Long.MAX_VALUE di uiState)
+- Perbaikan UI tema (container full width, icon benar, light mode muted)
+- Riwayat budget per portfolio + grafik batang planned vs spent
+- Sync Drive dinonaktifkan karena OAuth bermasalah
+- Backup/restore diketahui bermasalah, perlu perbaikan terpisah
+- **Total 13 rilis**: 1.3.7 s.d. 1.3.19
+
+### 2026-07-21 - Sesi 3: Perbaikan OnboardingScreen
+
+- **Masalah**: OnboardingScreen ("Setiap rupiah punya jejak") selalu tampil sesaat setiap buka aplikasi, padahal seharusnya hanya untuk pengguna baru
+- **Akar masalah**: `stateIn(initialValue = KronUiState())` emit `onboardingComplete=false` secara sinkron sebelum combine flow dari DataStore selesai
+- **Fix**: Di `KronApp.kt:172`, hanya tampilkan OnboardingScreen jika `state.accounts.isNotEmpty()` (tanda state sudah termuat, bukan default). Jika akun masih kosong, state masih initial default, tidak usah render apa pun
+- **Skenario**:
+  - Pengguna baru: setelah seed, accounts non-empty, onboardingComplete=false -> tampil OnboardingScreen
+  - Pengguna lama: saat state termuat, accounts non-empty, onboardingComplete=true -> langsung ke konten utama
+- **Release**: 1.3.20 (versionCode 51) -- APK, SHA-256, R8 mapping, schema-11.json diarsipkan di releases/1.3.20/

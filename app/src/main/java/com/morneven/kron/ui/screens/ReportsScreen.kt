@@ -208,6 +208,7 @@ fun ReportsScreen(
                 Column(Modifier.weight(1f)) {
                     Text("LAPORAN", style = MaterialTheme.typography.headlineMedium)
                     Text("Ringkasan yang direkonstruksi dari jurnal", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Akun aktif: ${state.activeAccount?.name ?: "Belum ada"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
                 }
                 Button(onClick = onExport) {
                     Icon(Icons.Outlined.FileDownload, contentDescription = null)

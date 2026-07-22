@@ -141,6 +141,8 @@ class MainViewModel @Inject constructor(
 ) : ViewModel() {
     private val message = MutableStateFlow<String?>(null)
     private val sessionVisibility = MutableStateFlow<Boolean?>(null)
+    private val manualRestoreReady = MutableStateFlow(false)
+    val isManualRestoreReady: StateFlow<Boolean> = manualRestoreReady
     val pendingDriveSubjectId: StateFlow<String?> = savedStateHandle.getStateFlow(PENDING_DRIVE_SUBJECT, null)
     val pendingDriveEmail: StateFlow<String?> = savedStateHandle.getStateFlow(PENDING_DRIVE_EMAIL, null)
     val pendingDriveDisplayName: StateFlow<String?> = savedStateHandle.getStateFlow(PENDING_DRIVE_NAME, null)
@@ -326,8 +328,13 @@ class MainViewModel @Inject constructor(
         backupManager.export(uri, password)
     }
 
-    fun stageRestore(uri: Uri, password: CharArray) = runAction("Backup tervalidasi. Tutup lalu buka kembali KRON untuk menerapkan restore") {
-        backupManager.stageRestore(uri, password)
+    fun stageRestore(uri: Uri, password: CharArray) = viewModelScope.launch {
+        runCatching { backupManager.stageRestore(uri, password) }
+            .onSuccess {
+                manualRestoreReady.value = true
+                message.value = "Backup tervalidasi. Tutup lalu buka kembali KRON untuk menerapkan restore"
+            }
+            .onFailure { message.value = it.message ?: "Restore tidak dapat disiapkan" }
     }
 
     fun exportCsv(uri: Uri) = runAction("Laporan CSV berhasil dibuat") {

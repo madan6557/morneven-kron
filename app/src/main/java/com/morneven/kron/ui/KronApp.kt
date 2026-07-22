@@ -170,7 +170,9 @@ fun KronApp(
             }
         }
         if (!state.onboardingComplete) {
-            OnboardingScreen(viewModel::completeOnboarding)
+            if (state.accounts.isNotEmpty()) {
+                OnboardingScreen(viewModel::completeOnboarding)
+            }
             return@KronTheme
         }
         var locked by rememberSaveable { mutableStateOf(false) }
@@ -290,6 +292,7 @@ private fun MainScaffold(
     var showCameraCapture by remember { mutableStateOf(false) }
     var dialogReceiptUri by remember { mutableStateOf<Uri?>(null) }
     var dialogCameraFile by remember { mutableStateOf<java.io.File?>(null) }
+    val manualRestoreReady by viewModel.isManualRestoreReady.collectAsState()
     val pendingDriveSubject by viewModel.pendingDriveSubjectId.collectAsState()
     val pendingDriveEmail by viewModel.pendingDriveEmail.collectAsState()
     val pendingDriveName by viewModel.pendingDriveDisplayName.collectAsState()
@@ -321,7 +324,7 @@ private fun MainScaffold(
     var cloudConflict by remember { mutableStateOf<SyncConflict?>(null) }
     var restartRequired by rememberSaveable { mutableStateOf(false) }
     var cloudWifiOnly by rememberSaveable(driveSyncRuntime) {
-        mutableStateOf(driveSyncRuntime?.isWifiOnly() ?: true)
+        mutableStateOf(driveSyncRuntime?.isWifiOnly() ?: false)
     }
     val scope = rememberCoroutineScope()
 
@@ -461,6 +464,9 @@ private fun MainScaffold(
             driveSyncRuntime?.suspendForRestart()
             WorkManager.getInstance(activity).cancelUniqueWork(AutomationWorker.UNIQUE_WORK_NAME)
         }
+    }
+    LaunchedEffect(manualRestoreReady) {
+        if (manualRestoreReady) restartRequired = true
     }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -796,7 +802,7 @@ private fun MainScaffold(
             onDismissRequest = {},
             title = { Text("Buka ulang KRON") },
             text = {
-                Text("Snapshot Drive sudah lolos validasi. KRON harus ditutup sebelum database dan lampiran diganti secara aman. Jangan catat transaksi baru sebelum membuka ulang aplikasi.")
+                Text("Data restore sudah lolos validasi. KRON harus ditutup sebelum database dan lampiran diganti secara aman. Jangan catat transaksi baru sebelum membuka ulang aplikasi.")
             },
             confirmButton = {
                 Button(onClick = {

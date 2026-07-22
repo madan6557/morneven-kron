@@ -15,7 +15,7 @@ KRON adalah aplikasi pencatatan keuangan Android local-first untuk pemasukan, pe
 
 ## Data dan keamanan
 
-- Database Room schema 6 dienkripsi menggunakan SQLCipher dan kunci acak yang dibungkus Android Keystore.
+- Database Room schema 12 dienkripsi menggunakan SQLCipher dan kunci acak yang dibungkus Android Keystore. Upgrade dari database plaintext lama dilakukan melalui staging tervalidasi agar database aktif tidak diganti bila validasi gagal.
 - `.kronbackup` v2 memakai AES-256-GCM, PBKDF2-HMAC-SHA256, checksum, staging, dan validasi sebelum restore.
 - Importer tetap membaca backup v1.
 - Foto bukti disimpan terenkripsi pada penyimpanan privat aplikasi dan ikut dalam backup v2.
@@ -38,6 +38,6 @@ Perintah verifikasi:
 .\gradlew.bat :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin :app:lintDebug :app:assembleRelease
 ```
 
-APK release berada di `app/build/outputs/apk/release/KRON-1.1.0-LTS.apk`.
+APK release berada di `app/build/outputs/apk/release/KRON-1.4.6.apk`.
 
 Konfigurasi signing dibaca dari `%USERPROFILE%/.android/kron-signing.properties`. Konfigurasi OAuth opsional dijelaskan pada [OAUTH_SETUP.md](OAUTH_SETUP.md). Jangan pernah menyimpan signing key, password, token, client secret, atau data finansial di repository.

@@ -55,30 +55,53 @@ class BackupManager @Inject constructor(
         require(password.size >= MIN_PASSWORD_LENGTH) { "Password backup minimal 12 karakter" }
         try {
             snapshotOperationLock.withLock {
-                val salt = ByteArray(SALT_BYTES).also(SecureRandom()::nextBytes)
-                val nonce = ByteArray(NONCE_BYTES).also(SecureRandom()::nextBytes)
-                val output = context.contentResolver.openOutputStream(uri, "w")
-                    ?: error("Tidak dapat membuka tujuan backup")
-                output.buffered().use { rawOutput ->
-                    val data = DataOutputStream(rawOutput)
-                    data.write(MAGIC_V2)
-                    data.write(salt)
-                    data.write(nonce)
-                    data.writeInt(PBKDF2_ITERATIONS)
-                    val cipher = Cipher.getInstance(AES_GCM)
-                    cipher.init(
-                        Cipher.ENCRYPT_MODE,
-                        deriveKey(password, salt, PBKDF2_ITERATIONS),
-                        GCMParameterSpec(GCM_TAG_BITS, nonce),
-                    )
-                    CipherOutputStream(data, cipher).use { encrypted ->
-                        writePortableSnapshot(encrypted)
+                val staged = File(context.cacheDir, "backup-export-${UUID.randomUUID()}.kronbackup")
+                try {
+                    writeEncryptedBackup(staged, password)
+                    verifyBackupStaging(staged)
+                    val output = context.contentResolver.openOutputStream(uri, "w")
+                        ?: error("Tidak dapat membuka tujuan backup")
+                    output.buffered().use { destination ->
+                        staged.inputStream().buffered().use { source -> source.copyTo(destination) }
+                        destination.flush()
                     }
+                } finally {
+                    staged.delete()
                 }
             }
         } finally {
             password.fill('\u0000')
         }
+    }
+
+    private suspend fun writeEncryptedBackup(target: File, password: CharArray) {
+        target.delete()
+        val salt = ByteArray(SALT_BYTES).also(SecureRandom()::nextBytes)
+        val nonce = ByteArray(NONCE_BYTES).also(SecureRandom()::nextBytes)
+        FileOutputStream(target).buffered().use { rawOutput ->
+            val data = DataOutputStream(rawOutput)
+            data.write(MAGIC_V2)
+            data.write(salt)
+            data.write(nonce)
+            data.writeInt(PBKDF2_ITERATIONS)
+            val cipher = Cipher.getInstance(AES_GCM)
+            cipher.init(
+                Cipher.ENCRYPT_MODE,
+                deriveKey(password, salt, PBKDF2_ITERATIONS),
+                GCMParameterSpec(GCM_TAG_BITS, nonce),
+            )
+            CipherOutputStream(data, cipher).use { encrypted ->
+                writePortableSnapshot(encrypted)
+            }
+        }
+    }
+
+    private fun verifyBackupStaging(file: File) {
+        require(file.exists() && file.length() > MAGIC_V2.size + SALT_BYTES + NONCE_BYTES + Int.SIZE_BYTES) {
+            "Backup staging tidak lengkap"
+        }
+        val magic = DataInputStream(file.inputStream().buffered()).use { input -> input.readExact(MAGIC_V2.size) }
+        require(magic.contentEquals(MAGIC_V2)) { "Header backup staging tidak valid" }
     }
 
     suspend fun createPortableSnapshotPayload(): ByteArray = withContext(Dispatchers.IO) {
@@ -225,6 +248,7 @@ class BackupManager @Inject constructor(
             extracted.database.copyTo(validationFile, overwrite = true)
             migrateAndValidateCandidate(validationFile)
             normalizeSyncState(validationFile, extracted.manifest, preserveTargetSyncAccount, driveMetadata)
+            databaseEncryption.prepareValidatedRestoreKey()
 
             val pending = File(context.filesDir, PENDING_DIRECTORY)
             require(!File(pending, COMMITTED_MARKER).exists()) {
@@ -516,7 +540,7 @@ class BackupManager @Inject constructor(
         val validationDatabase = KronDatabase.openPlaintextValidationDatabase(context, VALIDATION_DATABASE_NAME)
         try {
             validationDatabase.openHelper.writableDatabase.query("PRAGMA user_version").use { cursor ->
-                require(cursor.moveToFirst() && cursor.getInt(0) == CURRENT_SCHEMA_VERSION) {
+                require(cursor.moveToFirst() && cursor.getInt(0) == KronDatabase.SCHEMA_VERSION) {
                     "Migrasi database backup tidak selesai"
                 }
             }
@@ -568,7 +592,7 @@ class BackupManager @Inject constructor(
     private fun validateDatabase(file: File) {
         val db = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
         db.use {
-            require(scalar(it, "PRAGMA user_version") == CURRENT_SCHEMA_VERSION.toLong()) {
+            require(scalar(it, "PRAGMA user_version") == KronDatabase.SCHEMA_VERSION.toLong()) {
                 "Versi database hasil migrasi tidak sesuai"
             }
             val integrity = it.rawQuery("PRAGMA integrity_check", null).use { cursor ->
@@ -594,6 +618,37 @@ class BackupManager @Inject constructor(
                     "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE fundingChannel='$channel' AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)",
                 )
                 require(channelCash == channelAvailable) { "Invariant kanal $channel tidak seimbang" }
+            }
+            val accounts = it.rawQuery("SELECT id FROM accounts", null).use { cursor ->
+                buildList {
+                    while (cursor.moveToNext()) add(cursor.getLong(0))
+                }
+            }
+            accounts.forEach { accountId ->
+                val accountCash = scalar(
+                    it,
+                    "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines WHERE accountId=$accountId",
+                )
+                val accountAvailable = scalar(
+                    it,
+                    "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE accountId=$accountId " +
+                        "AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)",
+                )
+                require(accountCash == accountAvailable) { "Invariant akun tidak seimbang" }
+                listOf(FundingChannel.CASH, FundingChannel.EBUDGET).forEach { channel ->
+                    val channelCash = scalar(
+                        it,
+                        "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines " +
+                            "WHERE accountId=$accountId AND fundingChannel='$channel'",
+                    )
+                    val channelAvailable = scalar(
+                        it,
+                        "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines " +
+                            "WHERE accountId=$accountId AND fundingChannel='$channel' " +
+                            "AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)",
+                    )
+                    require(channelCash == channelAvailable) { "Invariant kanal akun tidak seimbang" }
+                }
             }
         }
     }
@@ -788,7 +843,6 @@ class BackupManager @Inject constructor(
     companion object {
         private const val CURRENT_FORMAT = 2
         private const val LEGACY_FORMAT = 1
-        private const val CURRENT_SCHEMA_VERSION = 6
         private const val MIN_PASSWORD_LENGTH = 12
         private const val LEGACY_MIN_PASSWORD_LENGTH = 8
         private const val PBKDF2_ITERATIONS = 600_000

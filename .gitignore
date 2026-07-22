@@ -6,6 +6,29 @@ local.properties
 build/
 app/build/
 captures/
+.codex-remote-attachments/
 *.jks
 *.keystore
 signing.properties
+
+# Local signing, OAuth, and environment configuration
+.android/
+*.properties.local
+*.env
+.env
+.env.*
+*client_secret*
+*oauth*secret*
+*.pem
+*.p12
+*.pfx
+
+# Financial data and private backup material
+*.db
+*.sqlite
+*.sqlite3
+*.kronbackup
+*.receipt
+
+# Release binaries are uploaded as GitHub Release assets, not committed to source
+releases/

@@ -41,7 +41,7 @@ class DriveSyncPolicyTest {
         var capturedScopes = emptySet<String>()
         val bridge = object : AuthorizationClientBridge {
             override suspend fun authorize(
-                account: GoogleAccountIdentity,
+                account: GoogleAccountIdentity?,
                 requestedScopes: Set<String>,
                 interactive: Boolean,
             ): AuthorizationClientResult {

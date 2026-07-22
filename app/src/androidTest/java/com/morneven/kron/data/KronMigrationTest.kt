@@ -243,4 +243,48 @@ class KronMigrationTest {
             close()
         }
     }
+
+    @Test
+    fun migrationElevenToTwelveScopesRecoverableRecordsAndQuarantinesAmbiguousRecords() {
+        val name = "kron-production-11-to-12.db"
+        migrationHelper.createDatabase(name, 11).apply {
+            execSQL("INSERT INTO accounts(id,name,isActive,isArchived,archivedAt,createdAt) VALUES(1,'Akun Utama',1,0,NULL,10)")
+            execSQL("INSERT INTO activity_events(id,type,title,note,source,effectiveEpochDay,createdAt,relatedEventId,reversedByEventId,targetAllocationId,accountId) VALUES('event-known','INCOME','Pemasukan','','USER',1,10,NULL,NULL,NULL,0)")
+            execSQL("INSERT INTO cash_journal_lines(id,eventId,accountId,fundingChannel,amount) VALUES(1,'event-known',1,'CASH',500000)")
+            execSQL("INSERT INTO budget_journal_lines(id,eventId,allocationId,bucket,fundingChannel,amount,accountId) VALUES(1,'event-known',NULL,'VAULT','CASH',500000,0)")
+            execSQL("INSERT INTO activity_events(id,type,title,note,source,effectiveEpochDay,createdAt,relatedEventId,reversedByEventId,targetAllocationId,accountId) VALUES('event-legacy','SYSTEM','Lama','','SYSTEM',1,10,NULL,NULL,NULL,0)")
+            execSQL("INSERT INTO budget_journal_lines(id,eventId,allocationId,bucket,fundingChannel,amount,accountId) VALUES(2,'event-legacy',NULL,'EXTERNAL','CASH',0,0)")
+            execSQL("INSERT INTO recurring_rules(id,title,direction,amount,accountId,fundingChannel,categoryId,allocationId,cadence,intervalCount,anchorMonth,anchorDay,startEpochDay,nextEpochDay,endEpochDay,remainingOccurrences,isPaused,pausedByArchive,createdAt) VALUES('legacy-rule','Aturan lama','INCOME',1,0,'CASH',NULL,NULL,'MONTHLY',1,1,1,1,1,NULL,NULL,1,0,10)")
+            close()
+        }
+
+        migrationHelper.runMigrationsAndValidate(name, 12, true, KronDatabase.MIGRATION_11_12).apply {
+            query("SELECT accountId FROM budget_journal_lines WHERE id=1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(1L, cursor.getLong(0))
+            }
+            query("SELECT accountId FROM activity_events WHERE id='event-known'").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(1L, cursor.getLong(0))
+            }
+            query("SELECT id, isActive, isArchived FROM accounts WHERE name='Data KRON Lama'").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                val legacyAccountId = cursor.getLong(0)
+                assertEquals(0, cursor.getInt(1))
+                assertEquals(0, cursor.getInt(2))
+                query("SELECT accountId FROM recurring_rules WHERE id='legacy-rule'").use { rule ->
+                    assertTrue(rule.moveToFirst())
+                    assertEquals(legacyAccountId, rule.getLong(0))
+                }
+            }
+            query("PRAGMA index_list('budget_journal_lines')").use { cursor ->
+                var found = false
+                while (cursor.moveToNext()) {
+                    if (cursor.getString(1) == "index_budget_journal_lines_accountId_fundingChannel") found = true
+                }
+                assertTrue(found)
+            }
+            close()
+        }
+    }
 }

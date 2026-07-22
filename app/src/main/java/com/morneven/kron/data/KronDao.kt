@@ -46,6 +46,17 @@ interface KronDao {
     @Query("SELECT * FROM receipts ORDER BY createdAt, id") fun observeReceipts(): Flow<List<ReceiptEntity>>
     @Query("SELECT * FROM sync_state WHERE id = 1") fun observeSyncState(): Flow<SyncStateEntity?>
 
+    @Query("SELECT * FROM portfolios WHERE isArchived = 0 AND accountId = :accountId ORDER BY fundingPriority, createdAt")
+    fun observePortfoliosForAccount(accountId: Long): Flow<List<PortfolioEntity>>
+    @Query("SELECT * FROM portfolios WHERE isArchived = 1 AND accountId = :accountId ORDER BY archivedAt DESC, createdAt")
+    fun observeArchivedPortfoliosForAccount(accountId: Long): Flow<List<PortfolioEntity>>
+    @Query("SELECT p.* FROM budget_periods p JOIN portfolios pf ON pf.id = p.portfolioId WHERE pf.accountId = :accountId ORDER BY p.startEpochDay DESC")
+    fun observePeriodsForAccount(accountId: Long): Flow<List<BudgetPeriodEntity>>
+    @Query("SELECT * FROM recurring_rules WHERE accountId = :accountId ORDER BY nextEpochDay, createdAt")
+    fun observeRulesForAccount(accountId: Long): Flow<List<RecurringRuleEntity>>
+    @Query("SELECT r.* FROM receipts r JOIN activity_events e ON e.id = r.eventId WHERE e.accountId = :accountId ORDER BY r.createdAt, r.id")
+    fun observeReceiptsForAccount(accountId: Long): Flow<List<ReceiptEntity>>
+
     @Query("""
         SELECT a.id, a.name, a.isActive,
                COALESCE(SUM(CASE WHEN c.fundingChannel = 'CASH' THEN c.amount ELSE 0 END), 0) AS cashBalance,
@@ -61,22 +72,22 @@ interface KronDao {
 
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'VAULT'")
     fun observeVaultBalance(): Flow<Long>
-    @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'VAULT' AND accountId IN (0, :accountId)")
+    @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'VAULT' AND accountId = :accountId")
     fun observeVaultBalance(accountId: Long): Flow<Long>
 
     @Query("SELECT fundingChannel, COALESCE(SUM(amount), 0) AS balance FROM budget_journal_lines WHERE bucket = 'VAULT' GROUP BY fundingChannel")
     fun observeVaultByChannel(): Flow<List<ChannelBalanceRow>>
-    @Query("SELECT fundingChannel, COALESCE(SUM(amount), 0) AS balance FROM budget_journal_lines WHERE bucket = 'VAULT' AND accountId IN (0, :accountId) GROUP BY fundingChannel")
+    @Query("SELECT fundingChannel, COALESCE(SUM(amount), 0) AS balance FROM budget_journal_lines WHERE bucket = 'VAULT' AND accountId = :accountId GROUP BY fundingChannel")
     fun observeVaultByChannel(accountId: Long): Flow<List<ChannelBalanceRow>>
 
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'UNALLOCATED'")
     fun observeUnallocatedBalance(): Flow<Long>
-    @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'UNALLOCATED' AND accountId IN (0, :accountId)")
+    @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'UNALLOCATED' AND accountId = :accountId")
     fun observeUnallocatedBalance(accountId: Long): Flow<Long>
 
     @Query("SELECT fundingChannel, COALESCE(SUM(amount), 0) AS balance FROM budget_journal_lines WHERE bucket = 'UNALLOCATED' GROUP BY fundingChannel")
     fun observeUnallocatedByChannel(): Flow<List<ChannelBalanceRow>>
-    @Query("SELECT fundingChannel, COALESCE(SUM(amount), 0) AS balance FROM budget_journal_lines WHERE bucket = 'UNALLOCATED' AND accountId IN (0, :accountId) GROUP BY fundingChannel")
+    @Query("SELECT fundingChannel, COALESCE(SUM(amount), 0) AS balance FROM budget_journal_lines WHERE bucket = 'UNALLOCATED' AND accountId = :accountId GROUP BY fundingChannel")
     fun observeUnallocatedByChannel(accountId: Long): Flow<List<ChannelBalanceRow>>
 
     @Query("""
@@ -99,6 +110,26 @@ interface KronDao {
     fun observeAllocationBalances(): Flow<List<AllocationBalanceRow>>
 
     @Query("""
+        SELECT al.id, al.periodId, p.portfolioId, pf.name AS portfolioName, pf.isArchived AS portfolioArchived,
+               al.categoryId, c.name AS categoryName, c.color, al.fundingChannel,
+               al.plannedAmount,
+               COALESCE(SUM(b.amount), 0) - COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND e.reversedByEventId IS NULL AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS bookedAmount,
+               COALESCE(SUM(b.amount), 0) AS availableAmount,
+               -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND e.reversedByEventId IS NULL AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS spentAmount,
+               p.status AS periodStatus, p.startEpochDay, p.endEpochDay
+        FROM allocations al
+        JOIN budget_periods p ON p.id = al.periodId
+        JOIN portfolios pf ON pf.id = p.portfolioId
+        JOIN categories c ON c.id = al.categoryId
+        LEFT JOIN budget_journal_lines b ON b.allocationId = al.id
+        LEFT JOIN activity_events e ON e.id = b.eventId
+        WHERE pf.accountId = :accountId
+        GROUP BY al.id
+        ORDER BY p.startEpochDay DESC, c.name
+    """)
+    fun observeAllocationBalancesForAccount(accountId: Long): Flow<List<AllocationBalanceRow>>
+
+    @Query("""
         SELECT e.id, e.type, e.title, e.note, e.source, e.effectiveEpochDay, e.createdAt,
                e.relatedEventId, e.reversedByEventId, e.accountId,
                COALESCE((SELECT SUM(amount) FROM cash_journal_lines WHERE eventId = e.id), 0) AS cashImpact,
@@ -109,8 +140,22 @@ interface KronDao {
     """)
     fun observeActivities(): Flow<List<ActivityRow>>
 
+    @Query("""
+        SELECT e.id, e.type, e.title, e.note, e.source, e.effectiveEpochDay, e.createdAt,
+               e.relatedEventId, e.reversedByEventId, e.accountId,
+               COALESCE((SELECT SUM(amount) FROM cash_journal_lines WHERE eventId = e.id), 0) AS cashImpact,
+               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'VAULT'), 0) AS vaultImpact,
+               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND allocationId IS NOT NULL), 0) AS budgetImpact
+        FROM activity_events e
+        WHERE e.accountId = :accountId
+        ORDER BY e.effectiveEpochDay DESC, e.createdAt DESC
+    """)
+    fun observeActivitiesForAccount(accountId: Long): Flow<List<ActivityRow>>
+
     @Query("SELECT DISTINCT eventId, fundingChannel FROM cash_journal_lines ORDER BY eventId, fundingChannel")
     fun observeEventChannels(): Flow<List<EventChannelRow>>
+    @Query("SELECT DISTINCT c.eventId, c.fundingChannel FROM cash_journal_lines c JOIN activity_events e ON e.id = c.eventId WHERE e.accountId = :accountId ORDER BY c.eventId, c.fundingChannel")
+    fun observeEventChannelsForAccount(accountId: Long): Flow<List<EventChannelRow>>
 
     @Query("""
         SELECT
@@ -127,7 +172,7 @@ interface KronDao {
             -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','UNEXPECTED_EXPENSE','AUTOMATION') AND c.amount < 0 THEN c.amount ELSE 0 END), 0) AS expense
         FROM activity_events e
         JOIN cash_journal_lines c ON c.eventId = e.id
-        WHERE e.effectiveEpochDay BETWEEN :startDay AND :endDay AND e.reversedByEventId IS NULL AND e.accountId IN (0, :accountId)
+        WHERE e.effectiveEpochDay BETWEEN :startDay AND :endDay AND e.reversedByEventId IS NULL AND e.accountId = :accountId
     """)
     fun observeCashflow(startDay: Long, endDay: Long, accountId: Long): Flow<CashflowRow>
 
@@ -136,12 +181,14 @@ interface KronDao {
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE eventId = :eventId") suspend fun budgetEventTotal(eventId: String): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'VAULT'") suspend fun vaultBalance(): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'VAULT' AND fundingChannel = :channel") suspend fun vaultBalance(channel: String): Long
-    @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'VAULT' AND fundingChannel = :channel AND accountId IN (0, :accountId)") suspend fun vaultBalance(channel: String, accountId: Long): Long
+    @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'VAULT' AND fundingChannel = :channel AND accountId = :accountId") suspend fun vaultBalance(channel: String, accountId: Long): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'UNALLOCATED' AND fundingChannel = :channel") suspend fun unallocatedBalance(channel: String): Long
+    @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'UNALLOCATED' AND fundingChannel = :channel AND accountId = :accountId") suspend fun unallocatedBalance(channel: String, accountId: Long): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = :bucket AND fundingChannel = :channel") suspend fun budgetBucketBalance(bucket: String, channel: String): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE allocationId = :allocationId") suspend fun allocationAvailable(allocationId: Long): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE allocationId = :allocationId AND eventId IN (SELECT id FROM activity_events WHERE type IN ('PORTFOLIO_BOOKING','REALLOCATION','OVERBUDGET_COVERAGE','RELEASE','ROLLOVER'))") suspend fun allocationBooked(allocationId: Long): Long
     @Query("SELECT * FROM allocations WHERE id = :id") suspend fun allocationById(id: Long): AllocationEntity?
+    @Query("SELECT pf.* FROM allocations al JOIN budget_periods p ON p.id = al.periodId JOIN portfolios pf ON pf.id = p.portfolioId WHERE al.id = :allocationId") suspend fun portfolioForAllocation(allocationId: Long): PortfolioEntity?
     @Query("SELECT * FROM allocations WHERE periodId = :periodId AND categoryId = :categoryId AND fundingChannel = :channel LIMIT 1") suspend fun allocationFor(periodId: Long, categoryId: Long, channel: String): AllocationEntity?
     @Query("SELECT * FROM accounts WHERE id = :id") suspend fun accountById(id: Long): AccountEntity?
     @Query("SELECT * FROM accounts WHERE isActive = 1 AND isArchived = 0 LIMIT 1") suspend fun activeAccount(): AccountEntity?
@@ -150,6 +197,8 @@ interface KronDao {
     @Query("UPDATE accounts SET isActive = CASE WHEN id = :accountId THEN 1 ELSE 0 END WHERE isArchived = 0") suspend fun activateOnly(accountId: Long)
     @Query("SELECT COALESCE(SUM(amount), 0) FROM cash_journal_lines WHERE accountId = :accountId") suspend fun accountBalance(accountId: Long): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM cash_journal_lines WHERE accountId = :accountId AND fundingChannel = :channel") suspend fun accountBalance(accountId: Long, channel: String): Long
+    @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE accountId = :accountId AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)") suspend fun budgetAvailableTotal(accountId: Long): Long
+    @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE accountId = :accountId AND fundingChannel = :channel AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)") suspend fun budgetAvailableTotal(accountId: Long, channel: String): Long
     @Query("SELECT * FROM budget_periods WHERE id = :id") suspend fun periodById(id: Long): BudgetPeriodEntity?
     @Query("SELECT * FROM budget_periods WHERE portfolioId = :portfolioId ORDER BY startEpochDay") suspend fun periodsForPortfolio(portfolioId: Long): List<BudgetPeriodEntity>
     @Query("SELECT id FROM allocations WHERE periodId = :periodId") suspend fun allocationIdsForPeriod(periodId: Long): List<Long>
@@ -178,6 +227,7 @@ interface KronDao {
     @Query("SELECT COALESCE(SUM(amount), 0) FROM cash_journal_lines WHERE fundingChannel = :channel") suspend fun cashTotal(channel: String): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE fundingChannel = :channel AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)") suspend fun budgetAvailableTotal(channel: String): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'ROLLOVER' AND fundingChannel = :channel") suspend fun rolloverBalance(channel: String): Long
+    @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'ROLLOVER' AND fundingChannel = :channel AND accountId = :accountId") suspend fun rolloverBalance(channel: String, accountId: Long): Long
     @Query("SELECT fundingChannel, COALESCE(SUM(amount), 0) AS balance FROM budget_journal_lines WHERE bucket = 'ROLLOVER' GROUP BY fundingChannel") fun observeRolloverByChannel(): Flow<List<ChannelBalanceRow>>
-    @Query("SELECT fundingChannel, COALESCE(SUM(amount), 0) AS balance FROM budget_journal_lines WHERE bucket = 'ROLLOVER' AND accountId IN (0, :accountId) GROUP BY fundingChannel") fun observeRolloverByChannel(accountId: Long): Flow<List<ChannelBalanceRow>>
+    @Query("SELECT fundingChannel, COALESCE(SUM(amount), 0) AS balance FROM budget_journal_lines WHERE bucket = 'ROLLOVER' AND accountId = :accountId GROUP BY fundingChannel") fun observeRolloverByChannel(accountId: Long): Flow<List<ChannelBalanceRow>>
 }

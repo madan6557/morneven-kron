@@ -9,7 +9,6 @@ import javax.inject.Singleton
 import kotlin.math.min
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
@@ -83,47 +82,20 @@ class KronRepository @Inject constructor(
     val archivedAccounts = dao.observeArchivedAccounts()
     val accountBalances = dao.observeAccountBalances()
     val categories = dao.observeCategories()
-    val periods = dao.observePeriods()
-    val eventChannels = dao.observeEventChannels()
-    val receipts = dao.observeReceipts()
     val syncState = dao.observeSyncState()
 
     private val activeAccountFlow: Flow<Long> = dao.observeActiveAccount()
         .map { it?.id ?: 0L }
         .distinctUntilChanged()
 
-    val rules = activeAccountFlow.flatMapLatest { accountId ->
-        dao.observeRules().map { list ->
-            if (accountId == 0L) list else list.filter { it.accountId == accountId || it.accountId == 0L }
-        }
-    }
-
-    val portfolios = activeAccountFlow.flatMapLatest { accountId ->
-        dao.observePortfolios().map { list ->
-            if (accountId == 0L) list else list.filter { it.accountId == accountId || it.accountId == 0L }
-        }
-    }
-
-    val archivedPortfolios = activeAccountFlow.flatMapLatest { accountId ->
-        dao.observeArchivedPortfolios().map { list ->
-            if (accountId == 0L) list else list.filter { it.accountId == accountId || it.accountId == 0L }
-        }
-    }
-
-    val allocations = combine(
-        activeAccountFlow,
-        dao.observeAllocationBalances(),
-        dao.observePortfolios().map { list -> list.associate { it.id to it.accountId } },
-    ) { accountId, allocs, portMap ->
-        if (accountId == 0L) allocs
-        else allocs.filter { pa -> val a = portMap[pa.portfolioId]; a == accountId || a == 0L || a == null }
-    }
-
-    val activities = activeAccountFlow.flatMapLatest { accountId ->
-        dao.observeActivities().map { list ->
-            if (accountId == 0L) list else list.filter { it.accountId == accountId || it.accountId == 0L }
-        }
-    }
+    val rules = activeAccountFlow.flatMapLatest(dao::observeRulesForAccount)
+    val portfolios = activeAccountFlow.flatMapLatest(dao::observePortfoliosForAccount)
+    val archivedPortfolios = activeAccountFlow.flatMapLatest(dao::observeArchivedPortfoliosForAccount)
+    val periods = activeAccountFlow.flatMapLatest(dao::observePeriodsForAccount)
+    val allocations = activeAccountFlow.flatMapLatest(dao::observeAllocationBalancesForAccount)
+    val activities = activeAccountFlow.flatMapLatest(dao::observeActivitiesForAccount)
+    val eventChannels = activeAccountFlow.flatMapLatest(dao::observeEventChannelsForAccount)
+    val receipts = activeAccountFlow.flatMapLatest(dao::observeReceiptsForAccount)
 
     val vault = activeAccountFlow.flatMapLatest { accountId ->
         if (accountId == 0L) dao.observeVaultBalance()
@@ -417,8 +389,8 @@ class KronRepository @Inject constructor(
         require(fromAccount.isActive) { "Akun sumber harus menjadi akun aktif" }
         require(fromChannel in setOf(FundingChannel.CASH, FundingChannel.EBUDGET) && toChannel in setOf(FundingChannel.CASH, FundingChannel.EBUDGET)) { "Kanal transfer tidak valid" }
         require(dao.accountBalance(fromAccountId, fromChannel) >= amount) { "Saldo kanal sumber tidak mencukupi" }
-        if (fromChannel != toChannel) {
-            require(dao.vaultBalance(fromChannel, fromAccountId) >= amount) { "Main Vault kanal sumber tidak mencukupi untuk konversi" }
+        require(dao.vaultBalance(fromChannel, fromAccountId) >= amount) {
+            "Main Vault kanal sumber tidak mencukupi. Dana yang sudah terbooking tidak dapat ditransfer antar akun atau kanal."
         }
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(
@@ -434,13 +406,11 @@ class KronRepository @Inject constructor(
             CashJournalLineEntity(eventId = eventId, accountId = fromAccountId, fundingChannel = fromChannel, amount = -amount),
             CashJournalLineEntity(eventId = eventId, accountId = toAccountId, fundingChannel = toChannel, amount = amount),
         ))
-        if (fromChannel != toChannel) {
-            dao.insertBudgetLines(listOf(
-                BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = fromChannel, amount = -amount, accountId = fromAccountId),
-                BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = toChannel, amount = amount, accountId = fromAccountId),
-            ))
-        }
-        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = if (fromChannel == toChannel) "Transfer antar akun pada kanal yang sama" else "Konversi komposisi kanal Main Vault", beforeJson = "{\"accountId\":$fromAccountId,\"channel\":\"$fromChannel\"}", afterJson = "{\"accountId\":$toAccountId,\"channel\":\"$toChannel\",\"amount\":$amount}"))
+        dao.insertBudgetLines(listOf(
+            BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = fromChannel, amount = -amount, accountId = fromAccountId),
+            BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = toChannel, amount = amount, accountId = toAccountId),
+        ))
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = if (fromAccountId == toAccountId) "Konversi komposisi kanal Main Vault" else "Transfer dana Main Vault antar akun", beforeJson = "{\"accountId\":$fromAccountId,\"channel\":\"$fromChannel\"}", afterJson = "{\"accountId\":$toAccountId,\"channel\":\"$toChannel\",\"amount\":$amount}"))
         assertInvariant()
         eventId
     }
@@ -540,11 +510,14 @@ class KronRepository @Inject constructor(
 
     suspend fun fundUnderfundedPeriod(periodId: Long) = database.withTransaction {
         val period = requireNotNull(dao.periodById(periodId))
+        val activeId = activeAccountId()
+        require(requireNotNull(dao.allPortfolios().firstOrNull { it.id == period.portfolioId }).accountId == activeId) {
+            "Periode budget bukan milik akun aktif"
+        }
         require(period.status == PeriodStatus.UNDERFUNDED || period.status == PeriodStatus.DRAFT)
         val allocations = dao.allocationsForPeriod(periodId)
         val needs = allocations.associateWith { (it.plannedAmount - dao.allocationAvailable(it.id)).coerceAtLeast(0) }
         val requestedByChannel = needs.entries.groupBy { it.key.fundingChannel }.mapValues { (_, values) -> values.sumOf { it.value } }
-        val activeId = activeAccountId()
         require(requestedByChannel.all { (channel, value) -> dao.vaultBalance(channel, activeId) >= value }) { "Main Vault belum mencukupi" }
         if (requestedByChannel.values.all { it == 0L }) {
             dao.updatePeriod(period.copy(status = PeriodStatus.ACTIVE))
@@ -564,28 +537,27 @@ class KronRepository @Inject constructor(
         require(amount > 0)
         val source = requireNotNull(dao.allocationById(sourceAllocationId))
         val target = requireNotNull(dao.allocationById(targetAllocationId))
+        val activeId = activeAccountId()
+        require(requireNotNull(dao.portfolioForAllocation(sourceAllocationId)).accountId == activeId) { "Kategori sumber bukan milik akun aktif" }
+        require(requireNotNull(dao.portfolioForAllocation(targetAllocationId)).accountId == activeId) { "Kategori tujuan bukan milik akun aktif" }
+        require(source.periodId == target.periodId) { "Resolusi langsung hanya tersedia dalam periode budget yang sama" }
         require(source.fundingChannel == target.fundingChannel) { "Resolusi harus memakai kanal dana yang sama" }
         require(dao.allocationAvailable(sourceAllocationId) >= amount) { "Sisa sumber tidak mencukupi" }
         require(dao.allocationAvailable(targetAllocationId) < 0) { "Target tidak sedang minus" }
         val actualAmount = min(amount, -dao.allocationAvailable(targetAllocationId))
         val sourceBefore = dao.allocationAvailable(sourceAllocationId)
         val targetBefore = dao.allocationAvailable(targetAllocationId)
-        val activeId = activeAccountId()
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(eventId, LedgerType.REALLOCATION, "Resolusi antar kategori", note, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
-        val routing = if (source.periodId == target.periodId) emptyList() else listOf(
-            BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = source.fundingChannel, amount = actualAmount, accountId = activeId),
-            BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = target.fundingChannel, amount = -actualAmount, accountId = activeId),
-        )
         dao.insertBudgetLines(listOf(
             BudgetJournalLineEntity(eventId = eventId, allocationId = sourceAllocationId, fundingChannel = source.fundingChannel, amount = -actualAmount, accountId = activeId),
             BudgetJournalLineEntity(eventId = eventId, allocationId = targetAllocationId, fundingChannel = target.fundingChannel, amount = actualAmount, accountId = activeId),
-        ) + routing)
+        ))
         refreshPeriodStatus(source.periodId)
         refreshPeriodStatus(target.periodId)
         dao.insertAudit(AuditSnapshotEntity(
             eventId = eventId,
-            reason = if (source.periodId == target.periodId) "Resolusi kategori minus" else "Resolusi lintas portfolio melalui Main Vault",
+            reason = "Resolusi kategori minus",
             beforeJson = "{\"source\":$sourceBefore,\"target\":$targetBefore}",
             afterJson = "{\"source\":${sourceBefore - actualAmount},\"target\":${targetBefore + actualAmount}}",
         ))
@@ -596,11 +568,12 @@ class KronRepository @Inject constructor(
     suspend fun allocateUnallocated(targetAllocationId: Long, amount: Long, note: String) = database.withTransaction {
         require(amount > 0) { "Nominal harus lebih dari nol" }
         val target = requireNotNull(dao.allocationById(targetAllocationId))
-        val unresolved = dao.unallocatedBalance(target.fundingChannel)
+        val activeId = activeAccountId()
+        require(requireNotNull(dao.portfolioForAllocation(targetAllocationId)).accountId == activeId) { "Kategori target bukan milik akun aktif" }
+        val unresolved = dao.unallocatedBalance(target.fundingChannel, activeId)
         require(unresolved < 0) { "Tidak ada pengeluaran belum teralokasi pada kanal ini" }
         val actualAmount = min(amount, -unresolved)
         val targetBefore = dao.allocationAvailable(targetAllocationId)
-        val activeId = activeAccountId()
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(eventId, LedgerType.REALLOCATION, "Alokasi pengeluaran tertunda", note, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
         dao.insertBudgetLines(listOf(
@@ -621,12 +594,13 @@ class KronRepository @Inject constructor(
     suspend fun resolveFromVault(targetAllocationId: Long, amount: Long, note: String) = database.withTransaction {
         require(amount > 0)
         val target = requireNotNull(dao.allocationById(targetAllocationId))
+        val activeId = activeAccountId()
+        require(requireNotNull(dao.portfolioForAllocation(targetAllocationId)).accountId == activeId) { "Kategori target bukan milik akun aktif" }
         val targetBefore = dao.allocationAvailable(targetAllocationId)
         require(targetBefore < 0) { "Target tidak sedang minus" }
         val actualAmount = min(amount, -targetBefore)
-        val vaultBefore = dao.vaultBalance(target.fundingChannel)
+        val vaultBefore = dao.vaultBalance(target.fundingChannel, activeId)
         require(vaultBefore >= actualAmount) { "Main Vault tidak mencukupi" }
-        val activeId = activeAccountId()
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(eventId, LedgerType.OVERBUDGET_COVERAGE, "Overbudget dari Main Vault", note, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
         dao.insertBudgetLines(listOf(
@@ -647,12 +621,13 @@ class KronRepository @Inject constructor(
     suspend fun resolveFromRollover(targetAllocationId: Long, amount: Long, note: String) = database.withTransaction {
         require(amount > 0)
         val target = requireNotNull(dao.allocationById(targetAllocationId))
+        val activeId = activeAccountId()
+        require(requireNotNull(dao.portfolioForAllocation(targetAllocationId)).accountId == activeId) { "Kategori target bukan milik akun aktif" }
         val targetBefore = dao.allocationAvailable(targetAllocationId)
         require(targetBefore < 0) { "Target tidak sedang minus" }
-        val reserveBefore = dao.rolloverBalance(target.fundingChannel)
+        val reserveBefore = dao.rolloverBalance(target.fundingChannel, activeId)
         val actualAmount = min(amount, min(-targetBefore, reserveBefore))
         require(actualAmount > 0) { "Reserve rollover tidak mencukupi" }
-        val activeId = activeAccountId()
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(eventId, LedgerType.OVERBUDGET_COVERAGE, "Overbudget dari Reserve rollover", note, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
         dao.insertBudgetLines(listOf(
@@ -666,9 +641,9 @@ class KronRepository @Inject constructor(
     }
 
     suspend fun releaseRolloverToVault(channel: String) = database.withTransaction {
-        val amount = dao.rolloverBalance(channel)
-        require(amount > 0) { "Reserve rollover kosong" }
         val activeId = activeAccountId()
+        val amount = dao.rolloverBalance(channel, activeId)
+        require(amount > 0) { "Reserve rollover kosong" }
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(eventId, LedgerType.RELEASE, "Reserve rollover kembali ke Main Vault", "Pelepasan dana berlebih", "USER", LocalDate.now().toEpochDay(), accountId = activeId))
         dao.insertBudgetLines(listOf(
@@ -683,13 +658,14 @@ class KronRepository @Inject constructor(
     suspend fun correctAllocation(allocationId: Long, newPlannedAmount: Long, note: String) = database.withTransaction {
         require(newPlannedAmount >= 0) { "Nominal budget tidak boleh negatif" }
         val allocation = requireNotNull(dao.allocationById(allocationId))
+        val activeId = activeAccountId()
+        require(requireNotNull(dao.portfolioForAllocation(allocationId)).accountId == activeId) { "Kategori budget bukan milik akun aktif" }
         val oldPlanned = allocation.plannedAmount
         val delta = newPlannedAmount - oldPlanned
         require(delta != 0L) { "Tidak ada perubahan nominal" }
         val spent = oldPlanned - dao.allocationAvailable(allocationId)
         require(newPlannedAmount >= spent) { "Budget baru lebih kecil dari pengeluaran yang sudah tercatat" }
-        if (delta > 0) require(dao.vaultBalance(allocation.fundingChannel) >= delta) { "Main Vault tidak mencukupi untuk menambah budget" }
-        val activeId = activeAccountId()
+        if (delta > 0) require(dao.vaultBalance(allocation.fundingChannel, activeId) >= delta) { "Main Vault tidak mencukupi untuk menambah budget" }
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(eventId, LedgerType.REALLOCATION, "Koreksi budget", note, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
         dao.insertBudgetLines(listOf(
@@ -715,6 +691,10 @@ class KronRepository @Inject constructor(
         val fromAccount = requireNotNull(dao.accountById(fromAccountId))
         requireNotNull(dao.accountById(toAccountId))
         require(fromAccount.isActive) { "Akun sumber harus menjadi akun aktif" }
+        require(fromAccountId == toAccountId) { "Komposisi budget hanya dapat dipindahkan di akun aktif yang sama" }
+        val sourcePeriod = requireNotNull(dao.periodById(source.periodId))
+        val sourcePortfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == sourcePeriod.portfolioId })
+        require(sourcePortfolio.accountId == fromAccountId) { "Kategori budget tidak berada pada akun aktif" }
         require(dao.accountBalance(fromAccountId, source.fundingChannel) >= amount) { "Saldo kanal sumber tidak mencukupi" }
         require(dao.allocationAvailable(sourceAllocationId) >= amount) { "Sisa kategori tidak mencukupi" }
         val targetChannel = if (source.fundingChannel == FundingChannel.CASH) FundingChannel.EBUDGET else FundingChannel.CASH
@@ -747,7 +727,7 @@ class KronRepository @Inject constructor(
         ))
         dao.insertBudgetLines(listOf(
             BudgetJournalLineEntity(eventId = eventId, allocationId = source.id, fundingChannel = source.fundingChannel, amount = -amount, accountId = fromAccountId),
-            BudgetJournalLineEntity(eventId = eventId, allocationId = target.id, fundingChannel = target.fundingChannel, amount = amount, accountId = fromAccountId),
+            BudgetJournalLineEntity(eventId = eventId, allocationId = target.id, fundingChannel = target.fundingChannel, amount = amount, accountId = toAccountId),
         ))
         dao.insertAudit(AuditSnapshotEntity(
             eventId = eventId,
@@ -778,7 +758,7 @@ class KronRepository @Inject constructor(
             accountId = reversalAccountId,
         ))
         val cash = dao.cashLinesForEvent(originalEventId).map { CashJournalLineEntity(eventId = eventId, accountId = it.accountId, fundingChannel = it.fundingChannel, amount = -it.amount) }
-        val budget = dao.budgetLinesForEvent(originalEventId).map { BudgetJournalLineEntity(eventId = eventId, allocationId = it.allocationId, bucket = it.bucket, fundingChannel = it.fundingChannel, amount = -it.amount, accountId = reversalAccountId) }
+        val budget = dao.budgetLinesForEvent(originalEventId).map { BudgetJournalLineEntity(eventId = eventId, allocationId = it.allocationId, bucket = it.bucket, fundingChannel = it.fundingChannel, amount = -it.amount, accountId = it.accountId) }
         if (cash.isNotEmpty()) dao.insertCashLines(cash)
         if (budget.isNotEmpty()) dao.insertBudgetLines(budget)
         dao.updateEvent(original.copy(reversedByEventId = eventId))
@@ -989,7 +969,8 @@ class KronRepository @Inject constructor(
     }
 
     suspend fun reconcilePortfolios(today: LocalDate = LocalDate.now()) = database.withTransaction {
-        dao.allPortfolios().filter { !it.isPaused && !it.isArchived }.forEach { portfolio ->
+        val activeId = activeAccountId()
+        dao.allPortfolios().filter { it.accountId == activeId && !it.isPaused && !it.isArchived }.forEach { portfolio ->
             val periods = dao.periodsForPortfolio(portfolio.id)
             val current = periods.firstOrNull { it.status != PeriodStatus.CLOSED && today.toEpochDay() in it.startEpochDay..it.endEpochDay }
             val firstPeriod = periods.minByOrNull { it.startEpochDay }
@@ -1074,10 +1055,12 @@ class KronRepository @Inject constructor(
     }
 
     private suspend fun canFundPeriod(periodId: Long): Boolean {
+        val period = requireNotNull(dao.periodById(periodId))
+        val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == period.portfolioId })
         val needs = dao.allocationsForPeriod(periodId).groupBy { it.fundingChannel }.mapValues { (_, allocations) ->
             allocations.sumOf { (it.plannedAmount - dao.allocationAvailable(it.id)).coerceAtLeast(0) }
         }
-        return needs.all { (channel, amount) -> dao.vaultBalance(channel) >= amount }
+        return needs.all { (channel, amount) -> dao.vaultBalance(channel, portfolio.accountId) >= amount }
     }
 
     private fun advanceRule(rule: RecurringRuleEntity): RecurringRuleEntity {
@@ -1115,6 +1098,20 @@ class KronRepository @Inject constructor(
             val channelCash = dao.cashTotal(channel)
             val channelAvailable = dao.budgetAvailableTotal(channel)
             if (channelCash != channelAvailable) throw LedgerInvariantException("Kanal $channel tidak seimbang: kas=$channelCash, dana=$channelAvailable")
+        }
+        dao.allAccounts().forEach { account ->
+            val accountCash = dao.accountBalance(account.id)
+            val accountAvailable = dao.budgetAvailableTotal(account.id)
+            if (accountCash != accountAvailable) {
+                throw LedgerInvariantException("Akun ${account.id} tidak seimbang: kas=$accountCash, dana=$accountAvailable")
+            }
+            listOf(FundingChannel.CASH, FundingChannel.EBUDGET).forEach { channel ->
+                val channelCash = dao.accountBalance(account.id, channel)
+                val channelAvailable = dao.budgetAvailableTotal(account.id, channel)
+                if (channelCash != channelAvailable) {
+                    throw LedgerInvariantException("Akun ${account.id} kanal $channel tidak seimbang: kas=$channelCash, dana=$channelAvailable")
+                }
+            }
         }
         val newest = dao.allEvents().lastOrNull()
         if (newest != null && dao.budgetEventTotal(newest.id) != 0L && dao.budgetLinesForEvent(newest.id).isNotEmpty()) {

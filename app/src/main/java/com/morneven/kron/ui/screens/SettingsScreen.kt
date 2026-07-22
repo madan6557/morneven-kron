@@ -84,7 +84,7 @@ data class CloudBackupUiState(
     val status: CloudSyncStatus = CloudSyncStatus.UNAVAILABLE,
     val accountLabel: String? = null,
     val lastSyncedAt: Long? = null,
-    val wifiOnly: Boolean = true,
+    val wifiOnly: Boolean = false,
     val detail: String? = null,
 )
 
@@ -127,6 +127,7 @@ fun SettingsScreen(
         item {
             Text("PENGATURAN", style = MaterialTheme.typography.headlineMedium)
             Text("Akun, keamanan, data, dan tampilan", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Akun aktif: ${state.activeAccount?.name ?: "Belum ada"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
         }
 
         item {
@@ -499,7 +500,13 @@ private fun CloudSyncCard(
             modifier = Modifier.padding(top = 8.dp),
         )
         if (onWifiOnly != null) {
-            ToggleRow(Icons.Outlined.Sync, "Hanya jaringan tanpa meter", "Berlaku untuk sinkronisasi otomatis dan manual", state.wifiOnly, onWifiOnly)
+            ToggleRow(
+                Icons.Outlined.Sync,
+                "Gunakan Wi-Fi saja",
+                "Saat mati, sinkronisasi dapat memakai data seluler.",
+                state.wifiOnly,
+                onWifiOnly,
+            )
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             when {

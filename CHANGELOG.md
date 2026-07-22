@@ -1,5 +1,52 @@
 # KRON Changelog
 
+## 1.4.6 - 2026-07-22
+
+- Kunci database kini memiliki profil permanen yang mengikat envelope perangkat, fingerprint kunci, format raw hex, dan kompatibilitas SQLCipher 4.
+- KRON tidak akan membuat kunci baru ketika database, WAL, staging, salinan pemulihan, restore tertunda, atau lampiran terenkripsi lama masih tersedia.
+- Profil kunci baru hanya dikunci setelah database berhasil dibuka dan melewati validasi Room, integritas, foreign key, jurnal, Vault, Cash, eBudget, dan allocation.
+- Database dengan envelope hilang, profil tidak cocok, atau artefak pemulihan tanpa database utama masuk ke mode pemulihan read-only tanpa penimpaan data.
+- Tambahkan pengujian untuk ikatan profil kunci dan pencegahan pembuatan kunci ketika salinan pra-enkripsi masih tersedia.
+
+## 1.4.5 - 2026-07-22
+
+- Tambahkan pemeriksaan diagnostik read-only pada layar pemulihan database.
+- Pemeriksaan tidak membuat kunci baru, tidak mengubah database, dan menampilkan kecocokan plaintext, empty key, envelope, raw key, passphrase, serta salinan pra-enkripsi.
+- Rilis ini bersifat forward-only untuk memulihkan data penting tanpa uninstall, clear data, atau downgrade.
+
+## 1.4.4 - 2026-07-22
+
+- Upgrade tidak lagi membuat kunci perangkat baru saat database terenkripsi sudah ada tetapi envelope kunci lama tidak tersedia.
+- Tambahkan pemulihan terkonfirmasi dari salinan pra-enkripsi yang tervalidasi. Database utama yang tidak dapat dibuka tetap disimpan sebagai salinan karantina.
+- Layar pemulihan membedakan kegagalan format database dari kunci perangkat yang benar-benar tidak tersedia.
+
+## 1.4.3 - 2026-07-22
+
+- Perbaikan kritis kompatibilitas SQLCipher: database yang sebelumnya dibuat dengan raw key kini dibuka menggunakan spesifikasi raw key yang sama, bukan diperlakukan sebagai passphrase biasa.
+- Upgrade akan memvalidasi database dengan raw key, passphrase legacy, dan plaintext secara terpisah. Database yang berhasil dikenali tetap dipertahankan sampai aplikasi selesai dibuka.
+
+## 1.4.2 - 2026-07-22
+
+- Perbaikan upgrade database SQLCipher lama: database yang dapat dibuka dengan passphrase kosong dari rilis sebelumnya kini diekspor ulang secara atomik ke kunci perangkat KRON saat ini.
+- Database plaintext, SQLCipher modern, dan SQLCipher legacy dideteksi melalui integrity check sebelum migrasi. Database asli tetap menjadi rollback hingga aplikasi berhasil dibuka.
+
+## 1.4.1 - 2026-07-22
+
+- Perbaikan upgrade database: deteksi SQLite plaintext tidak lagi bergantung pada header 16 byte yang kaku. Database lama yang dapat dibuka divalidasi melalui SQLite integrity check sebelum dienkripsi secara atomik.
+- Pesan pemulihan database dibuat lebih tepat untuk membedakan database rusak, database terenkripsi, dan kunci yang tidak cocok.
+
+## 1.4.0 - 2026-07-22
+
+- Full Release: meningkatkan schema database ke 12 dengan migration non-destruktif yang mengisolasi data per akun. Data lama yang tidak dapat dipastikan pemiliknya dipindahkan ke akun nonaktif `Data KRON Lama` tanpa mengubah jurnal atau audit.
+- Backup dan restore: versi Room aktif menjadi satu-satunya sumber versi schema, backup dibuat dan diverifikasi di staging privat sebelum disalin melalui pemilih file, dan database staging sekarang benar-benar diekspor ke SQLCipher sebelum swap atomik.
+- Drive: pemilih akun Credential Manager berjalan sebelum otorisasi `drive.appdata`; sinkronisasi seluler diizinkan secara bawaan dan opsi `Gunakan Wi-Fi saja` bersifat pilihan.
+- Integritas: invariant diperiksa untuk setiap akun dan kanal Cash/eBudget. Transfer antar akun selalu memindahkan Main Vault tujuan, sedangkan dana budget terbooking tetap dibatasi di akun aktif yang sama.
+- UX: penyaring laporan tetap account-scoped, teks transfer diperjelas, dan label versi dalam aplikasi menjadi `KRON 1.4.0 Full Release LTS`.
+
+## 1.3.20 - 2026-07-21
+
+- Fix: OnboardingScreen ("Setiap rupiah punya jejak") hanya tampil untuk pengguna baru yang belum punya data. Pengguna lama tidak lagi melihat flash halaman onboarding.
+
 ## 1.3.19 - 2026-07-21
 
 - UI: Theme container -- LazyRow sekarang fillMaxWidth (rata kiri/kanan dengan konten lain).

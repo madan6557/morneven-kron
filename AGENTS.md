@@ -20,6 +20,25 @@
 - Do not mark a release complete until migration tests, backup round trips, financial invariants, lint, release build, signature verification, and install-over-previous smoke tests pass.
 - A release that cannot prove compatibility with the previous production APK is blocked.
 
+## Encryption key continuity and data-loss prevention
+
+- Starting with KRON 1.4.6, the production key contract is fixed: Android Keystore alias `kron.database.wrap.v1`, envelope `security/database-key-v1.bin`, profile `security/database-key-profile-v1.bin`, raw-hex key encoding, and SQLCipher 4 compatibility. Treat these identifiers and semantics as shipped migration history.
+- Treat the production database, its `-wal` and `-shm` files, the wrapped data-key envelope, Android Keystore alias, and encryption metadata as one inseparable data set.
+- Never generate or install a replacement database key when any existing database or encrypted recovery artifact is present. A missing, unreadable, or mismatched key must fail closed into read-only recovery mode.
+- The shipped Android Keystore alias, envelope format, SQLCipher key encoding, cipher parameters, and key derivation behavior are immutable compatibility contracts. Any change requires a new versioned format and an explicit tested migration. Never reinterpret existing key bytes with a new encoding.
+- Key creation is allowed only for a genuinely new installation with no database and no recovery artifacts, or while converting a database that has already been positively validated as plaintext.
+- Before any encryption, rekey, schema, restore, or ownership migration, create a private pre-upgrade recovery copy. Preserve the original database, sidecars, and key envelope until the replacement database opens successfully and passes SQLCipher integrity, SQLite integrity, foreign-key, Room schema, journal, account, Vault, Cash, eBudget, and allocation invariant checks.
+- Migration staging and recovery files must be written and synchronized completely before atomic activation. On any failure, keep the original files byte-for-byte intact and quarantine unreadable candidates instead of deleting or overwriting them.
+- All database format and key detection must be read-only. Test every historically shipped key representation separately, validate it with a real database read and integrity check, and never use a failed probe as permission to re-encrypt or replace data.
+- Never present uninstall, clear data, destructive reset, or downgrade as the default response to an upgrade failure. Recovery must be delivered as a forward-only APK with a higher `versionCode` and the same application ID and signing certificate.
+- A reset action must be isolated from migration recovery, explicitly initiated by the user, explain permanent data loss, and require a verified backup plus strong confirmation. Migration code must never invoke reset behavior.
+- Encryption and key-management changes require install-over tests using data produced by the exact signed production APKs, beginning with KRON 1.0.21 and including the immediately previous release. Synthetic databases alone are insufficient.
+- The install-over test must cover plaintext databases, every shipped SQLCipher key representation, valid and missing envelopes, unavailable Keystore aliases, WAL mode, interrupted migration, process death, low storage, and rollback after validation failure.
+- Every release must prove that an existing user can open their ledger after upgrade without re-entering or regenerating a device key. If this cannot be demonstrated, the release is blocked.
+- Before a risky encryption or key-format upgrade, create and verify an automatic pre-upgrade backup that can be restored by the new version. Do not start the migration if that backup cannot be verified.
+- Recovery diagnostics must not expose keys, passphrases, financial values, account details, file contents, or other sensitive data in the UI, logs, crash reports, or exported diagnostics.
+- If Android Keystore material is genuinely unavailable and no valid recovery copy exists, stop all writes and preserve every artifact for forensic recovery. Never hide this condition by creating a new key.
+
 ## Security and repository hygiene
 
 - Never commit signing credentials, OAuth secrets, access tokens, financial data, backup passwords, or encryption keys.

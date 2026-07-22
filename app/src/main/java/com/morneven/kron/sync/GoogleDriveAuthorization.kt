@@ -1,10 +1,5 @@
 package com.morneven.kron.sync
 
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URL
-
 /**
  * Implement this interface with Credential Manager. ID tokens are used only to
  * identify the selected account and must not replace the local KRON app lock.
@@ -76,7 +71,15 @@ class AuthorizationClientDriveSession(
     override suspend fun currentAccount(): GoogleAccountIdentity? = accountStore.read()
 
     override suspend fun connect(): DriveConnectResult {
-        return connectAnonymous()
+        val selector = accountSelector
+            ?: return DriveConnectResult.Failed("Pemilih akun Google tidak tersedia", retryable = false)
+        val account = runCatching { selector.selectAccount() }.getOrElse { error ->
+            return DriveConnectResult.Failed(
+                error.message ?: "Pemilihan akun Google tidak dapat diselesaikan",
+                retryable = true,
+            )
+        }
+        return acceptConnectionResult(account, authorize(account, interactive = true))
     }
 
     suspend fun reauthorizeCurrent(): DriveConnectResult {
@@ -85,33 +88,19 @@ class AuthorizationClientDriveSession(
         return acceptConnectionResult(account, authorize(account, interactive = true))
     }
 
-    /** Authorize without a pre-selected account -- Play Services shows account picker. */
-    suspend fun connectAnonymous(): DriveConnectResult {
-        val result = authorize(account = null, interactive = true)
-        return when (result) {
-            is AuthorizationClientResult.Granted -> {
-                val account = fetchAccountFromToken(result.accessToken)
-                accountStore.write(account)
-                cachedGrant = CachedGrant(account.subjectId, result.accessToken, result.expiresAtEpochMillis)
-                DriveConnectResult.Connected(account)
-            }
-            is AuthorizationClientResult.UserActionRequired -> DriveConnectResult.UserActionRequired(
-                account = null,
-                result.resolutionId,
-            )
-            is AuthorizationClientResult.Failed -> DriveConnectResult.Failed(result.message, result.retryable)
-        }
-    }
-
+    /** Kept for source compatibility. Connections always begin with Credential Manager. */
     suspend fun acceptConnectionResult(
         account: GoogleAccountIdentity?,
         result: AuthorizationClientResult,
     ): DriveConnectResult = when (result) {
             is AuthorizationClientResult.Granted -> {
-                val resolved = account ?: fetchAccountFromToken(result.accessToken)
-                accountStore.write(resolved)
-                cachedGrant = CachedGrant(resolved.subjectId, result.accessToken, result.expiresAtEpochMillis)
-                DriveConnectResult.Connected(resolved)
+                if (account == null) {
+                    DriveConnectResult.Failed("Pilih akun Google sebelum memberi izin Drive", retryable = true)
+                } else {
+                    accountStore.write(account)
+                    cachedGrant = CachedGrant(account.subjectId, result.accessToken, result.expiresAtEpochMillis)
+                    DriveConnectResult.Connected(account)
+                }
             }
             is AuthorizationClientResult.UserActionRequired -> {
                 val resolved = account ?: return DriveConnectResult.UserActionRequired(null, result.resolutionId)
@@ -161,25 +150,6 @@ class AuthorizationClientDriveSession(
             return AuthorizationClientResult.Failed("Izin appDataFolder tidak diberikan", retryable = false)
         }
         return result
-    }
-
-    private fun fetchAccountFromToken(accessToken: String): GoogleAccountIdentity {
-        val url = URL("https://www.googleapis.com/oauth2/v2/userinfo")
-        val conn = url.openConnection() as HttpURLConnection
-        try {
-            conn.requestMethod = "GET"
-            conn.setRequestProperty("Authorization", "Bearer $accessToken")
-            conn.connect()
-            val body = conn.inputStream.bufferedReader().use(BufferedReader::readText)
-            val json = org.json.JSONObject(body)
-            val email = json.optString("email", "").takeIf { it.isNotBlank() }
-                ?: throw IllegalStateException("Email akun Google tidak ditemukan")
-            val id = json.optString("id", "").takeIf { it.isNotBlank() } ?: email
-            val name = json.optString("name", "").takeIf { it.isNotBlank() } ?: email.substringBefore("@")
-            return GoogleAccountIdentity(subjectId = id, email = email, displayName = name)
-        } finally {
-            conn.disconnect()
-        }
     }
 
     private data class CachedGrant(

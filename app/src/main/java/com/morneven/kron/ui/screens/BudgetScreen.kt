@@ -85,6 +85,7 @@ fun BudgetScreen(
                 Column {
                     Text("BUDGET", style = MaterialTheme.typography.headlineMedium)
                     Text("Portfolio bulanan dan tahunan", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Akun aktif: ${state.activeAccount?.name ?: "Belum ada"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
                 }
                 if (!showArchive) {
                     Button(onClick = onCreate) {

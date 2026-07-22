@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -22,7 +21,6 @@ import androidx.compose.material.icons.outlined.AddAPhoto
 import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.PhotoLibrary
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
@@ -123,8 +121,8 @@ fun IncomeDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Str
                 Text(" Ambil foto")
             }
         }
-        if (receiptUri != null) Text("Galeri: ${receiptUri?.lastPathSegment ?: "terpilih"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
-        if (cameraFile != null) Text("Kamera: ${cameraFile?.name}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+        receiptUri?.let { Text("Galeri: ${it.lastPathSegment ?: "terpilih"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary) }
+        cameraFile?.let { Text("Kamera: ${it.name}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary) }
         RecurrencePicker(recurring) { recurring = it }
         if (recurring != null) ScheduleFields(startDate, { startDate = it }, endDate, { endDate = it }, intervalCount, { intervalCount = it }, recurring, recordNow, { recordNow = it })
     }
@@ -332,8 +330,8 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, St
                 Text(" Ambil foto")
             }
         }
-        if (receiptUri != null) Text("Galeri: ${receiptUri?.lastPathSegment ?: "terpilih"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
-        if (cameraFile != null) Text("Kamera: ${cameraFile?.name}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+        receiptUri?.let { Text("Galeri: ${it.lastPathSegment ?: "terpilih"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary) }
+        cameraFile?.let { Text("Kamera: ${it.name}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary) }
         if (splits.size == 1) {
             RecurrencePicker(recurring) { recurring = it }
             if (recurring != null) ScheduleFields(startDate, { startDate = it }, endDate, { endDate = it }, intervalCount, { intervalCount = it }, recurring, recordNow, { recordNow = it })
@@ -366,7 +364,7 @@ fun TransferDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, S
         ChannelSelector(toChannel) { toChannel = it }
         Text("Dari ${sourceAccount?.name ?: "-"} · ${channelLabel(fromChannel)} ke ${targetAccount?.name ?: "-"} · ${channelLabel(toChannel)}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.tertiary)
         if (fromChannel != toChannel) {
-            Text("Transfer lintas kanal memindahkan komposisi Main Vault. Dana kategori terbooking tidak berubah.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+            Text("Transfer lintas kanal hanya memakai Main Vault. Dana kategori yang sudah terbooking tidak dapat dipindahkan dari sini.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
         }
         MoneyField(amount, { amount = it }, "Nominal")
         OutlinedTextField(note, { note = it }, label = { Text("Catatan") }, modifier = Modifier.fillMaxWidth())
@@ -445,14 +443,28 @@ fun BudgetDetailDialog(state: KronUiState, periodId: Long, readOnly: Boolean = f
     var reason by remember { mutableStateOf("Koreksi nominal budget") }
     val selected = rows.firstOrNull { it.id == correctionId }
     val validCorrection = selected != null && money(correctedAmount) >= 0 && money(correctedAmount) != selected.plannedAmount && reason.isNotBlank()
-    AlertDialog(
+    Dialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (readOnly) "Detail budget arsip" else "Detail budget") },
-        text = {
-            Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    ) {
+        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(if (readOnly) "Detail budget arsip" else "Detail budget", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                    TextButton(onClick = onDismiss) { Text("Tutup") }
+                }
+                HorizontalDivider()
+                Column(
+                    Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 18.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                 rows.firstOrNull()?.let { row ->
                     Text(row.portfolioName, style = MaterialTheme.typography.titleLarge)
-                    Text("${LocalDate.ofEpochDay(row.startEpochDay)} sampai ${LocalDate.ofEpochDay(row.endEpochDay)} · ${row.periodStatus.replace('_', ' ')}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("${LocalDate.ofEpochDay(row.startEpochDay)} sampai ${LocalDate.ofEpochDay(row.endEpochDay)} • ${row.periodStatus.replace('_', ' ')}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (readOnly) Text("Mode read-only. Pulihkan portfolio untuk melakukan perubahan.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
                 }
                 val budgetMoney: (Long) -> String = { value ->
@@ -498,13 +510,18 @@ fun BudgetDetailDialog(state: KronUiState, periodId: Long, readOnly: Boolean = f
                         }
                     }
                 }
+                }
+                if (!readOnly) {
+                    HorizontalDivider()
+                    Button(
+                        onClick = { onCorrect(requireNotNull(correctionId), money(correctedAmount), reason); onDismiss() },
+                        enabled = validCorrection,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp).height(52.dp),
+                    ) { Text("Simpan koreksi") }
+                }
             }
-        },
-        confirmButton = {
-            if (!readOnly) Button(onClick = { onCorrect(requireNotNull(correctionId), money(correctedAmount), reason); onDismiss() }, enabled = validCorrection) { Text("Simpan koreksi") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Tutup") } },
-    )
+        }
+    }
 }
 
 @Composable
