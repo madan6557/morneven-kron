@@ -1028,6 +1028,7 @@ private fun MainScaffold(
             properties = DialogProperties(dismissOnBackPress = true, dismissOnClickOutside = false),
         ) {
             CameraCaptureScreen(
+                lifecycleOwner = activity,
                 onPhotoCaptured = { uri ->
                     val file = uri.path?.let { java.io.File(it) }
                     if (file != null) {

@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.lifecycle.LifecycleOwner
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -53,6 +54,7 @@ private const val TAG = "KRON_CAMERAX"
 
 @Composable
 fun CameraCaptureScreen(
+    lifecycleOwner: LifecycleOwner,
     onPhotoCaptured: (Uri) -> Unit,
     onCancel: () -> Unit
 ) {
@@ -94,6 +96,7 @@ fun CameraCaptureScreen(
 
     CameraPreview(
         context = context,
+        lifecycleOwner = lifecycleOwner,
         onPhotoCaptured = onPhotoCaptured,
         onCancel = onCancel
     )
@@ -102,6 +105,7 @@ fun CameraCaptureScreen(
 @Composable
 private fun CameraPreview(
     context: Context,
+    lifecycleOwner: LifecycleOwner,
     onPhotoCaptured: (Uri) -> Unit,
     onCancel: () -> Unit
 ) {
@@ -139,7 +143,7 @@ private fun CameraPreview(
                 try {
                     cameraProvider.unbindAll()
                     cameraProvider.bindToLifecycle(
-                        ctx as? androidx.lifecycle.LifecycleOwner ?: return@AndroidView previewView,
+                        lifecycleOwner,
                         cameraSelector,
                         preview,
                         imageCapture
