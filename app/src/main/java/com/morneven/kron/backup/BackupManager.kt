@@ -3,6 +3,7 @@ package com.morneven.kron.backup
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
+import android.util.Log
 import android.system.Os
 import android.system.OsConstants
 import com.morneven.kron.data.FundingChannel
@@ -324,10 +325,11 @@ class BackupManager @Inject constructor(
         }
     }
 
-    private fun collectAttachments(receipts: List<ReceiptEntity>): List<ExportAttachment> = receipts.map { receipt ->
+    private fun collectAttachments(receipts: List<ReceiptEntity>): List<ExportAttachment> = receipts.mapNotNull { receipt ->
         val source = File(receipt.localPath)
-        require(source.exists() && source.isFile) {
-            "File lampiran ${receipt.storageId} tidak ditemukan. Backup dibatalkan agar tidak kehilangan data."
+        if (!source.exists() || !source.isFile) {
+            Log.w("KRON_BACKUP", "Lampiran ${receipt.storageId} tidak ditemukan, dilewati")
+            return@mapNotNull null
         }
         require(isAppPrivate(source)) {
             "Lokasi lampiran ${receipt.storageId} tidak aman. Backup dibatalkan."
@@ -559,8 +561,21 @@ class BackupManager @Inject constructor(
         val db = SQLiteDatabase.openDatabase(candidate.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
         db.use { sqlite ->
             val receiptCount = scalar(sqlite, "SELECT COUNT(*) FROM receipts")
-            require(receiptCount == attachments.size.toLong()) {
-                "Jumlah metadata lampiran tidak cocok dengan isi backup"
+            require(receiptCount >= attachments.size.toLong()) {
+                "Jumlah metadata lampiran melebihi jumlah receipt"
+            }
+            if (receiptCount > attachments.size.toLong()) {
+                val placeholders = attachments.values.joinToString(",") { "?" }
+                val params = attachments.values.map { it.storageId }.toTypedArray()
+                sqlite.execSQL(
+                    """
+                        UPDATE receipts
+                        SET localPath = NULL, byteSize = NULL, sha256 = NULL, encryptionNonce = NULL, encryptionVersion = NULL
+                        WHERE localPath IS NOT NULL AND storageId NOT IN ($placeholders)
+                    """.trimIndent(),
+                    params,
+                )
+                Log.w("KRON_BACKUP", "${receiptCount - attachments.size} receipt tanpa lampiran telah dikosongkan")
             }
             attachments.values.forEach { attachment ->
                 val exists = sqlite.rawQuery(

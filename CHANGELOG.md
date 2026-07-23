@@ -16,6 +16,11 @@
 - UI hanya menampilkan `KRON 1.5.0` tanpa label Full Release atau LTS.
 - Kontrak SQLCipher passphrase KRON 1.4.7 dipertahankan tanpa rekey. Raw-key 1.4.x tetap hanya menjadi mode baca historis.
 
+## 1.5.17 - 2026-07-23
+
+- Backup tidak lagi gagal jika ada file lampiran yang hilang — lampiran tersebut dilewati.
+- Restore backup dengan lampiran tidak lengkap tetap berjalan; receipt tanpa lampiran dikosongkan.
+
 ## 1.5.16 - 2026-07-23
 
 - Pindahkan LedgerSlice, MetadataSlice, PreferenceSlice ke level top-level dengan indentasi konsisten.
