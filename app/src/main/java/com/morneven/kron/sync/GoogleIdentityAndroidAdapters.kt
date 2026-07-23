@@ -48,8 +48,16 @@ class AndroidCredentialManagerAccountSelector(
         return try {
             selectViaCredentialManager()
         } catch (error: TimeoutCancellationException) {
-            Log.w(TAG, "Credential Manager timed out, falling back to account picker")
-            selectViaAccountPicker()
+            Log.w(TAG, "Credential Manager timed out, trying AccountManager fallback and one retry")
+            // Try AccountManager quick fallback first
+            getAccountFromAccountManager()?.let { return it }
+            // One retry with a longer timeout
+            try {
+                selectViaCredentialManager(retryTimeout = 30_000L)
+            } catch (second: TimeoutCancellationException) {
+                Log.w(TAG, "Credential Manager second attempt timed out, falling back to account picker")
+                selectViaAccountPicker()
+            }
         } catch (error: NoCredentialException) {
             Log.w(TAG, "No Google credential is available")
             throw IllegalStateException(
@@ -60,16 +68,16 @@ class AndroidCredentialManagerAccountSelector(
             Log.w(TAG, "Credential selection was cancelled")
             throw IllegalStateException("Pemilihan akun Google dibatalkan", error)
         } catch (error: GetCredentialException) {
-            Log.w(TAG, "Credential Manager is unavailable")
+            Log.w(TAG, "Credential Manager exception, trying AccountManager fallback", error)
+            getAccountFromAccountManager()?.let { return it }
             throw IllegalStateException(
-                "Pemilih akun Google tidak tersedia (${error.type}). " +
-                    "Perbarui Google Play Services atau periksa koneksi internet.",
+                "Pemilih akun Google tidak tersedia (${error.type}). Perbarui Google Play Services atau periksa koneksi internet.",
                 error,
             )
         }
     }
 
-    private suspend fun selectViaCredentialManager(): GoogleAccountIdentity {
+    private suspend fun selectViaCredentialManager(retryTimeout: Long = 15_000L): GoogleAccountIdentity {
         val googleOption = GetGoogleIdOption.Builder()
             .setServerClientId(webClientId)
             .setFilterByAuthorizedAccounts(false)
@@ -78,7 +86,7 @@ class AndroidCredentialManagerAccountSelector(
         val request = GetCredentialRequest.Builder()
             .addCredentialOption(googleOption)
             .build()
-        val credential = withTimeout(15_000L) {
+        val credential = withTimeout(retryTimeout) {
             credentialManager.getCredential(activity, request).credential
         }
         require(
@@ -91,6 +99,21 @@ class AndroidCredentialManagerAccountSelector(
             ?: error("Identitas akun Google kosong")
         val email = google.email?.takeIf(String::isNotBlank) ?: error("Email akun Google kosong")
         return GoogleAccountIdentity(subject, email, google.displayName)
+    }
+
+    private fun getAccountFromAccountManager(): GoogleAccountIdentity? {
+        return try {
+            val am = AccountManager.get(activity)
+            val accounts: Array<Account> = am.getAccountsByType("com.google")
+            if (accounts.isEmpty()) return null
+            // Prefer a primary account; otherwise take first
+            val account = accounts.first()
+            val email = account.name
+            GoogleAccountIdentity(email, email, null)
+        } catch (e: Exception) {
+            Log.w(TAG, "AccountManager fallback failed", e)
+            null
+        }
     }
 
     private suspend fun selectViaAccountPicker(): GoogleAccountIdentity = withContext(Dispatchers.Main) {

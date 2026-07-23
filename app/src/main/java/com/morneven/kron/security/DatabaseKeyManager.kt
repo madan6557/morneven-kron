@@ -188,17 +188,13 @@ class DatabaseKeyManager @Inject constructor(
         return loadAndVerify(file)
     }
 
-    private val usedSubkeyLabels = mutableSetOf<String>()
-
     @Synchronized
     fun deriveSubkey(label: String): SecretKeySpec {
-        require(usedSubkeyLabels.add(label)) { "Subkey label '$label' sudah digunakan. Setiap subkey harus memiliki label unik untuk domain separation." }
         val root = getOrCreateDatabasePassphrase()
         try {
             val mac = Mac.getInstance("HmacSHA256")
             mac.init(SecretKeySpec(root, "HmacSHA256"))
             val derived = mac.doFinal(label.toByteArray(Charsets.UTF_8))
-            root.fill(0)
             return SecretKeySpec(derived, "AES")
         } finally {
             root.fill(0)
@@ -346,9 +342,12 @@ class DatabaseKeyManager @Inject constructor(
     }
 
     private fun wrap(target: File, wrappingKey: SecretKey, dataKey: ByteArray) {
-        val nonce = generateNonce(GCM_NONCE_BYTES)
         val cipher = Cipher.getInstance(AES_GCM)
-        cipher.init(Cipher.ENCRYPT_MODE, wrappingKey, GCMParameterSpec(GCM_TAG_BITS, nonce))
+        // For AndroidKeyStore-backed keys with randomizedEncryptionRequired=true,
+        // caller-provided IVs are not permitted for encryption. Let the Cipher
+        // generate a secure IV and retrieve it via `cipher.iv` after init.
+        cipher.init(Cipher.ENCRYPT_MODE, wrappingKey)
+        val nonce = cipher.iv ?: generateNonce(GCM_NONCE_BYTES)
         val encrypted = cipher.doFinal(dataKey)
         FileOutputStream(target).use { output ->
             DataOutputStream(output).use { data ->

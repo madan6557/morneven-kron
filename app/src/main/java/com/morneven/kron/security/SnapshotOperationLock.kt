@@ -1,6 +1,7 @@
 package com.morneven.kron.security
 
-import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -8,24 +9,16 @@ import kotlinx.coroutines.withContext
 
 @Singleton
 class SnapshotOperationLock @Inject constructor() {
-    private val rwLock = ReentrantReadWriteLock()
+    private val mutex = Mutex()
 
     suspend fun <T> withReadLock(operation: suspend () -> T): T = withContext(Dispatchers.IO) {
-        rwLock.readLock().lock()
-        try {
-            operation()
-        } finally {
-            rwLock.readLock().unlock()
-        }
+        // Use a coroutine-friendly Mutex instead of a thread-bound ReadWriteLock.
+        // This prevents IllegalMonitorStateException when suspending across threads.
+        mutex.withLock { operation() }
     }
 
     suspend fun <T> withWriteLock(operation: suspend () -> T): T = withContext(Dispatchers.IO) {
-        rwLock.writeLock().lock()
-        try {
-            operation()
-        } finally {
-            rwLock.writeLock().unlock()
-        }
+        mutex.withLock { operation() }
     }
 
     suspend fun <T> withLock(operation: suspend () -> T): T = withWriteLock(operation)

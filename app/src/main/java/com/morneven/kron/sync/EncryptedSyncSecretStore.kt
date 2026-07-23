@@ -23,6 +23,8 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import android.util.Log
+import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -58,8 +60,14 @@ class EncryptedSyncSecretStore @Inject constructor(
         mutex.withLock {
             val staged = stagedPassphrase ?: return@withLock false
             try {
-                storeLocked(staged)
-                true
+                try {
+                    storeLocked(staged)
+                    return@withLock true
+                } catch (error: Throwable) {
+                    Log.w("EncryptedSyncSecretStore", "Failed to store staged passphrase", error)
+                    // Do not rethrow; indicate failure to caller so UI can surface it.
+                    return@withLock false
+                }
             } finally {
                 staged.fill('\u0000')
                 stagedPassphrase = null
@@ -223,6 +231,7 @@ internal class CrashSafeSecretFile(
     private val target: File,
     private val validator: (File) -> Boolean,
 ) {
+    private val TAG = "CrashSafeSecretFile"
     private val temporary: File
         get() = File(requireNotNull(target.parentFile), "${target.name}.new")
     private val backup: File
@@ -255,7 +264,25 @@ internal class CrashSafeSecretFile(
         }
 
         if (target.exists() || temporary.exists() || backup.exists()) {
-            error("Penyimpanan passphrase sinkronisasi rusak dan tidak dapat dipulihkan")
+            // Quarantine corrupt artifacts instead of throwing to avoid crash-loops.
+            try {
+                val quarantine = File(requireNotNull(target.parentFile), "quarantine")
+                if (!quarantine.exists()) quarantine.mkdirs()
+                listOf(target, temporary, backup).forEach { file ->
+                    if (file.exists()) {
+                        val dest = File(quarantine, "${file.name}.${Instant.now().toEpochMilli()}.corrupt")
+                        try {
+                            Files.move(file.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                        } catch (moveErr: Throwable) {
+                            Log.w(TAG, "Failed to move corrupt secret artifact ${file.name}", moveErr)
+                        }
+                    }
+                }
+                Log.w(TAG, "Quarantined corrupt secret artifacts; user will need to re-enter drive passphrase")
+            } catch (qe: Throwable) {
+                Log.w(TAG, "Failed to quarantine corrupt secret artifacts", qe)
+            }
+            return null
         }
         return null
     }

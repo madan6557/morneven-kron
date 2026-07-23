@@ -1127,9 +1127,8 @@ abstract class KronDatabase : RoomDatabase() {
 
         const val DATABASE_NAME = "kron-v4.db"
 
-        val SCHEMA_VERSION: Int by lazy {
-            KronDatabase::class.java.getAnnotation(Database::class.java)?.version
-                ?: error("Database annotation missing version")
-        }
+        // Room schema version. Keep as a constant to avoid runtime reflection failures
+        // that can occur when annotations are stripped by code shrinking in some builds.
+        const val SCHEMA_VERSION: Int = 13
     }
 }

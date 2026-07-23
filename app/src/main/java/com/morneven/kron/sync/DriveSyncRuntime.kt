@@ -332,15 +332,27 @@ class DriveSyncRuntimeFactory @Inject constructor(
     }
 
     suspend fun installBackgroundIfReady(syncImmediately: Boolean = false): Boolean = lifecycleMutex.withLock {
-        if (!isReady()) {
+        return try {
+            if (!isReady()) {
+                DriveSyncScheduler.cancel(context)
+                return@withLock false
+            }
+            val coordinator = try {
+                backgroundCoordinator()
+            } catch (error: Exception) {
+                Log.w(TAG, "Failed to create background coordinator", error)
+                DriveSyncScheduler.cancel(context)
+                return@withLock false
+            }
+            DriveSyncServiceLocator.install { coordinator }
+            DriveSyncScheduler.schedulePeriodic(context, isWifiOnly())
+            if (syncImmediately) DriveSyncScheduler.syncNow(context, isWifiOnly())
+            true
+        } catch (error: Throwable) {
+            Log.w(TAG, "Background sync installation failed", error)
             DriveSyncScheduler.cancel(context)
-            return@withLock false
+            false
         }
-        val coordinator = backgroundCoordinator()
-        DriveSyncServiceLocator.install { coordinator }
-        DriveSyncScheduler.schedulePeriodic(context, isWifiOnly())
-        if (syncImmediately) DriveSyncScheduler.syncNow(context, isWifiOnly())
-        true
     }
 
     fun isWifiOnly(): Boolean = syncPreferences.getBoolean(KEY_WIFI_ONLY, false)
@@ -386,7 +398,13 @@ class DriveSyncRuntimeFactory @Inject constructor(
 
     private suspend fun isReady(): Boolean {
         if (!BuildConfig.DRIVE_SYNC_CONFIGURED) return false
-        if (!secretStore.isStored() || accountStore.read() == null) return false
+        val secretStored = try {
+            secretStore.isStored()
+        } catch (error: Exception) {
+            Log.w(TAG, "Drive secret store unreadable or corrupted", error)
+            return false
+        }
+        if (!secretStored || accountStore.read() == null) return false
         val state = stateStore.read()
         return !state.disabledDueToBilling && state.status !in setOf(SyncStatus.DISABLED, SyncStatus.RESTART_REQUIRED)
     }
