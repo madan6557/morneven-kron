@@ -285,6 +285,7 @@ class MainViewModel @Inject constructor(
                 repository.processDueRules(direction = TransactionDirection.INCOME)
                 repository.reconcilePortfolios()
                 repository.processDueRules(direction = TransactionDirection.EXPENSE)
+                repository.purgeExpiredReversalReceipts()
             }.onFailure { message.value = it.message ?: "Gagal menyiapkan data" }
         }
     }
@@ -590,6 +591,10 @@ class MainViewModel @Inject constructor(
 
     fun reverseEvent(eventId: String, reason: String) = runAction("Event berhasil direvert") {
         repository.reverseEvent(eventId, reason)
+    }
+
+    fun restoreReversedEvent(eventId: String) = runAction("Event berhasil dipulihkan") {
+        repository.restoreReversedEvent(eventId)
     }
 
     fun correctEvent(eventId: String, title: String, note: String, reason: String) = runAction("Koreksi transaksi tercatat") {

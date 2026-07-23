@@ -23,6 +23,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -120,10 +122,13 @@ private fun CameraPreview(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(androidx.compose.ui.graphics.Color.Black)
+            .background(androidx.compose.ui.graphics.Color.Black),
+        contentAlignment = Alignment.Center,
     ) {
         AndroidView(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f),
             factory = { ctx ->
                 val previewView = PreviewView(ctx).apply {
                     layoutParams = ViewGroup.LayoutParams(

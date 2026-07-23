@@ -737,7 +737,7 @@ private fun MainScaffold(
     }
     when (dialog) {
         ActionDialog.INCOME -> IncomeDialog(
-            state = state, onDismiss = { dialog = null; dialogReceiptUri = null; dialogCameraFile = null },
+            state = state, onDismiss = { dialog = null; dialogCameraFile?.delete(); dialogReceiptUri = null; dialogCameraFile = null },
             receiptUri = dialogReceiptUri, cameraFile = dialogCameraFile,
             onGalleryPick = {
                 dialogCameraFile = null
@@ -750,7 +750,7 @@ private fun MainScaffold(
             onSubmit = { account, channel, amount, category, target, title, note, recurring, startDate, endDate, interval, recordNow, _, _ -> dialog = null; viewModel.addIncome(account, channel, amount, category, target, title, note, recurring, startDate, endDate, interval, recordNow, dialogReceiptUri, dialogCameraFile); dialogReceiptUri = null; dialogCameraFile = null },
         )
         ActionDialog.EXPENSE -> ExpenseDialog(
-            state = state, onDismiss = { dialog = null; dialogReceiptUri = null; dialogCameraFile = null },
+            state = state, onDismiss = { dialog = null; dialogCameraFile?.delete(); dialogReceiptUri = null; dialogCameraFile = null },
             receiptUri = dialogReceiptUri, cameraFile = dialogCameraFile,
             onGalleryPick = {
                 dialogCameraFile = null
@@ -843,6 +843,12 @@ private fun MainScaffold(
                     authenticateCriticalAction("Koreksi transaksi") {
                         auditId = null
                         viewModel.correctEvent(eventId, title, note, reason)
+                    }
+                },
+                onRestoreReversal = { eventId ->
+                    authenticateCriticalAction("Pulihkan transaksi") {
+                        auditId = null
+                        viewModel.restoreReversedEvent(eventId)
                     }
                 },
             )
@@ -1025,18 +1031,41 @@ private fun MainScaffold(
                 cameraTargetEventId = null
                 showCameraCapture = false
             },
-            properties = DialogProperties(dismissOnBackPress = true, dismissOnClickOutside = false),
+            properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = true, dismissOnClickOutside = false),
         ) {
             CameraCaptureScreen(
                 lifecycleOwner = activity,
                 onPhotoCaptured = { uri ->
-                    val file = uri.path?.let { java.io.File(it) }
-                    if (file != null) {
-                        if (cameraTargetEventId != null) {
-                            viewModel.attachCameraReceipt(cameraTargetEventId!!, file)
-                            cameraTargetEventId = null
-                        } else {
-                            dialogCameraFile = file
+                    val rawFile = uri.path?.let { java.io.File(it) }
+                    if (rawFile != null && rawFile.exists()) {
+                        kotlinx.coroutines.MainScope().launch {
+                            val cropped = java.io.File(rawFile.parent, "cropped_${rawFile.name}")
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                try {
+                                    val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                                    android.graphics.BitmapFactory.decodeFile(rawFile.absolutePath, opts)
+                                    val side = minOf(opts.outWidth, opts.outHeight)
+                                    val sample = when { side > 1920 -> side / 1920; else -> 1 }
+                                    var bm = android.graphics.BitmapFactory.decodeFile(rawFile.absolutePath, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+                                    if (bm != null) {
+                                        val s = minOf(bm.width, bm.height)
+                                        val x = (bm.width - s) / 2
+                                        val y = (bm.height - s) / 2
+                                        bm = android.graphics.Bitmap.createBitmap(bm, x, y, s, s)
+                                        cropped.parentFile?.mkdirs()
+                                        java.io.FileOutputStream(cropped).use { bm.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, it) }
+                                        bm.recycle()
+                                    }
+                                } catch (_: Exception) { }
+                            }
+                            rawFile.delete()
+                            val file = if (cropped.exists()) cropped else rawFile
+                            if (cameraTargetEventId != null) {
+                                viewModel.attachCameraReceipt(cameraTargetEventId!!, file)
+                                cameraTargetEventId = null
+                            } else {
+                                dialogCameraFile = file
+                            }
                         }
                     }
                     showCameraCapture = false

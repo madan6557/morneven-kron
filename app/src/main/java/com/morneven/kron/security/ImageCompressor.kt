@@ -13,6 +13,39 @@ import javax.inject.Singleton
 @Singleton
 class ImageCompressor @Inject constructor() {
 
+    fun cropCenterSquare(input: File, output: File, maxDimension: Int = MAX_DIMENSION, quality: Int = QUALITY): CompressResult {
+        val rotation = exifRotation(input)
+        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(input.absolutePath, options)
+        val rawW = options.outWidth
+        val rawH = options.outHeight
+        val side = minOf(rawW, rawH)
+        val sampleSize = computeSampleSize(side, side, maxDimension)
+        val decodeOptions = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = Bitmap.Config.RGB_565
+        }
+        var bitmap = BitmapFactory.decodeFile(input.absolutePath, decodeOptions) ?: return CompressResult(error = "Gagal membaca gambar")
+        if (rotation != 0) {
+            val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
+            bitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+        }
+        val sidePx = minOf(bitmap.width, bitmap.height)
+        val x = (bitmap.width - sidePx) / 2
+        val y = (bitmap.height - sidePx) / 2
+        bitmap = Bitmap.createBitmap(bitmap, x, y, sidePx, sidePx)
+        val finalSize = minOf(sidePx, maxDimension)
+        if (finalSize != sidePx) {
+            bitmap = Bitmap.createScaledBitmap(bitmap, finalSize, finalSize, true)
+        }
+        output.parentFile?.mkdirs()
+        FileOutputStream(output).use { out ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
+        }
+        bitmap.recycle()
+        return CompressResult(width = finalSize, height = finalSize, byteSize = output.length())
+    }
+
     fun compress(input: File, output: File, maxDimension: Int = MAX_DIMENSION, quality: Int = QUALITY): CompressResult {
         val rotation = exifRotation(input)
         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }

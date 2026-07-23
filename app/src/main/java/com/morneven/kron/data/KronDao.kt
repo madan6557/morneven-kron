@@ -251,10 +251,13 @@ interface KronDao {
     @Query("SELECT * FROM activity_events WHERE NOT EXISTS(SELECT 1 FROM journal_seals s WHERE s.eventId = activity_events.id) ORDER BY createdAt, id") suspend fun unsealedEvents(): List<ActivityEventEntity>
     @Query("SELECT eventId, COALESCE(SUM(CASE WHEN side = 'DEBIT' THEN amount ELSE 0 END),0) AS debit, COALESCE(SUM(CASE WHEN side = 'CREDIT' THEN amount ELSE 0 END),0) AS credit FROM ledger_lines GROUP BY eventId HAVING debit != credit") suspend fun unbalancedLedgerEvents(): List<LedgerEventBalanceRow>
     @Query("SELECT EXISTS(SELECT 1 FROM activity_events WHERE type = 'REVERSAL' AND relatedEventId = :eventId)") suspend fun isEventReversed(eventId: String): Boolean
+    @Query("SELECT * FROM activity_events WHERE type = 'REVERSAL' AND relatedEventId = :eventId ORDER BY createdAt, id LIMIT 1") suspend fun reversalEventForEvent(eventId: String): ActivityEventEntity?
     @Query("SELECT r.* FROM recurring_rules r JOIN accounts a ON a.id = r.accountId WHERE r.isPaused = 0 AND a.isActive = 1 AND a.isArchived = 0 AND r.nextEpochDay <= :today AND (:direction IS NULL OR r.direction = :direction) ORDER BY r.nextEpochDay") suspend fun dueRules(today: Long, direction: String?): List<RecurringRuleEntity>
     @Query("SELECT EXISTS(SELECT 1 FROM recurring_occurrences WHERE ruleId = :ruleId AND dueEpochDay = :dueDay)") suspend fun occurrenceExists(ruleId: String, dueDay: Long): Boolean
     @Query("SELECT * FROM accounts ORDER BY createdAt") suspend fun allAccounts(): List<AccountEntity>
     @Query("SELECT * FROM receipts ORDER BY id") suspend fun allReceipts(): List<ReceiptEntity>
+    @Query("SELECT r.* FROM receipts r JOIN activity_events e ON e.id = r.eventId WHERE r.localPath IS NOT NULL AND EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id AND rv.createdAt <= :maxCreatedAt)") suspend fun receiptsForReversedEvents(maxCreatedAt: Long): List<ReceiptEntity>
+    @Query("UPDATE receipts SET localPath = NULL WHERE id = :id") suspend fun clearReceiptLocalPath(id: Long)
     @Query("SELECT * FROM receipts WHERE evidenceEventId = :eventId OR (evidenceEventId IS NULL AND eventId = :eventId) ORDER BY id") suspend fun receiptsForEvent(eventId: String): List<ReceiptEntity>
     @Query("SELECT * FROM sync_state WHERE id = 1") suspend fun syncState(): SyncStateEntity?
     @Query("SELECT * FROM categories ORDER BY id") suspend fun allCategories(): List<CategoryEntity>

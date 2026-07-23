@@ -829,6 +829,7 @@ fun AuditDialog(
     onExportEvidence: (String) -> Unit,
     onRevert: (String, String) -> Unit,
     onCorrect: (String, String, String, String) -> Unit,
+    onRestoreReversal: ((String) -> Unit)? = null,
 ) {
     var reason by remember { mutableStateOf("") }
     var correctionMode by remember { mutableStateOf(false) }
@@ -895,7 +896,15 @@ fun AuditDialog(
             Text("Ekspor paket bukti transaksi")
         }
         if (lifecycleEvent) Text("Event lifecycle bersifat read-only. Gunakan tab Arsip untuk memulihkan atau mengarsipkan kembali.", color = MaterialTheme.colorScheme.tertiary)
-        else if (event.reversedByEventId != null) Text("Event sudah dibatalkan dengan reversal", color = MaterialTheme.colorScheme.error)
+        else if (event.reversedByEventId != null) {
+            Text("Event sudah dibatalkan dengan reversal", color = MaterialTheme.colorScheme.error)
+            if (onRestoreReversal != null) {
+                OutlinedButton(onClick = { onRestoreReversal(event.id) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Pulihkan dalam 7 hari")
+                }
+                Text("Pemulihan tersedia dalam 7 hari setelah reversal.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         else {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(selected = !correctionMode, onClick = { correctionMode = false }, label = { Text("Batalkan") })

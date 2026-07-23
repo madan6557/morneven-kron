@@ -16,6 +16,14 @@
 - UI hanya menampilkan `KRON 1.5.0` tanpa label Full Release atau LTS.
 - Kontrak SQLCipher passphrase KRON 1.4.7 dipertahankan tanpa rekey. Raw-key 1.4.x tetap hanya menjadi mode baca historis.
 
+## 1.5.11 - 2026-07-23
+
+- Camera: fullscreen + 1:1 square dari preview hingga hasil akhir.
+- Hapus foto bukti sementara jika transaksi dibatalkan (dialog onDismiss).
+- Restore reversal dalam 7 hari — AuditDialog menampilkan tombol "Pulihkan dalam 7 hari" untuk event yang sudah dibalik.
+- Retensi foto bukti reversal 7 hari — file dihapus otomatis setelah 7 hari reversal.
+- Fix: CameraX fullscreen Dialog dengan `usePlatformDefaultWidth = false`.
+
 ## 1.5.10 - 2026-07-23
 
 - Fix: CameraX tertimpa dialog form transaksi — render CameraCaptureScreen di window Dialog terpisah dengan `lifecycleOwner` eksplisit (activity).

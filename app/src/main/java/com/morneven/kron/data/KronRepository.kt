@@ -775,6 +775,46 @@ class KronRepository @Inject constructor(
         eventId
     }
 
+    suspend fun restoreReversedEvent(reversedEventId: String) = database.withTransaction {
+        val original = requireNotNull(dao.eventById(reversedEventId)) { "Event tidak ditemukan" }
+        require(dao.isEventReversed(reversedEventId)) { "Event belum dibalik" }
+        require(original.type != LedgerType.REVERSAL) { "Reversal tidak dapat dipulihkan" }
+        require(original.type !in setOf(LedgerType.ARCHIVE, LedgerType.RESTORE)) { "Gunakan tindakan Pulihkan atau Arsipkan dari halaman terkait" }
+        val reversalEvent = requireNotNull(dao.reversalEventForEvent(reversedEventId)) { "Event reversal tidak ditemukan" }
+        val sevenDays = 7L * 24 * 60 * 60 * 1000
+        require(System.currentTimeMillis() - reversalEvent.createdAt <= sevenDays) { "Periode pemulihan 7 hari telah berakhir" }
+        val restoreId = UUID.randomUUID().toString()
+        dao.insertEvent(
+            original.copy(
+                id = restoreId,
+                title = "Dipulihkan: ${original.title}",
+                createdAt = System.currentTimeMillis(),
+                relatedEventId = reversedEventId,
+                reversedByEventId = null,
+            ),
+        )
+        val cash = dao.cashLinesForEvent(reversedEventId)
+        val budget = dao.budgetLinesForEvent(reversedEventId)
+        val splits = dao.splitsForEvent(reversedEventId)
+        if (cash.isNotEmpty()) dao.insertCashLines(cash.map { it.copy(id = 0, eventId = restoreId) })
+        if (budget.isNotEmpty()) dao.insertBudgetLines(budget.map { it.copy(id = 0, eventId = restoreId) })
+        if (splits.isNotEmpty()) dao.insertSplits(splits.map { it.copy(id = 0, eventId = restoreId) })
+        dao.insertAudit(AuditSnapshotEntity(eventId = restoreId, reason = "Pemulihan reversal", beforeJson = "{\"eventId\":\"$reversedEventId\",\"reversed\":true}", afterJson = "{\"eventId\":\"${restoreId}\",\"restored\":true}"))
+        budget.mapNotNull { it.allocationId }.mapNotNull { dao.allocationById(it)?.periodId }.distinct()
+            .forEach { refreshPeriodStatus(it) }
+        assertInvariant()
+        restoreId
+    }
+
+    suspend fun purgeExpiredReversalReceipts() {
+        val deadline = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
+        val expired = dao.receiptsForReversedEvents(deadline)
+        for (receipt in expired) {
+            try { java.io.File(receipt.localPath).delete() } catch (_: Exception) {}
+            dao.clearReceiptLocalPath(receipt.id)
+        }
+    }
+
     suspend fun correctEvent(
         originalEventId: String,
         correctedTitle: String,
