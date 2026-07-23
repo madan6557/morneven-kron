@@ -772,7 +772,7 @@ fun ResolveDialog(state: KronUiState, onDismiss: () -> Unit, onAllocation: (Long
 }
 
 @Composable
-fun ChannelTransferDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Long, Long, Long, String) -> Unit) {
+fun ChannelTransferDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Long, Long, String) -> Unit) {
     val sources = state.allocations.filter { it.availableAmount > 0 }
     var allocationId by remember { mutableStateOf(sources.firstOrNull()?.id) }
     val source = sources.firstOrNull { it.id == allocationId }
@@ -783,7 +783,7 @@ fun ChannelTransferDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (
     val accountBalance = if (source?.fundingChannel == FundingChannel.CASH) accountRow?.cashBalance ?: 0L else accountRow?.eBudgetBalance ?: 0L
     val limit = minOf(source?.availableAmount ?: 0, accountBalance)
     FormDialog("Pindahkan Cash dan eBudget", onDismiss, confirmEnabled = source != null && account != null && money(amount) in 1..limit, onConfirm = {
-        onSubmit(requireNotNull(allocationId), requireNotNull(account).id, account.id, money(amount), note)
+        onSubmit(requireNotNull(allocationId), requireNotNull(account).id, money(amount), note)
     }) {
         ChoiceField("Kategori sumber", allocationId, sources, { it.id }, { "${it.categoryName} · ${channelLabel(it.fundingChannel)} · ${displayMoney(it.availableAmount, state.valuesVisible)}" }) { allocationId = it }
         Text("Akun aktif: ${account?.name ?: "Belum ada"}", style = MaterialTheme.typography.titleMedium)

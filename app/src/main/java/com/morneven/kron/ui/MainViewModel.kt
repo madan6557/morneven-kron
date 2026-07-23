@@ -97,7 +97,7 @@ data class KronUiState(
     val unresolvedTotal: Long get() = unallocatedCash + unallocatedEBudget
 }
 
-    private data class LedgerSlice(
+private data class LedgerSlice(
     val balances: List<AccountBalanceRow>,
     val allocations: List<AllocationBalanceRow>,
     val activities: List<ActivityRow>,
@@ -545,8 +545,8 @@ class MainViewModel @Inject constructor(
         repository.transfer(fromAccount, fromChannel, toAccount, toChannel, amount, note)
     }
 
-    fun transferBookedChannel(sourceAllocationId: Long, from: Long, to: Long, amount: Long, note: String) = runAction("Komposisi dana berhasil dipindahkan") {
-        repository.transferBookedChannel(sourceAllocationId, from, to, amount, note)
+    fun transferBookedChannel(sourceAllocationId: Long, accountId: Long, amount: Long, note: String) = runAction("Komposisi dana berhasil dipindahkan") {
+        repository.transferBookedChannel(sourceAllocationId, accountId, amount, note)
     }
 
     fun createPortfolio(name: String, cadence: String, plannedIncome: Long, rollover: Boolean, drafts: List<AllocationDraft>, startDate: LocalDate = LocalDate.now(), endDate: LocalDate? = null, intervalCount: Int = 1) = runAction("Portfolio dibuat") {

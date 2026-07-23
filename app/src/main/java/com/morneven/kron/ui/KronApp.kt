@@ -803,13 +803,13 @@ private fun MainScaffold(
                 }
             },
         )
-        ActionDialog.CHANNEL_TRANSFER -> ChannelTransferDialog(state, { dialog = null }) { allocation, from, to, amount, note ->
+        ActionDialog.CHANNEL_TRANSFER -> ChannelTransferDialog(state, { dialog = null }) { allocation, accountId, amount, note ->
             dialog = null
             criticalReason = ""
             criticalAction = CriticalAction(
                 "Konfirmasi transfer kanal",
                 "Dana terbooking ${displayMoney(amount, state.valuesVisible)} akan dipindahkan antara Cash dan eBudget.",
-            ) { reason -> viewModel.transferBookedChannel(allocation, from, to, amount, listOf(note, reason).filter(String::isNotBlank).joinToString(" | ")) }
+            ) { reason -> viewModel.transferBookedChannel(allocation, accountId, amount, listOf(note, reason).filter(String::isNotBlank).joinToString(" | ")) }
         }
         ActionDialog.ACCOUNT -> AccountDialog({ dialog = null }) { name, openingCash, openingEBudget -> dialog = null; viewModel.addAccount(name, openingCash, openingEBudget) }
         null -> Unit

@@ -16,6 +16,13 @@
 - UI hanya menampilkan `KRON 1.5.0` tanpa label Full Release atau LTS.
 - Kontrak SQLCipher passphrase KRON 1.4.7 dipertahankan tanpa rekey. Raw-key 1.4.x tetap hanya menjadi mode baca historis.
 
+## 1.5.16 - 2026-07-23
+
+- Pindahkan LedgerSlice, MetadataSlice, PreferenceSlice ke level top-level dengan indentasi konsisten.
+- Hapus pengecekan isNotEmpty() redundan di assertInvariant().
+- Sederhanakan parameter transferBookedChannel: fromAccountId+toAccountId menjadi accountId tunggal.
+- Zero-out key array setelah validateEncrypted() selesai.
+
 ## 1.5.15 - 2026-07-23
 
 - RESTORE_REVERSAL bukan lagi lifecycle event — bisa di-revert seperti transaksi biasa.

@@ -122,7 +122,7 @@ class KronRepositoryTest {
         val cashAllocation = dao.allAllocations().first { it.fundingChannel == FundingChannel.CASH }
         val eBudgetAllocation = dao.allAllocations().first { it.fundingChannel == FundingChannel.EBUDGET }
 
-        repository.transferBookedChannel(cashAllocation.id, account.id, account.id, 10, "Ubah komposisi")
+        repository.transferBookedChannel(cashAllocation.id, account.id, 10, "Ubah komposisi")
 
         assertEquals(10L, dao.allocationAvailable(cashAllocation.id))
         assertEquals(30L, dao.allocationAvailable(eBudgetAllocation.id))

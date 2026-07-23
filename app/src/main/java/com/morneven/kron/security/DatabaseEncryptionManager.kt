@@ -446,7 +446,11 @@ class DatabaseEncryptionManager @Inject constructor(
     }
 
     private fun validateEncrypted(file: File, key: ByteArray) {
-        require(canOpenEncrypted(file, key)) { "Integritas database terenkripsi tidak valid" }
+        try {
+            require(canOpenEncrypted(file, key)) { "Integritas database terenkripsi tidak valid" }
+        } finally {
+            key.fill(0)
+        }
     }
 
     private fun keyBytes(root: ByteArray, mode: DatabaseKeyMode): ByteArray = when (mode) {
