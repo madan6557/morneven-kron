@@ -16,6 +16,11 @@
 - UI hanya menampilkan `KRON 1.5.0` tanpa label Full Release atau LTS.
 - Kontrak SQLCipher passphrase KRON 1.4.7 dipertahankan tanpa rekey. Raw-key 1.4.x tetap hanya menjadi mode baca historis.
 
+## 1.5.12 - 2026-07-23
+
+- Pindah tombol "Pulihkan transaksi" ke log Audit bertipe REVERSAL (bukan event yang dibatalkan).
+- Pesan sisa waktu dinamis: tampilkan hari/jam/menit tersisa, update tiap 60 detik. Tombol disabled jika >7 hari.
+
 ## 1.5.11 - 2026-07-23
 
 - Camera: fullscreen + 1:1 square dari preview hingga hasil akhir.

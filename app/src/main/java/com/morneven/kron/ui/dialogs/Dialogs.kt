@@ -40,8 +40,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -81,6 +83,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import kotlin.math.abs
+import kotlinx.coroutines.delay
 
 @Composable
 fun IncomeDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, String, Long, Long?, Long?, String, String, String?, LocalDate, LocalDate?, Int, Boolean, Uri?, java.io.File?) -> Unit, receiptUri: Uri? = null, cameraFile: java.io.File? = null, onGalleryPick: () -> Unit = {}, onCameraCapture: () -> Unit = {}) {
@@ -896,14 +899,29 @@ fun AuditDialog(
             Text("Ekspor paket bukti transaksi")
         }
         if (lifecycleEvent) Text("Event lifecycle bersifat read-only. Gunakan tab Arsip untuk memulihkan atau mengarsipkan kembali.", color = MaterialTheme.colorScheme.tertiary)
-        else if (event.reversedByEventId != null) {
-            Text("Event sudah dibatalkan dengan reversal", color = MaterialTheme.colorScheme.error)
-            if (onRestoreReversal != null) {
-                OutlinedButton(onClick = { onRestoreReversal(event.id) }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Pulihkan dalam 7 hari")
+        else if (event.reversedByEventId != null) Text("Event sudah dibatalkan dengan reversal", color = MaterialTheme.colorScheme.error)
+        else if (event.type == "REVERSAL" && onRestoreReversal != null && event.relatedEventId != null) {
+            var remainingMillis by remember { mutableLongStateOf(0L) }
+            LaunchedEffect(event.id) {
+                while (true) {
+                    remainingMillis = 7L * 24 * 60 * 60 * 1000 - (System.currentTimeMillis() - event.createdAt)
+                    if (remainingMillis <= 0L) break
+                    delay(60_000L)
                 }
-                Text("Pemulihan tersedia dalam 7 hari setelah reversal.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            val remainingText = when {
+                remainingMillis <= 0L -> "Periode pemulihan telah berakhir"
+                remainingMillis >= 2 * 24 * 60 * 60 * 1000L -> "${remainingMillis / (24 * 60 * 60 * 1000L)} hari tersisa"
+                remainingMillis >= 24 * 60 * 60 * 1000L -> "1 hari ${remainingMillis % (24 * 60 * 60 * 1000L) / (60 * 60 * 1000L)} jam tersisa"
+                remainingMillis >= 60 * 60 * 1000L -> "${remainingMillis / (60 * 60 * 1000L)} jam ${remainingMillis % (60 * 60 * 1000L) / (60 * 1000L)} menit tersisa"
+                else -> "${remainingMillis / (60 * 1000L)} menit tersisa"
+            }
+            OutlinedButton(
+                onClick = { onRestoreReversal(event.relatedEventId) },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = remainingMillis > 0L,
+            ) { Text("Pulihkan transaksi") }
+            Text(remainingText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         else {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
