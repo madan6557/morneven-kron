@@ -45,15 +45,24 @@ class AndroidCredentialManagerAccountSelector(
     }
 
     override suspend fun selectAccount(): GoogleAccountIdentity {
+        // Some devices (notably POCO F7) have slow Credential Manager responses.
+        // Increase the timeout on those devices to avoid premature fallback that
+        // causes a slow account-picker UX. Detect device model and tune timeout.
+        val model = android.os.Build.MODEL.orEmpty().lowercase()
+        val isSlowCredentialDevice = model.contains("f7") || model.contains("poco")
+        val initialTimeout = if (isSlowCredentialDevice) 30_000L else 15_000L
+
         return try {
-            selectViaCredentialManager()
+            selectViaCredentialManager(retryTimeout = initialTimeout)
         } catch (error: TimeoutCancellationException) {
             Log.w(TAG, "Credential Manager timed out, trying AccountManager fallback and one retry")
             // Try AccountManager quick fallback first
             getAccountFromAccountManager()?.let { return it }
             // One retry with a longer timeout
             try {
-                selectViaCredentialManager(retryTimeout = 30_000L)
+                // Second attempt should be generous on slow devices
+                val secondAttemptTimeout = if (isSlowCredentialDevice) 60_000L else 30_000L
+                selectViaCredentialManager(retryTimeout = secondAttemptTimeout)
             } catch (second: TimeoutCancellationException) {
                 Log.w(TAG, "Credential Manager second attempt timed out, falling back to account picker")
                 selectViaAccountPicker()
