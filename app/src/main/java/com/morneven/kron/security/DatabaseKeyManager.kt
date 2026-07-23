@@ -188,12 +188,18 @@ class DatabaseKeyManager @Inject constructor(
         return loadAndVerify(file)
     }
 
+    private val usedSubkeyLabels = mutableSetOf<String>()
+
+    @Synchronized
     fun deriveSubkey(label: String): SecretKeySpec {
+        require(usedSubkeyLabels.add(label)) { "Subkey label '$label' sudah digunakan. Setiap subkey harus memiliki label unik untuk domain separation." }
         val root = getOrCreateDatabasePassphrase()
-        return try {
+        try {
             val mac = Mac.getInstance("HmacSHA256")
             mac.init(SecretKeySpec(root, "HmacSHA256"))
-            SecretKeySpec(mac.doFinal(label.toByteArray(Charsets.UTF_8)), "AES")
+            val derived = mac.doFinal(label.toByteArray(Charsets.UTF_8))
+            root.fill(0)
+            return SecretKeySpec(derived, "AES")
         } finally {
             root.fill(0)
         }
@@ -333,7 +339,7 @@ class DatabaseKeyManager @Inject constructor(
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .setKeySize(256)
-                .setRandomizedEncryptionRequired(false)
+                .setRandomizedEncryptionRequired(true)
                 .build(),
         )
         return generator.generateKey()
@@ -376,14 +382,19 @@ class DatabaseKeyManager @Inject constructor(
 
     private fun atomicReplace(source: File, target: File) {
         target.parentFile?.mkdirs()
-        if (!source.renameTo(target)) {
+        if (source.renameTo(target)) return
+        val temp = File(target.parentFile, "${target.name}.${System.nanoTime()}.tmp")
+        try {
             source.inputStream().use { input ->
-                target.outputStream().use { output ->
+                temp.outputStream().use { output ->
                     input.copyTo(output)
                     output.flush()
                     output.fd.sync()
                 }
             }
+            require(temp.renameTo(target)) { "Gagal mengganti file target secara atomik" }
+        } finally {
+            temp.delete()
             source.delete()
         }
     }

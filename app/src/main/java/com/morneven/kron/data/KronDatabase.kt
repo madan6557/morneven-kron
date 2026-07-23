@@ -98,6 +98,7 @@ abstract class KronDatabase : RoomDatabase() {
             }
         }
 
+        @Deprecated("Dead code — jangan gunakan. Pakai MIGRATION_3_4_RECOVERY. Dipertahankan hanya sebagai catatan historis.")
         val MIGRATION_3_4: Migration = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("PRAGMA defer_foreign_keys=ON")
@@ -331,6 +332,13 @@ abstract class KronDatabase : RoomDatabase() {
         val MIGRATION_5_6: Migration = object : Migration(5, 6) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("PRAGMA defer_foreign_keys=ON")
+                val legacyReceiptCount = scalar(db, "SELECT COUNT(*) FROM receipts")
+                if (legacyReceiptCount > 0) {
+                    val validReceipts = scalar(db, "SELECT COUNT(*) FROM receipts WHERE eventId IS NOT NULL AND mimeType IS NOT NULL")
+                    require(validReceipts == legacyReceiptCount) {
+                        "Legacy receipts table memiliki data tidak valid sebelum migrasi"
+                    }
+                }
                 db.execSQL("""
                     CREATE TABLE sync_state (
                         id INTEGER NOT NULL PRIMARY KEY,
@@ -1045,16 +1053,19 @@ abstract class KronDatabase : RoomDatabase() {
                 "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL",
             )
             require(cashTotal == budgetTotal) { "Invariant total aset database tidak seimbang" }
-            listOf(FundingChannel.CASH, FundingChannel.EBUDGET).forEach { channel ->
+            val channelPairs = listOf(FundingChannel.CASH to "CASH", FundingChannel.EBUDGET to "EBUDGET")
+            channelPairs.forEach { (_, channelName) ->
                 val cash = scalar(
                     db,
-                    "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines WHERE fundingChannel='$channel'",
+                    "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines WHERE fundingChannel=?",
+                    arrayOf(channelName),
                 )
                 val available = scalar(
                     db,
-                    "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE fundingChannel='$channel' AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)",
+                    "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE fundingChannel=? AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)",
+                    arrayOf(channelName),
                 )
-                require(cash == available) { "Invariant kanal $channel tidak seimbang" }
+                require(cash == available) { "Invariant kanal $channelName tidak seimbang" }
             }
             val accountIds = db.query("SELECT id FROM accounts").use { cursor ->
                 buildList {
@@ -1062,27 +1073,32 @@ abstract class KronDatabase : RoomDatabase() {
                 }
             }
             accountIds.forEach { accountId ->
+                val accountIdStr = accountId.toString()
                 val cash = scalar(
                     db,
-                    "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines WHERE accountId=$accountId",
+                    "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines WHERE accountId=?",
+                    arrayOf(accountIdStr),
                 )
                 val available = scalar(
                     db,
-                    "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE accountId=$accountId " +
+                    "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE accountId=? " +
                         "AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)",
+                    arrayOf(accountIdStr),
                 )
                 require(cash == available) { "Invariant akun database tidak seimbang" }
-                listOf(FundingChannel.CASH, FundingChannel.EBUDGET).forEach { channel ->
+                channelPairs.forEach { (_, channelName) ->
                     val channelCash = scalar(
                         db,
                         "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines " +
-                            "WHERE accountId=$accountId AND fundingChannel='$channel'",
+                            "WHERE accountId=? AND fundingChannel=?",
+                        arrayOf(accountIdStr, channelName),
                     )
                     val channelAvailable = scalar(
                         db,
                         "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines " +
-                            "WHERE accountId=$accountId AND fundingChannel='$channel' " +
+                            "WHERE accountId=? AND fundingChannel=? " +
                             "AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)",
+                        arrayOf(accountIdStr, channelName),
                     )
                     require(channelCash == channelAvailable) { "Invariant kanal akun database tidak seimbang" }
                 }
@@ -1094,7 +1110,16 @@ abstract class KronDatabase : RoomDatabase() {
             cursor.getLong(0)
         }
 
+        private fun scalar(db: SupportSQLiteDatabase, sql: String, args: Array<String>): Long = db.query(sql, args).use { cursor ->
+            require(cursor.moveToFirst())
+            cursor.getLong(0)
+        }
+
         const val DATABASE_NAME = "kron-v4.db"
-        const val SCHEMA_VERSION = 13
+
+        val SCHEMA_VERSION: Int by lazy {
+            KronDatabase::class.java.getAnnotation(Database::class.java)?.version
+                ?: error("Database annotation missing version")
+        }
     }
 }

@@ -16,6 +16,44 @@
 - UI hanya menampilkan `KRON 1.5.0` tanpa label Full Release atau LTS.
 - Kontrak SQLCipher passphrase KRON 1.4.7 dipertahankan tanpa rekey. Raw-key 1.4.x tetap hanya menjadi mode baca historis.
 
+## 1.5.20 - 2026-07-23
+
+- Fix: cashPercentage integer division precision loss — gunakan midpoint rounding.
+- Fix: refreshPeriodStatus UNDERFUNDED tidak bisa transisi ke RESOLUTION_REQUIRED — tambah defensive check.
+- Fix: acquireTransactionLock tidak menyediakan lock nyata — gunakan coroutine Mutex + database write lock.
+- Fix: General ledger tidak mencatat event tanpa cash movement — tambah ledger lines dari budget journal.
+- Fix: safeAbs/safeSumOf tidak digunakan konsisten — ganti seluruh sumOf dengan safeSumOf.
+- Fix: processDueRules memiliki dual guard redundan — hapus inner guard, pindahkan precondition ke dueRules.
+- Fix: SCHEMA_VERSION tidak sinkron dengan @Database annotation — baca via reflection.
+- Fix: MIGRATION_5_6 tidak validasi legacy data — tambah pre-migration validation.
+- Fix: processDueRules memproses non-active account rules — ganti allRules dengan dueRules.
+- Fix: Cashflow query BETWEEN inklusif di kedua ujung — ganti dengan half-open interval.
+- Fix: deriveSubkey label collision — tambah usedSubkeyLabels set.
+- Fix: Key material exposure di deriveSubkey — zeroing diperketat.
+- Security: Klearing:legacy clearing untuk budget-only events.
+
+## 1.5.19 - 2026-07-23
+
+- Security: SQL injection pada query invariant validation — migrasi ke parameterized query.
+- Security: GCM nonce tanpa authentication tag — tambah cipher.updateAAD(MAGIC) di EncryptedAttachmentStore, BackupManager, PreUpgradeBackupManager.
+- Security: Path traversal pada ZIP extraction — gunakan canonical path + prefix check.
+- Security: Uri.fromFile pada camera capture — migrate ke FileProvider.
+- Security: FileUriExposedException pada PreUpgradeBackupManager — validasi URI via DocumentFile.
+- Security: setRandomizedEncryptionRequired(false) — diubah ke true.
+- Security: Staged Drive passphrase tidak dihapus pada AuthorizationRequired — tambah discardStaged().
+- Security: connect() raw CharArray — tambah zeroing sebelum return.
+- Fix: EncryptionGuard.rollback() non-atomic — gunakan temporary file + rename.
+- Fix: atomicReplace() overwrite tanpa atomicity pada integritas — gunakan temporary file + rename.
+- Fix: RESTORE_REVERSAL tidak terklasifikasi dengan benar — gunakan original event type dari relatedEventId.
+- Fix: Long overflow pada financial calculations — safeAbs, safeAdd, safeSumOf utility functions.
+- Fix: Race condition invariant check — acquireTransactionLock tambah database write lock.
+- Fix: CameraCaptureScreen Log.e tanpa exception object — tambah exception parameter.
+- Fix: PreUpgradeBackupManager workspace tidak dibersihkan pada error dini — guard variable workspaceReady.
+- Fix: Dead code MIGRATION_3_4 — tambah Deprecated annotation.
+- Fix: nested transaction di LegacyReceiptEncryption — hapus begin/endTransaction.
+- Main thread blocking: pindahkan SqlCipherLibrary.ensureLoaded() dan applyPendingRestore() ke coroutine.
+- Test: end-to-end migration test dari version 1 ke 13 dengan data integrity validation.
+
 ## 1.5.18 - 2026-07-23
 
 - Fix: CameraCaptureScreen bocor thread executor — tambah DisposableEffect untuk shutdown executor saat komposisi dibuang.

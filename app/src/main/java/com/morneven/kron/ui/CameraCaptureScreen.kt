@@ -203,12 +203,12 @@ private fun takePhoto(
         cameraExecutor,
         object : ImageCapture.OnImageSavedCallback {
             override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                val uri = Uri.fromFile(photoFile)
+                val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", photoFile)
                 onPhotoSaved(uri)
             }
 
             override fun onError(exception: ImageCaptureException) {
-                Log.e(TAG, "Pengambilan foto gagal dengan kode ${exception.imageCaptureError}")
+                Log.e(TAG, "Pengambilan foto gagal dengan kode ${exception.imageCaptureError}", exception)
             }
         }
     )

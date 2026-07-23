@@ -91,6 +91,7 @@ class BackupManager @Inject constructor(
                 deriveKey(password, salt, PBKDF2_ITERATIONS),
                 GCMParameterSpec(GCM_TAG_BITS, nonce),
             )
+            cipher.updateAAD(MAGIC_V3)
             CipherOutputStream(data, cipher).use { encrypted ->
                 writePortableSnapshot(encrypted)
             }
@@ -372,8 +373,8 @@ class BackupManager @Inject constructor(
                 val data = DataInputStream(raw)
                 val magic = data.readExact(MAGIC_V2.size)
                 when {
-                    magic.contentEquals(MAGIC_V3) -> decryptV2(data, password, target)
-                    magic.contentEquals(MAGIC_V2) -> decryptV2(data, password, target)
+                    magic.contentEquals(MAGIC_V3) -> decryptV2(data, password, target, MAGIC_V3)
+                    magic.contentEquals(MAGIC_V2) -> decryptV2(data, password, target, MAGIC_V2)
                     magic.contentEquals(MAGIC_V1) -> decryptV1(data, password, target)
                     else -> throw IllegalArgumentException("Format backup tidak dikenali")
                 }
@@ -385,7 +386,7 @@ class BackupManager @Inject constructor(
         }
     }
 
-    private fun decryptV2(data: DataInputStream, password: CharArray, target: File) {
+    private fun decryptV2(data: DataInputStream, password: CharArray, target: File, headerMagic: ByteArray) {
         require(password.size >= MIN_PASSWORD_LENGTH) { "Password backup v2 minimal 12 karakter" }
         val salt = data.readExact(SALT_BYTES)
         val nonce = data.readExact(NONCE_BYTES)
@@ -393,6 +394,7 @@ class BackupManager @Inject constructor(
         require(iterations in MIN_PBKDF2_ITERATIONS..MAX_PBKDF2_ITERATIONS) { "Parameter enkripsi backup tidak valid" }
         val cipher = Cipher.getInstance(AES_GCM)
         cipher.init(Cipher.DECRYPT_MODE, deriveKey(password, salt, iterations), GCMParameterSpec(GCM_TAG_BITS, nonce))
+        cipher.updateAAD(headerMagic)
         target.outputStream().buffered().use { output ->
             CipherInputStream(LimitedInputStream(data, MAX_ENCRYPTED_PACKAGE_BYTES), cipher).use { decrypted ->
                 decrypted.copyToWithLimit(output, MAX_PLAIN_PACKAGE_BYTES)
@@ -411,6 +413,7 @@ class BackupManager @Inject constructor(
             deriveKey(password, salt, LEGACY_PBKDF2_ITERATIONS),
             GCMParameterSpec(GCM_TAG_BITS, nonce),
         )
+        cipher.updateAAD(MAGIC_V1)
         target.outputStream().buffered().use { output ->
             CipherInputStream(ExactLengthInputStream(data, encryptedSize.toLong()), cipher).use { decrypted ->
                 decrypted.copyToWithLimit(output, MAX_PLAIN_PACKAGE_BYTES)
@@ -430,8 +433,10 @@ class BackupManager @Inject constructor(
             while (true) {
                 val entry = zip.nextEntry ?: break
                 val name = entry.name
-                require(name.isNotBlank() && !name.contains('\\') && !name.startsWith('/') && !name.contains("../")) {
-                    "Nama file dalam backup tidak aman"
+                val entryFile = File(workspace, name).canonicalFile
+                require(name.isNotBlank()) { "Nama file dalam backup tidak boleh kosong" }
+                require(entryFile.toPath().startsWith(workspace.canonicalFile.toPath())) {
+                    "Nama file dalam backup tidak aman: $name"
                 }
                 require(seen.add(name)) { "Backup memiliki file ganda" }
                 when {
@@ -624,16 +629,19 @@ class BackupManager @Inject constructor(
                 "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL",
             )
             require(cash == available) { "Invariant total aset backup tidak seimbang" }
-            listOf(FundingChannel.CASH, FundingChannel.EBUDGET).forEach { channel ->
+            val channelPairs = listOf(FundingChannel.CASH to "CASH", FundingChannel.EBUDGET to "EBUDGET")
+            channelPairs.forEach { (_, channelName) ->
                 val channelCash = scalar(
                     it,
-                    "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines WHERE fundingChannel='$channel'",
+                    "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines WHERE fundingChannel=?",
+                    arrayOf(channelName),
                 )
                 val channelAvailable = scalar(
                     it,
-                    "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE fundingChannel='$channel' AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)",
+                    "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE fundingChannel=? AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)",
+                    arrayOf(channelName),
                 )
-                require(channelCash == channelAvailable) { "Invariant kanal $channel tidak seimbang" }
+                require(channelCash == channelAvailable) { "Invariant kanal $channelName tidak seimbang" }
             }
             val accounts = it.rawQuery("SELECT id FROM accounts", null).use { cursor ->
                 buildList {
@@ -641,27 +649,32 @@ class BackupManager @Inject constructor(
                 }
             }
             accounts.forEach { accountId ->
+                val accountIdStr = accountId.toString()
                 val accountCash = scalar(
                     it,
-                    "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines WHERE accountId=$accountId",
+                    "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines WHERE accountId=?",
+                    arrayOf(accountIdStr),
                 )
                 val accountAvailable = scalar(
                     it,
-                    "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE accountId=$accountId " +
+                    "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE accountId=? " +
                         "AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)",
+                    arrayOf(accountIdStr),
                 )
                 require(accountCash == accountAvailable) { "Invariant akun tidak seimbang" }
-                listOf(FundingChannel.CASH, FundingChannel.EBUDGET).forEach { channel ->
+                channelPairs.forEach { (_, channelName) ->
                     val channelCash = scalar(
                         it,
                         "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines " +
-                            "WHERE accountId=$accountId AND fundingChannel='$channel'",
+                            "WHERE accountId=? AND fundingChannel=?",
+                        arrayOf(accountIdStr, channelName),
                     )
                     val channelAvailable = scalar(
                         it,
                         "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines " +
-                            "WHERE accountId=$accountId AND fundingChannel='$channel' " +
+                            "WHERE accountId=? AND fundingChannel=? " +
                             "AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)",
+                        arrayOf(accountIdStr, channelName),
                     )
                     require(channelCash == channelAvailable) { "Invariant kanal akun tidak seimbang" }
                 }
@@ -669,7 +682,7 @@ class BackupManager @Inject constructor(
         }
     }
 
-    private fun scalar(database: SQLiteDatabase, sql: String): Long = database.rawQuery(sql, null).use { cursor ->
+    private fun scalar(database: SQLiteDatabase, sql: String, args: Array<String>? = null): Long = database.rawQuery(sql, args).use { cursor ->
         require(cursor.moveToFirst())
         cursor.getLong(0)
     }

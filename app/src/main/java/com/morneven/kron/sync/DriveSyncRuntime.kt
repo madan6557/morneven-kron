@@ -68,7 +68,7 @@ class DriveSyncRuntime internal constructor(
             when (result) {
                 is DriveConnectResult.Connected -> factory.activateAfterConnection()
                 is DriveConnectResult.Failed -> discardUncommittedPassphrase()
-                is DriveConnectResult.UserActionRequired -> Unit
+                is DriveConnectResult.UserActionRequired -> discardUncommittedPassphrase()
             }
             result
         } catch (cancelled: CancellationException) {
@@ -241,9 +241,13 @@ class DriveSyncRuntime internal constructor(
                 secretStore.discardStaged()
                 verifiedResult
             }
-            SyncRunResult.AuthorizationRequired,
             is SyncRunResult.Conflict,
             -> verifiedResult
+            SyncRunResult.AuthorizationRequired,
+            -> {
+                secretStore.discardStaged()
+                verifiedResult
+            }
         }
     }
 

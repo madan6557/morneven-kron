@@ -333,4 +333,107 @@ class KronMigrationTest {
             close()
         }
     }
+
+    @Test
+    fun endToEndMigrationFromVersionOneToThirteenPreservesAllData() {
+        val name = "kron-e2e-1-to-13.db"
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val helper = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(name)
+                .callback(object : SupportSQLiteOpenHelper.Callback(1) {
+                    override fun onCreate(db: SupportSQLiteDatabase) {
+                        db.execSQL("CREATE TABLE portfolios (id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, cadence TEXT NOT NULL, plannedIncome INTEGER NOT NULL, rolloverEnabled INTEGER NOT NULL, fundingPriority INTEGER NOT NULL, startEpochDay INTEGER NOT NULL, endMode TEXT NOT NULL, endValue INTEGER, isPaused INTEGER NOT NULL, createdAt INTEGER NOT NULL)")
+                        db.execSQL("CREATE TABLE recurring_rules (id TEXT NOT NULL PRIMARY KEY, title TEXT NOT NULL, direction TEXT NOT NULL, amount INTEGER NOT NULL, accountId INTEGER NOT NULL, categoryId INTEGER, allocationId INTEGER, cadence TEXT NOT NULL, anchorMonth INTEGER NOT NULL, anchorDay INTEGER NOT NULL, startEpochDay INTEGER NOT NULL, nextEpochDay INTEGER NOT NULL, endEpochDay INTEGER, remainingOccurrences INTEGER, isPaused INTEGER NOT NULL, createdAt INTEGER NOT NULL)")
+                        db.execSQL("INSERT INTO portfolios(id,name,cadence,plannedIncome,rolloverEnabled,fundingPriority,startEpochDay,endMode,isPaused,createdAt) VALUES(1,'Lama','MONTHLY',100,0,100,1,'CONTINUOUS',0,1)")
+                        db.execSQL("INSERT INTO recurring_rules(id,title,direction,amount,accountId,cadence,anchorMonth,anchorDay,startEpochDay,nextEpochDay,isPaused,createdAt) VALUES('rule-1','Rutin','INCOME',10,1,'MONTHLY',1,1,1,1,0,1)")
+                    }
+
+                    override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+                })
+                .build(),
+        )
+        val database = helper.writableDatabase
+        val allMigrations = arrayOf(
+            KronDatabase.MIGRATION_1_2,
+            KronDatabase.MIGRATION_2_3,
+            KronDatabase.MIGRATION_3_4_RECOVERY,
+            KronDatabase.MIGRATION_4_5,
+            KronDatabase.MIGRATION_5_6,
+            KronDatabase.MIGRATION_6_7,
+            KronDatabase.MIGRATION_7_8,
+            KronDatabase.MIGRATION_8_9,
+            KronDatabase.MIGRATION_9_10,
+            KronDatabase.MIGRATION_10_11,
+            KronDatabase.MIGRATION_11_12,
+            KronDatabase.MIGRATION_12_13,
+        )
+        allMigrations.forEachIndexed { index, migration ->
+            val oldVersion = index + 1
+            val newVersion = index + 2
+            migration.migrate(database)
+            database.execSQL("PRAGMA user_version = $newVersion")
+            database.query("PRAGMA foreign_key_check").use { cursor ->
+                assertTrue("Foreign key violation after migration $oldVersion -> $newVersion", !cursor.moveToFirst())
+            }
+        }
+        database.query("PRAGMA user_version").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(13, cursor.getInt(0))
+        }
+        database.query("SELECT name FROM portfolios WHERE id=1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Lama", cursor.getString(0))
+        }
+        database.query("SELECT title FROM recurring_rules WHERE id='rule-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Rutin", cursor.getString(0))
+        }
+        helper.close()
+    }
+
+    @Test
+    fun endToEndMigrationValidatesDataIntegrityAfterAllMigrations() {
+        val name = "kron-e2e-integrity-1-to-13.db"
+        val helper = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(ApplicationProvider.getApplicationContext<Context>())
+                .name(name)
+                .callback(object : SupportSQLiteOpenHelper.Callback(1) {
+                    override fun onCreate(db: SupportSQLiteDatabase) {
+                        db.execSQL("CREATE TABLE portfolios (id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, cadence TEXT NOT NULL, plannedIncome INTEGER NOT NULL, rolloverEnabled INTEGER NOT NULL, fundingPriority INTEGER NOT NULL, startEpochDay INTEGER NOT NULL, endMode TEXT NOT NULL, endValue INTEGER, isPaused INTEGER NOT NULL, createdAt INTEGER NOT NULL)")
+                        db.execSQL("CREATE TABLE recurring_rules (id TEXT NOT NULL PRIMARY KEY, title TEXT NOT NULL, direction TEXT NOT NULL, amount INTEGER NOT NULL, accountId INTEGER NOT NULL, categoryId INTEGER, allocationId INTEGER, cadence TEXT NOT NULL, anchorMonth INTEGER NOT NULL, anchorDay INTEGER NOT NULL, startEpochDay INTEGER NOT NULL, nextEpochDay INTEGER NOT NULL, endEpochDay INTEGER, remainingOccurrences INTEGER, isPaused INTEGER NOT NULL, createdAt INTEGER NOT NULL)")
+                    }
+
+                    override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+                })
+                .build(),
+        )
+        val database = helper.writableDatabase
+        val allMigrations = arrayOf(
+            KronDatabase.MIGRATION_1_2,
+            KronDatabase.MIGRATION_2_3,
+            KronDatabase.MIGRATION_3_4_RECOVERY,
+            KronDatabase.MIGRATION_4_5,
+            KronDatabase.MIGRATION_5_6,
+            KronDatabase.MIGRATION_6_7,
+            KronDatabase.MIGRATION_7_8,
+            KronDatabase.MIGRATION_8_9,
+            KronDatabase.MIGRATION_9_10,
+            KronDatabase.MIGRATION_10_11,
+            KronDatabase.MIGRATION_11_12,
+            KronDatabase.MIGRATION_12_13,
+        )
+        allMigrations.forEachIndexed { index, migration ->
+            migration.migrate(database)
+            database.execSQL("PRAGMA user_version = ${index + 2}")
+        }
+        database.query("PRAGMA integrity_check").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("ok", cursor.getString(0))
+        }
+        database.query("PRAGMA foreign_key_check").use { cursor ->
+            assertTrue("Foreign key violations after end-to-end migration", !cursor.moveToFirst())
+        }
+        helper.close()
+    }
 }
