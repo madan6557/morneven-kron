@@ -16,6 +16,10 @@
 - UI hanya menampilkan `KRON 1.5.0` tanpa label Full Release atau LTS.
 - Kontrak SQLCipher passphrase KRON 1.4.7 dipertahankan tanpa rekey. Raw-key 1.4.x tetap hanya menjadi mode baca historis.
 
+## 1.5.8 - 2026-07-22
+
+- Fix: Ganti CameraX embedded preview dengan system camera intent (`TakePicture`) — tombol "Ambil gambar" di form transaksi sekarang langsung buka kamera system, tanpa overlay dialog yang nutup kamera.
+
 ## 1.5.7 - 2026-07-22
 
 - Fix: Filter TRANSFER/CHANNEL_TRANSFER dari overview HomeScreen — hanya tampilkan transaksi finansial (INCOME, EXPENSE, REVERSAL, dll).

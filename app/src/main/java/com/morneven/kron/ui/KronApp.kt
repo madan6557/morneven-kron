@@ -15,6 +15,7 @@ import androidx.compose.animation.core.tween
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.PickVisualMediaRequest
+import androidx.core.content.FileProvider
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.BorderStroke
@@ -295,7 +296,7 @@ private fun MainScaffold(
     var pendingPassword by remember { mutableStateOf<CharArray?>(null) }
     var receiptTargetEventId by rememberSaveable { mutableStateOf<String?>(null) }
     var cameraTargetEventId by rememberSaveable { mutableStateOf<String?>(null) }
-    var showCameraCapture by remember { mutableStateOf(false) }
+    var cameraImageUri by remember { mutableStateOf<Uri?>(null) }
     var showEvidenceCenter by rememberSaveable { mutableStateOf(false) }
     var pendingEvidenceRange by rememberSaveable { mutableStateOf<Pair<Long, Long>?>(null) }
     var pendingEvidenceEventId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -466,6 +467,24 @@ private fun MainScaffold(
             dialogReceiptUri = uri
         }
         receiptTargetEventId = null
+    }
+    val takePictureLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        val uri = cameraImageUri
+        cameraImageUri = null
+        if (success && uri != null) {
+            val path = uri.path
+            if (path != null) {
+                val file = java.io.File(path)
+                if (file.exists()) {
+                    if (cameraTargetEventId != null) {
+                        viewModel.attachCameraReceipt(cameraTargetEventId!!, file)
+                        cameraTargetEventId = null
+                    } else {
+                        dialogCameraFile = file
+                    }
+                }
+            }
+        }
     }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -744,7 +763,9 @@ private fun MainScaffold(
             },
             onCameraCapture = {
                 dialogReceiptUri = null
-                showCameraCapture = true
+                val file = java.io.File(activity.noBackupFilesDir, "receipts").also { it.mkdirs() }.resolve("receipt_${System.nanoTime()}.jpg")
+                cameraImageUri = FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", file)
+                takePictureLauncher.launch(cameraImageUri!!)
             },
             onSubmit = { account, channel, amount, category, target, title, note, recurring, startDate, endDate, interval, recordNow, _, _ -> dialog = null; viewModel.addIncome(account, channel, amount, category, target, title, note, recurring, startDate, endDate, interval, recordNow, dialogReceiptUri, dialogCameraFile); dialogReceiptUri = null; dialogCameraFile = null },
         )
@@ -757,7 +778,9 @@ private fun MainScaffold(
             },
             onCameraCapture = {
                 dialogReceiptUri = null
-                showCameraCapture = true
+                val file = java.io.File(activity.noBackupFilesDir, "receipts").also { it.mkdirs() }.resolve("receipt_${System.nanoTime()}.jpg")
+                cameraImageUri = FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", file)
+                takePictureLauncher.launch(cameraImageUri!!)
             },
             onSubmit = { account, channel, amount, splits, title, note, unexpected, recurring, startDate, endDate, interval, recordNow, _, _ -> dialog = null; viewModel.addExpense(account, channel, amount, splits, title, note, unexpected, recurring, startDate, endDate, interval, recordNow, dialogReceiptUri, dialogCameraFile); dialogReceiptUri = null; dialogCameraFile = null },
         )
@@ -825,7 +848,9 @@ private fun MainScaffold(
                 },
                 onCameraCapture = { eventId ->
                     cameraTargetEventId = eventId
-                    showCameraCapture = true
+                    val file = java.io.File(activity.noBackupFilesDir, "receipts").also { it.mkdirs() }.resolve("receipt_${System.nanoTime()}.jpg")
+                    cameraImageUri = FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", file)
+                    takePictureLauncher.launch(cameraImageUri!!)
                 },
                 onExportEvidence = { eventId ->
                     pendingEvidenceRange = null
@@ -1016,26 +1041,6 @@ private fun MainScaffold(
                 }) { Text("Tutup KRON") }
             },
             properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-        )
-    }
-    if (showCameraCapture) {
-        CameraCaptureScreen(
-            onPhotoCaptured = { uri ->
-                val file = uri.path?.let { java.io.File(it) }
-                if (file != null) {
-                    if (cameraTargetEventId != null) {
-                        viewModel.attachCameraReceipt(cameraTargetEventId!!, file)
-                        cameraTargetEventId = null
-                    } else {
-                        dialogCameraFile = file
-                    }
-                }
-                showCameraCapture = false
-            },
-            onCancel = {
-                cameraTargetEventId = null
-                showCameraCapture = false
-            },
         )
     }
 }
