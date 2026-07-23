@@ -839,7 +839,7 @@ fun AuditDialog(
     var correctionMode by remember { mutableStateOf(false) }
     var correctedTitle by remember(event.id) { mutableStateOf(event.title) }
     var correctedNote by remember(event.id) { mutableStateOf(event.note) }
-    val lifecycleEvent = event.type in setOf("ARCHIVE", "RESTORE", "RESTORE_REVERSAL")
+    val lifecycleEvent = event.type in setOf("ARCHIVE", "RESTORE")
     val receipts = state.receipts.filter { it.eventId == event.id }
     val actionEnabled = !lifecycleEvent && event.reversedByEventId == null && event.type != "REVERSAL" &&
         reason.isNotBlank() && (!correctionMode || correctedTitle.isNotBlank())

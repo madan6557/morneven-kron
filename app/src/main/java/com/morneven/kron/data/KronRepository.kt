@@ -757,7 +757,7 @@ class KronRepository @Inject constructor(
         dao.insertEvent(ActivityEventEntity(
             id = eventId,
             type = LedgerType.REVERSAL,
-            title = "Revert: ${original.title}",
+            title = original.title,
             note = reason,
             source = "USER",
             effectiveEpochDay = LocalDate.now().toEpochDay(),
@@ -789,7 +789,7 @@ class KronRepository @Inject constructor(
             ActivityEventEntity(
                 id = restoreId,
                 type = LedgerType.RESTORE_REVERSAL,
-                title = "Dipulihkan: ${original.title}",
+                title = original.title,
                 note = original.note,
                 source = "USER",
                 effectiveEpochDay = LocalDate.now().toEpochDay(),

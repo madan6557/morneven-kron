@@ -188,7 +188,7 @@ private fun ActivityCard(event: ActivityRow, valuesVisible: Boolean, onEvent: (S
     val impact = event.primaryImpact()
     val money = displayMoney(impact, valuesVisible)
     val reversed = event.reversedByEventId != null
-    val auditOnly = reversed || event.type in setOf("ARCHIVE", "RESTORE", "REVERSAL", "RESTORE_REVERSAL")
+    val auditOnly = reversed || event.type in setOf("ARCHIVE", "RESTORE", "REVERSAL")
     HudCard(
         modifier = Modifier
             .fillMaxWidth()
