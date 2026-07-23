@@ -152,6 +152,15 @@ class AuthorizationClientDriveSession(
         return result
     }
 
+    /**
+     * Public wrapper to authorize a specific account. Used when the app obtains
+     * the account by a manual picker and wants to continue the connect flow
+     * without going through Credential Manager selection.
+     */
+    suspend fun authorizeAccount(account: GoogleAccountIdentity?, interactive: Boolean): AuthorizationClientResult {
+        return authorize(account, interactive)
+    }
+
     private data class CachedGrant(
         val subjectId: String,
         val accessToken: String,

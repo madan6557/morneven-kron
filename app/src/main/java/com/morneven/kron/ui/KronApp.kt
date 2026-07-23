@@ -896,9 +896,46 @@ private fun MainScaffold(
                 }
             }
         } else {
+            // Prepare an account-picker launcher and a temporary passphrase holder
+            var stagedPassphraseForManualPick by remember { mutableStateOf<CharArray?>(null) }
+            val accountPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+                if (result.resultCode != Activity.RESULT_OK || result.data == null) {
+                    stagedPassphraseForManualPick?.fill('\u0000')
+                    stagedPassphraseForManualPick = null
+                    viewModel.showMessage("Pemilihan akun dibatalkan")
+                    return@rememberLauncherForActivityResult
+                }
+                val email = result.data!!.getStringExtra(android.accounts.AccountManager.KEY_ACCOUNT_NAME)
+                val pass = stagedPassphraseForManualPick ?: run {
+                    viewModel.showMessage("Passphrase tidak tersedia")
+                    return@rememberLauncherForActivityResult
+                }
+                stagedPassphraseForManualPick = null
+                val runtime = driveSyncRuntime
+                if (runtime == null) {
+                    pass.fill('\u0000')
+                    viewModel.showMessage("Konfigurasi OAuth Drive belum tersedia")
+                } else if (email.isNullOrBlank()) {
+                    pass.fill('\u0000')
+                    viewModel.showMessage("Akun tidak dipilih")
+                } else {
+                    scope.launch {
+                        handleConnectResult(runtime.connectWithAccountEmail(email, pass))
+                    }
+                }
+            }
+
             SyncPassphraseDialog(
                 reconnecting = mode == "DRIVE_UNLOCK",
                 onDismiss = { passwordMode = null },
+                onManualPick = { passphrase ->
+                    // Stage the passphrase while the user picks an account manually
+                    stagedPassphraseForManualPick = passphrase
+                    val pickerIntent = android.accounts.AccountManager.newChooseAccountIntent(
+                        null, null, arrayOf("com.google"), true, "Pilih akun Google untuk KRON", null, null, null,
+                    )
+                    accountPickerLauncher.launch(pickerIntent)
+                },
             ) { passphrase ->
                 passwordMode = null
                 val runtime = driveSyncRuntime
@@ -1258,6 +1295,7 @@ private fun PasswordDialog(
 private fun SyncPassphraseDialog(
     reconnecting: Boolean,
     onDismiss: () -> Unit,
+    onManualPick: ((CharArray) -> Unit)? = null,
     onConfirm: (CharArray) -> Unit,
 ) {
     var password by remember { mutableStateOf("") }
@@ -1307,6 +1345,16 @@ private fun SyncPassphraseDialog(
                         }
                     },
                 )
+                if (onManualPick != null) {
+                    Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                        TextButton(onClick = {
+                            val chars = password.toCharArray()
+                            password = ""
+                            confirmation = ""
+                            onManualPick(chars)
+                        }) { Text("Pilih akun manual") }
+                    }
+                }
             }
         },
         confirmButton = {

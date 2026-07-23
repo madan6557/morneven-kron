@@ -85,6 +85,61 @@ class DriveSyncRuntime internal constructor(
         }
     }
 
+    /**
+     * Connect using an account email obtained from a manual account picker. This
+     * bypasses the Credential Manager selection and proceeds to request the
+     * Drive authorization for the chosen account.
+     */
+    suspend fun connectWithAccountEmail(email: String, passphrase: CharArray): DriveConnectResult {
+        if (!BuildConfig.DRIVE_SYNC_CONFIGURED) {
+            passphrase.fill('\u0000')
+            return DriveConnectResult.Failed("Konfigurasi OAuth Drive belum tersedia", retryable = false)
+        }
+        val account = GoogleAccountIdentity(email, email, null)
+        return try {
+            passphraseOperationMutex.withLock { secretStore.stage(passphrase) }
+            val authResult = try {
+                // Use the public wrapper to authorize the chosen account interactively.
+                (authorization as? AuthorizationClientDriveSession)?.authorizeAccount(account, interactive = true)
+                    ?: throw IllegalStateException("Authorization session tidak mendukung authorizeAccount")
+            } catch (cancelled: CancellationException) {
+                discardUncommittedPassphrase()
+                throw cancelled
+            } catch (error: IllegalStateException) {
+                discardUncommittedPassphrase()
+                Log.w(TAG, "Otorisasi Drive gagal")
+                return DriveConnectResult.Failed(
+                    error.message ?: "Akun Google tidak dapat dihubungkan",
+                    retryable = false,
+                )
+            } catch (_: Exception) {
+                discardUncommittedPassphrase()
+                return DriveConnectResult.Failed(
+                    "Akun Google tidak dapat dihubungkan",
+                    retryable = true,
+                )
+            }
+            val result = authorization.acceptConnectionResult(account, authResult)
+            when (result) {
+                is DriveConnectResult.Connected -> factory.activateAfterConnection()
+                is DriveConnectResult.Failed -> discardUncommittedPassphrase()
+                is DriveConnectResult.UserActionRequired -> discardUncommittedPassphrase()
+            }
+            result
+        } catch (cancelled: CancellationException) {
+            kotlinx.coroutines.withContext(NonCancellable) { discardUncommittedPassphrase() }
+            throw cancelled
+        } catch (error: IllegalStateException) {
+            discardUncommittedPassphrase()
+            DriveConnectResult.Failed(
+                error.message ?: "Passphrase Drive tidak dapat disiapkan",
+                retryable = false,
+            )
+        } finally {
+            passphrase.fill('\u0000')
+        }
+    }
+
     suspend fun reauthorizeCurrent(): DriveConnectResult {
         return authorization.reauthorizeCurrent().also { result ->
             when (result) {
