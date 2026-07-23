@@ -293,4 +293,19 @@
 - **Fixed in:** 1.5.20 — ganti `dao.allRules()` dengan `dao.dueRules()` yang join dengan accounts (filter isActive=1). Fix di M14.
 - **Description:** `processDueRules()` memanggil `dao.allRules()` yang mengembalikan rules dari SEMUA account (setelah it goes through `dueRules()` which does join with accounts filtering by isActive). Namun precondition filter (line 1073-1075) menggunakan `dao.allRules()` langsung tanpa filter account. Jika ada rule untuk account non-aktif yang kebetulan memiliki `nextEpochDay > endEpochDay`, aturan tersebut akan dijeda meskipun accountnya tidak aktif. Dampak minimal karena account tidak aktif tidak akan memproses due rules, tapi ini masih inkonsisten.
 
+---
+
+## 1.5.20 release note
+
+| Action | Detail |
+|--------|--------|
+| Commit | `b3e8616` |
+| Tag | `v1.5.20` |
+| versionCode | 80 |
+| versionName | 1.5.20 |
+| Fixes | H14, H15, H16, M3, M4, M9, M10, M11, M12, M13, M14, L1, L12, L13 |
+| Files changed | `LedgerPostingEngine.kt`, `KronRepository.kt`, `KronDao.kt`, `KronDatabase.kt`, `DatabaseKeyManager.kt`, `BackupManager.kt`, `PreUpgradeBackupManager.kt`, `KronApplication.kt`, `EncryptedAttachmentStore.kt`, `LegacyReceiptEncryption.kt`, `DriveSyncRuntime.kt`, `CameraCaptureScreen.kt`, `KronMigrationTest.kt`, `DatabaseEncryptionManager.kt`, `CHANGELOG.md`, `kron_review_result.md`, `build.gradle.kts` |
+
+Semua open issue telah diperbaiki. Tidak ada open issue tersisa.
+
 
