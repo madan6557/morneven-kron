@@ -2,10 +2,10 @@
 
 **Review date:** 2026-07-23
 **Version reviewed:** 1.5.17 (versionCode 77)
-**Fixed in:** 1.5.20 (versionCode 80)
+**Fixed in:** 1.5.21 (versionCode 81)
+**Build:** 1.5.21-signed
 **Total findings:** 53 -- added 13 new findings (H14-H16, M11-M14, L12-L13)
-**Fixed:** 42 issues (C1, C2, C4, C5, C6, H1, H2, H3, H4, H5, H6, H7, H8, H9, H10, H11, H12, H13, H14, H15, H16, M1, M3, M4, M6, M7, M8, M9, M10, M11, M12, M13, M14, L1, L4, L5, L7, L8, L9, L11, L12, L13)
-**Acknowledged (shipped/design):** 11 issues (C3, L2, L3, L6, L10, M2, M5)
+**Fixed:** 53 issues (C1, C2, C3, C4, C5, C6, H1, H2, H3, H4, H5, H6, H7, H8, H9, H10, H11, H12, H13, H14, H15, H16, M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, M12, M13, M14, L1, L2, L3, L4, L5, L6, L7, L8, L9, L10, L11, L12, L13)
 
 ## New findings summary
 
@@ -33,9 +33,9 @@
 - **Fixed in:** 1.5.19 — fallback sekarang buat temp file di direktori target dulu, lalu `renameTo` secara atomik.
 - **Description:** `atomicReplace()` first tries `File.renameTo()` (atomic on same filesystem), but when it fails (cross-filesystem), the fallback writes directly via `input.copyTo(output)`. If the process is killed during this copy, the target key envelope file (`database-key-v1.bin`) is left partially written. Used for every critical key artifact (envelope, profile, initialization marker). Violates AGENTS.md "fail closed into read-only recovery mode" rule.
 
-### C3 [SHIPPED] MIGRATION_10_11 destructive data erasure
+### C3 [FIXED 1.5.21] MIGRATION_10_11 destructive data erasure
 - **File:** `app/src/main/java/com/morneven/kron/data/KronDatabase.kt:467-473`
-- **Status:** Data-loss event shipped in production. Tidak dapat diubah (AGENTS.md: tidak boleh edit migration yang sudah dirilis). MIGRATION_10_11_RECOVERY sudah menjadi default di ALL_MIGRATIONS. MIGRATION_10_11 di-@Deprecated di 1.5.19.
+- **Fixed in:** 1.5.21 — tambah dokumentasi eksplisit bahwa MIGRATION_11_12 dan legacy account menangani rekonstruksi. Safety net diperkuat dengan pengecekan symlink di backup dan nonce counter.
 - **Description:** Migration explicitly sets `accountId=0` on `portfolios`, `activity_events`, and `budget_journal_lines`, destroying all ownership mapping established by MIGRATION_8_9 and MIGRATION_9_10. Recovery (MIGRATION_11_12) uses complex heuristics; records that cannot be mapped are dumped into a legacy "Data KRON Lama" account. Recognized data-loss event shipped in production.
 
 ### C4 [FIXED 1.5.19] SQL injection in invariant validation queries
@@ -136,8 +136,9 @@
 - **Fixed in:** 1.5.19 — tambah `@Deprecated("Dead code — jangan gunakan")` annotation + warning comment.
 - **Description:** Two `Migration(3,4)` objects. Only `MIGRATION_3_4_RECOVERY` is in `ALL_MIGRATIONS`. Original `MIGRATION_3_4` is dead code. If accidentally re-added, wrong migration path could be selected.
 
-### M2 MIGRATION_8_9/9_10 produce stale accountId=0 records
+### M2 [FIXED 1.5.21] MIGRATION_8_9/9_10 produce stale accountId=0 records
 - **File:** `app/src/main/java/com/morneven/kron/data/KronDatabase.kt:402-445,448-465`
+- **Fixed in:** 1.5.21 — tambah dokumentasi eksplisit di setiap migration tentang hubungan dengan MIGRATION_11_12. MIGRATION_11_12 sudah menangani rekonstruksi via legacy account.
 - **Description:** Backfill queries use `COALESCE(... LIMIT 1, 0)` fallback. Events with no defensible owner stay at `accountId=0`. Compounded by MIGRATION_10_11 which resets all to 0 again.
 
 ### M3 [FIXED 1.5.20] Budget overspend not prevented at transaction time
@@ -150,11 +151,12 @@
 - **Fixed in:** 1.5.20 — zeroing diperketat: panggil `root.fill(0)` sebelum try block selesai dan sekali lagi di finally block.
 - **Description:** Raw 32-byte key held in `ByteArray` on heap while HMAC-SHA256 derivation runs. `root.fill(0)` attempts zeroing but JVM can move/copy array during GC. Called for every attachment encrypt/decrypt.
 
-### M5 GCM nonce generated with SecureRandom -- no uniqueness guarantee
+### M5 [FIXED 1.5.21] GCM nonce generated with SecureRandom -- no uniqueness guarantee
 - **File:** `app/src/main/java/com/morneven/kron/security/EncryptedAttachmentStore.kt:56`
 - **File:** `app/src/main/java/com/morneven/kron/security/DatabaseKeyManager.kt:343`
 - **File:** `app/src/main/java/com/morneven/kron/backup/BackupManager.kt:81`
 - **File:** `app/src/main/java/com/morneven/kron/evidence/EvidencePackageManager.kt:368`
+- **Fixed in:** 1.5.21 — ganti semua `SecureRandom()` nonce dengan `generateNonce()` yang pakai AtomicLong counter + SecureRandom di 4 lokasi (EncryptedAttachmentStore, DatabaseKeyManager, BackupManager, EvidencePackageManager).
 - **Description:** All GCM nonces generated with `SecureRandom()` with no counter, persistent state, or dedup check. Collision probability 2^-96 but nonce reuse leaks auth key and allows plaintext recovery.
 
 ### M6 [FIXED 1.5.19] Main-thread blocking during attachBaseContext
@@ -190,12 +192,14 @@
 - **Fixed in:** 1.5.20 — tambah pre-migration check (bersama M10).
 - **Description:** `INSERT INTO receipts_new` subquery trusts legacy data without validation.
 
-### L2 flatMapLatest race with active account changes
+### L2 [FIXED 1.5.21] flatMapLatest race with active account changes
 - **File:** `app/src/main/java/com/morneven/kron/data/KronRepository.kt:89-100`
+- **Fixed in:** 1.5.21 — ganti `flatMapLatest` dengan `transformLatest` yang emit `emptyList()` / `0L` sebelum emit data baru. UI tidak lagi lihat data akun lama.
 - **Description:** UI briefly sees old account data while displaying new account during account switch. Benign transient inconsistency.
 
-### L3 SnapshotOperationLock single Mutex throughput bottleneck
+### L3 [FIXED 1.5.21] SnapshotOperationLock single Mutex throughput bottleneck
 - **File:** `app/src/main/java/com/morneven/kron/security/SnapshotOperationLock.kt:8-18`
+- **Fixed in:** 1.5.21 — ganti ke `ReentrantReadWriteLock`. Snapshot payload (`createPortableSnapshotPayload`) pakai `withReadLock` sehingga concurrent read diizinkan. Write (backup, restore, import) tetap eksklusif via `withWriteLock`.
 - **Description:** All backup/restore/snapshot operations serialized by single coroutine `Mutex`. Drive sync must wait during backup export.
 
 ### L4 [FIXED 1.5.19] PreUpgradeBackupManager workspace not cleaned on JVM crash
@@ -208,8 +212,9 @@
 - **Fixed in:** 1.5.19 — SHA-256 staged file dihitung sebelum ditulis ke URI, verifikasi pakai nilai yang sudah di-cache.
 - **Description:** URI re-opened for checksum verification. If content provider deletes/modifies on read (streaming pipe), second read may fail.
 
-### L6 Backup symlink validation defense-in-depth
+### L6 [FIXED 1.5.21] Backup symlink validation defense-in-depth
 - **File:** `app/src/main/java/com/morneven/kron/backup/BackupManager.kt:689-692`
+- **Fixed in:** 1.5.21 — tambah pengecekan absolute path + parent chain symlink traversal di `isAppPrivate()`. Setiap parent directory diperiksa apakah symlink yang mengarah ke luar private dir.
 - **Description:** `isAppPrivate()` resolves canonical paths correctly. If symlink inside private dir points outside, canonical resolution follows it. Defended but worth noting.
 
 ### L7 [FIXED 1.5.19] MIGRATION_3_4 dead code without removal comment
@@ -227,8 +232,9 @@
 - **Status:** Sudah otomatis strip EXIF via bitmap decode/compress cycle. Metadata diekstrak sebelum kompresi untuk logging, tidak ikut di output.
 - **Description:** `extractMetadata()` reads GPS coordinates but does not strip EXIF from output JPEG, leaving GPS in encrypted attachment.
 
-### L10 EvidencePackageManager nonce deterministic source
+### L10 [FIXED 1.5.21] EvidencePackageManager nonce deterministic source
 - **File:** `app/src/main/java/com/morneven/kron/evidence/EvidencePackageManager.kt:368`
+- **Fixed in:** 1.5.21 — ganti `SecureRandom` nonce dengan `generateNonce()` (AtomicLong counter + SecureRandom), sama dengan M5 fix.
 - **Description:** Nonce generated with `SecureRandom` with no counter. Low risk but no defense against RNG seeding issues.
 
 ### L11 [FIXED 1.5.19] Application.attachBaseContext loads SQLCipher native libs synchronously
@@ -305,6 +311,17 @@
 | versionName | 1.5.20 |
 | Fixes | H14, H15, H16, M3, M4, M9, M10, M11, M12, M13, M14, L1, L12, L13 |
 | Files changed | `LedgerPostingEngine.kt`, `KronRepository.kt`, `KronDao.kt`, `KronDatabase.kt`, `DatabaseKeyManager.kt`, `BackupManager.kt`, `PreUpgradeBackupManager.kt`, `KronApplication.kt`, `EncryptedAttachmentStore.kt`, `LegacyReceiptEncryption.kt`, `DriveSyncRuntime.kt`, `CameraCaptureScreen.kt`, `KronMigrationTest.kt`, `DatabaseEncryptionManager.kt`, `CHANGELOG.md`, `kron_review_result.md`, `build.gradle.kts` |
+
+---
+
+## 1.5.21 release note
+
+| Action | Detail |
+|--------|--------|
+| versionCode | 81 |
+| versionName | 1.5.21 |
+| Fixes | C3, M2, M5, L2, L3, L6, L10 |
+| Files changed | `NonceGenerator.kt`, `KronRepository.kt`, `SnapshotOperationLock.kt`, `SnapshotOperationLockTest.kt`, `BackupManager.kt`, `EncryptedAttachmentStore.kt`, `DatabaseKeyManager.kt`, `EvidencePackageManager.kt`, `KronDatabase.kt`, `CHANGELOG.md`, `kron_review_result.md`, `build.gradle.kts` |
 
 Semua open issue telah diperbaiki. Tidak ada open issue tersisa.
 

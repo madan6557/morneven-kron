@@ -407,6 +407,11 @@ abstract class KronDatabase : RoomDatabase() {
             }
         }
 
+        // M2: Events with no defensible owner stay at accountId=0 here.
+        // MIGRATION_10_11 resets ALL accountId to 0, then MIGRATION_11_12
+        // reconstructs ownership and assigns remaining orphans to a legacy
+        // 'Data KRON Lama' account. Records that pass through this migration
+        // with accountId=0 will be cleaned up by MIGRATION_11_12.
         val MIGRATION_8_9: Migration = object : Migration(8, 9) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("""
@@ -453,6 +458,8 @@ abstract class KronDatabase : RoomDatabase() {
             }
         }
 
+        // M2: Same limitation as MIGRATION_8_9. MIGRATION_11_12 handles
+        // remaining accountId=0 records via legacy 'Data KRON Lama' account.
         val MIGRATION_9_10: Migration = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("""
@@ -472,6 +479,9 @@ abstract class KronDatabase : RoomDatabase() {
             }
         }
 
+        // M2: Intentionally resets all accountId so MIGRATION_11_12 can
+        // reconstruct ownership from a clean slate. Any remaining accountId=0
+        // after that migration is assigned to the legacy 'Data KRON Lama' account.
         val MIGRATION_10_11: Migration = object : Migration(10, 11) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("UPDATE portfolios SET accountId = 0 WHERE accountId != 0")

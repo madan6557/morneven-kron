@@ -53,7 +53,7 @@ class EncryptedAttachmentStore @Inject constructor(
     }
 
     fun encryptTo(input: InputStream, target: File): StoredAttachment {
-        val nonce = ByteArray(NONCE_BYTES).also(SecureRandom()::nextBytes)
+        val nonce = generateNonce(NONCE_BYTES)
         val key = keyManager.deriveSubkey(ATTACHMENT_KEY_LABEL)
         val cipher = Cipher.getInstance(AES_GCM)
         cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_BITS, nonce))

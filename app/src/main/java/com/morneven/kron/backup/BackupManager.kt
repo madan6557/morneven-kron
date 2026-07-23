@@ -78,7 +78,7 @@ class BackupManager @Inject constructor(
     private suspend fun writeEncryptedBackup(target: File, password: CharArray) {
         target.delete()
         val salt = ByteArray(SALT_BYTES).also(SecureRandom()::nextBytes)
-        val nonce = ByteArray(NONCE_BYTES).also(SecureRandom()::nextBytes)
+        val nonce = com.morneven.kron.security.generateNonce(NONCE_BYTES)
         FileOutputStream(target).buffered().use { rawOutput ->
             val data = DataOutputStream(rawOutput)
             data.write(MAGIC_V3)
@@ -107,7 +107,7 @@ class BackupManager @Inject constructor(
     }
 
     suspend fun createPortableSnapshotPayload(): ByteArray = withContext(Dispatchers.IO) {
-        snapshotOperationLock.withLock {
+        snapshotOperationLock.withReadLock {
             ByteArrayOutputStream().use { output ->
                 writePortableSnapshot(output)
                 require(output.size().toLong() <= MAX_SYNC_PAYLOAD_BYTES) { "Snapshot terlalu besar untuk sinkronisasi Drive" }
@@ -700,9 +700,21 @@ class BackupManager @Inject constructor(
     }
 
     private fun isAppPrivate(file: File): Boolean {
-        val path = file.canonicalFile.toPath()
-        return path.startsWith(context.filesDir.canonicalFile.toPath()) ||
-            path.startsWith(context.noBackupFilesDir.canonicalFile.toPath())
+        val filesDir = context.filesDir.canonicalFile.toPath()
+        val noBackupDir = context.noBackupFilesDir.canonicalFile.toPath()
+        val absolutePath = file.absoluteFile.toPath().normalize()
+        if (!absolutePath.startsWith(filesDir) && !absolutePath.startsWith(noBackupDir)) return false
+        val canonicalPath = file.canonicalFile.toPath()
+        if (!canonicalPath.startsWith(filesDir) && !canonicalPath.startsWith(noBackupDir)) return false
+        var parent = file.absoluteFile.parentFile
+        while (parent != null) {
+            if (java.nio.file.Files.isSymbolicLink(parent.toPath())) {
+                val linkTarget = parent.canonicalFile.toPath()
+                if (!linkTarget.startsWith(filesDir) && !linkTarget.startsWith(noBackupDir)) return false
+            }
+            parent = parent.parentFile
+        }
+        return true
     }
 
     private fun ZipOutputStream.writeEntry(name: String, value: ByteArray) {

@@ -346,7 +346,7 @@ class DatabaseKeyManager @Inject constructor(
     }
 
     private fun wrap(target: File, wrappingKey: SecretKey, dataKey: ByteArray) {
-        val nonce = ByteArray(GCM_NONCE_BYTES).also(SecureRandom()::nextBytes)
+        val nonce = generateNonce(GCM_NONCE_BYTES)
         val cipher = Cipher.getInstance(AES_GCM)
         cipher.init(Cipher.ENCRYPT_MODE, wrappingKey, GCMParameterSpec(GCM_TAG_BITS, nonce))
         val encrypted = cipher.doFinal(dataKey)

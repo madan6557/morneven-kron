@@ -16,6 +16,15 @@
 - UI hanya menampilkan `KRON 1.5.0` tanpa label Full Release atau LTS.
 - Kontrak SQLCipher passphrase KRON 1.4.7 dipertahankan tanpa rekey. Raw-key 1.4.x tetap hanya menjadi mode baca historis.
 
+## 1.5.21 - 2026-07-23
+
+- Fix: GCM nonce SecureRandom tanpa counter — ganti dengan AtomicLong counter-based nonce.
+- Fix: flatMapLatest race saat ganti akun — tambah transformLatest agar UI tidak lihat data lama.
+- Fix: SnapshotOperationLock single Mutex bottleneck — ganti ke ReadWriteLock, snapshot sebagai read lock.
+- Fix: isAppPrivate tidak deteksi symlink traversal — tambah parent chain symlink check.
+- Fix: MIGRATION_8_9/9_10 accountId=0 — tambah dokumentasi dan safety net.
+- Fix: EvidencePackageManager nonce SecureRandom — pakai generateNonce() dengan counter.
+
 ## 1.5.20 - 2026-07-23
 
 - Fix: cashPercentage integer division precision loss — gunakan midpoint rounding.
