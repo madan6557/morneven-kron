@@ -16,6 +16,10 @@
 - UI hanya menampilkan `KRON 1.5.0` tanpa label Full Release atau LTS.
 - Kontrak SQLCipher passphrase KRON 1.4.7 dipertahankan tanpa rekey. Raw-key 1.4.x tetap hanya menjadi mode baca historis.
 
+## 1.5.14 - 2026-07-23
+
+- Fix: deteksi restore reversal via parameter eksplisit `reversalRestored` di AuditDialog, dihitung di KronApp dari `state.activities` — tidak bergantung perbandingan di dialog.
+
 ## 1.5.13 - 2026-07-23
 
 - Tipe `RESTORE_REVERSAL`: event restore reversal menggunakan type khusus agar duplikasi terdeteksi.

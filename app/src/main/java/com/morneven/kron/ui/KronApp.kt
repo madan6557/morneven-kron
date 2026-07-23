@@ -816,9 +816,11 @@ private fun MainScaffold(
     }
     auditId?.let { id ->
         state.activities.firstOrNull { it.id == id }?.let { event ->
+            val reversalRestored = event.type == "REVERSAL" && state.activities.any { it.type == "RESTORE_REVERSAL" && it.relatedEventId == event.relatedEventId }
             AuditDialog(
                 event = event,
                 state = state,
+                reversalRestored = reversalRestored,
                 onDismiss = { auditId = null },
                 onGalleryPick = { eventId ->
                     receiptTargetEventId = eventId

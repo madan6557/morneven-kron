@@ -833,6 +833,7 @@ fun AuditDialog(
     onRevert: (String, String) -> Unit,
     onCorrect: (String, String, String, String) -> Unit,
     onRestoreReversal: ((String) -> Unit)? = null,
+    reversalRestored: Boolean = false,
 ) {
     var reason by remember { mutableStateOf("") }
     var correctionMode by remember { mutableStateOf(false) }
@@ -901,8 +902,7 @@ fun AuditDialog(
         if (lifecycleEvent) Text("Event lifecycle bersifat read-only. Gunakan tab Arsip untuk memulihkan atau mengarsipkan kembali.", color = MaterialTheme.colorScheme.tertiary)
         else if (event.reversedByEventId != null) Text("Event sudah dibatalkan dengan reversal", color = MaterialTheme.colorScheme.error)
         else if (event.type == "REVERSAL" && onRestoreReversal != null && event.relatedEventId != null) {
-            val alreadyRestored = state.activities.any { it.type == "RESTORE_REVERSAL" && it.relatedEventId == event.relatedEventId }
-            if (alreadyRestored) {
+            if (reversalRestored) {
                 Text("Event sudah dipulihkan", color = MaterialTheme.colorScheme.error)
             } else {
                 var remainingMillis by remember { mutableLongStateOf(0L) }
