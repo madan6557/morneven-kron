@@ -25,6 +25,7 @@ object LedgerType {
     const val RESTORE = "RESTORE"
     const val ATTACH_EVIDENCE = "ATTACH_EVIDENCE"
     const val CORRECTION = "CORRECTION"
+    const val RESTORE_REVERSAL = "RESTORE_REVERSAL"
     const val EVIDENCE_KEY_ROTATION = "EVIDENCE_KEY_ROTATION"
 }
 

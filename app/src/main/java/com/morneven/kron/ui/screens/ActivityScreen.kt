@@ -188,7 +188,7 @@ private fun ActivityCard(event: ActivityRow, valuesVisible: Boolean, onEvent: (S
     val impact = event.primaryImpact()
     val money = displayMoney(impact, valuesVisible)
     val reversed = event.reversedByEventId != null
-    val auditOnly = reversed || event.type in setOf("ARCHIVE", "RESTORE", "REVERSAL")
+    val auditOnly = reversed || event.type in setOf("ARCHIVE", "RESTORE", "REVERSAL", "RESTORE_REVERSAL")
     HudCard(
         modifier = Modifier
             .fillMaxWidth()
@@ -240,7 +240,7 @@ private fun ActivityStatus(event: ActivityRow) {
     val label = when {
         event.reversedByEventId != null -> "DIBATALKAN"
         event.type == "ARCHIVE" -> "ARSIP"
-        event.type == "RESTORE" -> "DIPULIHKAN"
+        event.type == "RESTORE" || event.type == "RESTORE_REVERSAL" -> "DIPULIHKAN"
         event.source == "SYSTEM" -> "SISTEM"
         event.source == "AUTOMATION" || event.type == "AUTOMATION" -> "OTOMATIS"
         else -> "TERCATAT"
@@ -304,7 +304,7 @@ private fun ActivityRow.matches(filter: ActivityFilter): Boolean = when (filter)
     ActivityFilter.BUDGET -> type in setOf("PORTFOLIO_BOOKING", "REALLOCATION", "OVERBUDGET_COVERAGE", "RELEASE", "ROLLOVER", "CORRECTION")
     ActivityFilter.AUTOMATIC -> type == "AUTOMATION" || source == "AUTOMATION"
     ActivityFilter.RESOLUTION -> type in setOf("REALLOCATION", "OVERBUDGET_COVERAGE")
-    ActivityFilter.SYSTEM -> source == "SYSTEM" || type in setOf("REVERSAL", "ARCHIVE", "RESTORE")
+    ActivityFilter.SYSTEM -> source == "SYSTEM" || type in setOf("REVERSAL", "ARCHIVE", "RESTORE", "RESTORE_REVERSAL")
     ActivityFilter.ALL -> true
 }
 
@@ -340,6 +340,7 @@ private fun eventTypeLabel(type: String): String = when (type) {
     "REVERSAL" -> "Reversal"
     "ARCHIVE" -> "Arsip"
     "RESTORE" -> "Pemulihan"
+    "RESTORE_REVERSAL" -> "Pemulihan reversal"
     "CORRECTION" -> "Koreksi jurnal"
     else -> type.replace('_', ' ').lowercase().replaceFirstChar { it.titlecase() }
 }

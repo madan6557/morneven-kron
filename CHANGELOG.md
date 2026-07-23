@@ -16,6 +16,13 @@
 - UI hanya menampilkan `KRON 1.5.0` tanpa label Full Release atau LTS.
 - Kontrak SQLCipher passphrase KRON 1.4.7 dipertahankan tanpa rekey. Raw-key 1.4.x tetap hanya menjadi mode baca historis.
 
+## 1.5.13 - 2026-07-23
+
+- Tipe `RESTORE_REVERSAL`: event restore reversal menggunakan type khusus agar duplikasi terdeteksi.
+- Cegah duplikasi restore: DAO query `isEventRestored`, UI disabled + "Event sudah dipulihkan" jika sudah direstore.
+- AuditDialog: `RESTORE_REVERSAL` masuk `lifecycleEvent` (read-only).
+- ActivityScreen: badge DIPULIHKAN, filter SYSTEM, auditOnly untuk `RESTORE_REVERSAL`.
+
 ## 1.5.12 - 2026-07-23
 
 - Pindah tombol "Pulihkan transaksi" ke log Audit bertipe REVERSAL (bukan event yang dibatalkan).

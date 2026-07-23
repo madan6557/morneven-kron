@@ -198,9 +198,9 @@ class LedgerPostingEngine @Inject constructor(
         if (event.type == LedgerType.OPENING_BALANCE) {
             return LedgerAccountEntity("equity:opening", "3000", "Modal awal", LedgerAccountKind.EQUITY)
         }
-        val income = event.type == LedgerType.INCOME || (event.type == LedgerType.AUTOMATION && cashAmount > 0)
+        val income = event.type == LedgerType.INCOME || (event.type == LedgerType.AUTOMATION && cashAmount > 0) || (event.type == LedgerType.RESTORE_REVERSAL && cashAmount > 0)
         val expense = event.type in setOf(LedgerType.EXPENSE, LedgerType.UNEXPECTED_EXPENSE) ||
-            (event.type == LedgerType.AUTOMATION && cashAmount < 0)
+            (event.type == LedgerType.AUTOMATION && cashAmount < 0) || (event.type == LedgerType.RESTORE_REVERSAL && cashAmount < 0)
         return when {
             income && categoryId != null -> LedgerAccountEntity(
                 "income:category:$categoryId", "4${categoryId.toString().padStart(6, '0')}",

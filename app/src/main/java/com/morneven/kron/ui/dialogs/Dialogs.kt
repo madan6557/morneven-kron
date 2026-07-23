@@ -838,7 +838,7 @@ fun AuditDialog(
     var correctionMode by remember { mutableStateOf(false) }
     var correctedTitle by remember(event.id) { mutableStateOf(event.title) }
     var correctedNote by remember(event.id) { mutableStateOf(event.note) }
-    val lifecycleEvent = event.type in setOf("ARCHIVE", "RESTORE")
+    val lifecycleEvent = event.type in setOf("ARCHIVE", "RESTORE", "RESTORE_REVERSAL")
     val receipts = state.receipts.filter { it.eventId == event.id }
     val actionEnabled = !lifecycleEvent && event.reversedByEventId == null && event.type != "REVERSAL" &&
         reason.isNotBlank() && (!correctionMode || correctedTitle.isNotBlank())
@@ -901,27 +901,32 @@ fun AuditDialog(
         if (lifecycleEvent) Text("Event lifecycle bersifat read-only. Gunakan tab Arsip untuk memulihkan atau mengarsipkan kembali.", color = MaterialTheme.colorScheme.tertiary)
         else if (event.reversedByEventId != null) Text("Event sudah dibatalkan dengan reversal", color = MaterialTheme.colorScheme.error)
         else if (event.type == "REVERSAL" && onRestoreReversal != null && event.relatedEventId != null) {
-            var remainingMillis by remember { mutableLongStateOf(0L) }
-            LaunchedEffect(event.id) {
-                while (true) {
-                    remainingMillis = 7L * 24 * 60 * 60 * 1000 - (System.currentTimeMillis() - event.createdAt)
-                    if (remainingMillis <= 0L) break
-                    delay(60_000L)
+            val alreadyRestored = state.activities.any { it.type == "RESTORE_REVERSAL" && it.relatedEventId == event.relatedEventId }
+            if (alreadyRestored) {
+                Text("Event sudah dipulihkan", color = MaterialTheme.colorScheme.error)
+            } else {
+                var remainingMillis by remember { mutableLongStateOf(0L) }
+                LaunchedEffect(event.id) {
+                    while (true) {
+                        remainingMillis = 7L * 24 * 60 * 60 * 1000 - (System.currentTimeMillis() - event.createdAt)
+                        if (remainingMillis <= 0L) break
+                        delay(60_000L)
+                    }
                 }
+                val remainingText = when {
+                    remainingMillis <= 0L -> "Periode pemulihan telah berakhir"
+                    remainingMillis >= 2 * 24 * 60 * 60 * 1000L -> "${remainingMillis / (24 * 60 * 60 * 1000L)} hari tersisa"
+                    remainingMillis >= 24 * 60 * 60 * 1000L -> "1 hari ${remainingMillis % (24 * 60 * 60 * 1000L) / (60 * 60 * 1000L)} jam tersisa"
+                    remainingMillis >= 60 * 60 * 1000L -> "${remainingMillis / (60 * 60 * 1000L)} jam ${remainingMillis % (60 * 60 * 1000L) / (60 * 1000L)} menit tersisa"
+                    else -> "${remainingMillis / (60 * 1000L)} menit tersisa"
+                }
+                OutlinedButton(
+                    onClick = { onRestoreReversal(event.relatedEventId) },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = remainingMillis > 0L,
+                ) { Text("Pulihkan transaksi") }
+                Text(remainingText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            val remainingText = when {
-                remainingMillis <= 0L -> "Periode pemulihan telah berakhir"
-                remainingMillis >= 2 * 24 * 60 * 60 * 1000L -> "${remainingMillis / (24 * 60 * 60 * 1000L)} hari tersisa"
-                remainingMillis >= 24 * 60 * 60 * 1000L -> "1 hari ${remainingMillis % (24 * 60 * 60 * 1000L) / (60 * 60 * 1000L)} jam tersisa"
-                remainingMillis >= 60 * 60 * 1000L -> "${remainingMillis / (60 * 60 * 1000L)} jam ${remainingMillis % (60 * 60 * 1000L) / (60 * 1000L)} menit tersisa"
-                else -> "${remainingMillis / (60 * 1000L)} menit tersisa"
-            }
-            OutlinedButton(
-                onClick = { onRestoreReversal(event.relatedEventId) },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = remainingMillis > 0L,
-            ) { Text("Pulihkan transaksi") }
-            Text(remainingText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         else {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

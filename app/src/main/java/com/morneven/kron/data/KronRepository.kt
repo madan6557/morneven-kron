@@ -780,17 +780,21 @@ class KronRepository @Inject constructor(
         require(dao.isEventReversed(reversedEventId)) { "Event belum dibalik" }
         require(original.type != LedgerType.REVERSAL) { "Reversal tidak dapat dipulihkan" }
         require(original.type !in setOf(LedgerType.ARCHIVE, LedgerType.RESTORE)) { "Gunakan tindakan Pulihkan atau Arsipkan dari halaman terkait" }
+        require(!dao.isEventRestored(reversedEventId)) { "Event sudah dipulihkan sebelumnya" }
         val reversalEvent = requireNotNull(dao.reversalEventForEvent(reversedEventId)) { "Event reversal tidak ditemukan" }
         val sevenDays = 7L * 24 * 60 * 60 * 1000
         require(System.currentTimeMillis() - reversalEvent.createdAt <= sevenDays) { "Periode pemulihan 7 hari telah berakhir" }
         val restoreId = UUID.randomUUID().toString()
         dao.insertEvent(
-            original.copy(
+            ActivityEventEntity(
                 id = restoreId,
+                type = LedgerType.RESTORE_REVERSAL,
                 title = "Dipulihkan: ${original.title}",
-                createdAt = System.currentTimeMillis(),
+                note = original.note,
+                source = "USER",
+                effectiveEpochDay = LocalDate.now().toEpochDay(),
                 relatedEventId = reversedEventId,
-                reversedByEventId = null,
+                accountId = original.accountId,
             ),
         )
         val cash = dao.cashLinesForEvent(reversedEventId)
