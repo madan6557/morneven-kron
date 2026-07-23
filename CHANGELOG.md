@@ -16,10 +16,9 @@
 - UI hanya menampilkan `KRON 1.5.0` tanpa label Full Release atau LTS.
 - Kontrak SQLCipher passphrase KRON 1.4.7 dipertahankan tanpa rekey. Raw-key 1.4.x tetap hanya menjadi mode baca historis.
 
-## 1.5.9 - 2026-07-23
+## 1.5.10 - 2026-07-23
 
-- Fix: CameraX tertimpa dialog form transaksi — render CameraCaptureScreen di dalam window Dialog terpisah, z-index paling atas.
-- Fix: Ganti CameraX dengan system camera intent (TakePicture) gagal di perangkat — kembali ke CameraX dengan fix z-index via Dialog window.
+- Fix: CameraX tertimpa dialog form transaksi — render CameraCaptureScreen di window Dialog terpisah dengan `lifecycleOwner` eksplisit (activity).
 
 ## 1.5.8 - 2026-07-22
 
