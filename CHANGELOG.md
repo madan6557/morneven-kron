@@ -16,6 +16,10 @@
 - UI hanya menampilkan `KRON 1.5.0` tanpa label Full Release atau LTS.
 - Kontrak SQLCipher passphrase KRON 1.4.7 dipertahankan tanpa rekey. Raw-key 1.4.x tetap hanya menjadi mode baca historis.
 
+## 1.5.18 - 2026-07-23
+
+- Fix: CameraCaptureScreen bocor thread executor — tambah DisposableEffect untuk shutdown executor saat komposisi dibuang.
+
 ## 1.5.17 - 2026-07-23
 
 - Backup tidak lagi gagal jika ada file lampiran yang hilang — lampiran tersebut dilewati.
