@@ -19,6 +19,7 @@
 - Update `CHANGELOG.md` and archive the APK, SHA-256 checksum, Room schemas, R8 mapping, commit, and Git tag.
 - Do not mark a release complete until migration tests, backup round trips, financial invariants, lint, release build, signature verification, and install-over-previous smoke tests pass.
 - A release that cannot prove compatibility with the previous production APK is blocked.
+- Release signing is automatic: `assembleRelease` signs the APK via the Gradle signing config (`kron-release.jks`). No manual `jarsigner` step needed. The signed APK is at `app/build/outputs/apk/release/KRON-<version>.apk`.
 
 ## Encryption key continuity and data-loss prevention
 
