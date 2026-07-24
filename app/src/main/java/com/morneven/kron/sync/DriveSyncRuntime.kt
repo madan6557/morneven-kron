@@ -96,8 +96,17 @@ class DriveSyncRuntime internal constructor(
             return DriveConnectResult.Failed("Konfigurasi OAuth Drive belum tersedia", retryable = false)
         }
         val account = GoogleAccountIdentity(email, email, null)
+        Log.d("KRON_SWITCH", "connectWithAccountEmail: start email=$email")
         return try {
-            passphraseOperationMutex.withLock { secretStore.stage(passphrase) }
+            passphraseOperationMutex.withLock {
+                val hadStored = secretStore.isStored() || secretStore.hasStaged()
+                Log.d("KRON_SWITCH", "connectWithAccountEmail: clear stored=$hadStored")
+                if (hadStored) {
+                    secretStore.clear()
+                }
+                secretStore.stage(passphrase)
+                Log.d("KRON_SWITCH", "connectWithAccountEmail: staged")
+            }
             val authResult = try {
                 (authorization as? AuthorizationClientDriveSession)?.authorizeAccount(account, interactive = true)
                     ?: throw IllegalStateException("Authorization session tidak mendukung authorizeAccount")
@@ -119,10 +128,14 @@ class DriveSyncRuntime internal constructor(
                 )
             }
             val result = authorization.acceptConnectionResult(account, authResult)
+            Log.d("KRON_SWITCH", "connectWithAccountEmail: authResult=$authResult result=$result")
             when (result) {
-                is DriveConnectResult.Connected -> factory.activateAfterConnection()
+                is DriveConnectResult.Connected -> {
+                    factory.updateSyncAccount(account)
+                    factory.activateAfterConnection()
+                }
                 is DriveConnectResult.Failed -> discardUncommittedPassphrase()
-                is DriveConnectResult.UserActionRequired -> discardUncommittedPassphrase()
+                is DriveConnectResult.UserActionRequired -> Unit
             }
             result
         } catch (cancelled: CancellationException) {
@@ -149,6 +162,36 @@ class DriveSyncRuntime internal constructor(
         }
     }
 
+    /**
+     * Switch to a different Google account without clearing the stored passphrase.
+     * The user picks a new account; authorization is re-established for it.
+     * The passphrase on disk is preserved so no re-entry is needed.
+     */
+    suspend fun switchAccount(newEmail: String): DriveConnectResult {
+        if (!BuildConfig.DRIVE_SYNC_CONFIGURED) {
+            return DriveConnectResult.Failed("Konfigurasi OAuth Drive belum tersedia", retryable = false)
+        }
+        val account = GoogleAccountIdentity(newEmail, newEmail, null)
+        val authResult = try {
+            (authorization as? AuthorizationClientDriveSession)?.authorizeAccount(account, interactive = true)
+                ?: return DriveConnectResult.Failed("Authorization session tidak mendukung", retryable = false)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return DriveConnectResult.Failed("Akun Google tidak dapat dihubungkan", retryable = true)
+        }
+        val result = authorization.acceptConnectionResult(account, authResult)
+        when (result) {
+            is DriveConnectResult.Connected -> {
+                factory.updateSyncAccount(account)
+                factory.activateAfterConnection()
+            }
+            is DriveConnectResult.Failed -> Unit
+            is DriveConnectResult.UserActionRequired -> Unit
+        }
+        return result
+    }
+
     fun authorizationRequest(resolutionId: String): IntentSenderRequest =
         authorizationBridge.intentSenderRequest(resolutionId)
 
@@ -161,7 +204,11 @@ class DriveSyncRuntime internal constructor(
         val bridgeResult = authorizationBridge.completeResolution(resolutionId, resultCode, data)
         val result = authorization.acceptConnectionResult(account, bridgeResult)
         when (result) {
-            is DriveConnectResult.Connected -> factory.activateAfterConnection()
+            is DriveConnectResult.Connected -> {
+                val connectedAccount = result.account
+                factory.updateSyncAccount(connectedAccount)
+                factory.activateAfterConnection()
+            }
             is DriveConnectResult.Failed -> {
                 discardUncommittedPassphrase()
                 factory.deactivate()
@@ -226,7 +273,8 @@ class DriveSyncRuntime internal constructor(
         if (
             secretStore.hasStaged() &&
             resolution != ConflictResolution.USE_THIS_DEVICE &&
-            conflict.remote != null
+            conflict.remote != null &&
+            conflict.reason != SyncConflictReason.ACCOUNT_CHANGED
         ) {
             val validation = finalizeStagedPassphrase(
                 result = coordinator.validatePassphrase(conflict.remote),
@@ -235,6 +283,20 @@ class DriveSyncRuntime internal constructor(
             if (validation != SyncRunResult.NoChanges) return validation
         }
         finalizeStagedPassphrase(coordinator.resolveConflict(conflict, resolution))
+    }
+
+    suspend fun downloadAndApplyLatest(): SyncRunResult = passphraseOperationMutex.withLock {
+        Log.d("KRON_SWITCH", "downloadAndApplyLatest: start")
+        factory.clearRestartRequired()
+        factory.restartResult()?.let { Log.d("KRON_SWITCH", "downloadAndApplyLatest: restartResult"); return it }
+        factory.networkBlockedResult()?.let { Log.d("KRON_SWITCH", "downloadAndApplyLatest: blocked"); return it }
+        if (!secretStore.isStored() && !secretStore.hasStaged()) {
+            Log.d("KRON_SWITCH", "downloadAndApplyLatest: no passphrase")
+            return SyncRunResult.PassphraseRequired
+        }
+        val result = coordinator.downloadLatestSnapshot()
+        Log.d("KRON_SWITCH", "downloadAndApplyLatest: coordinator result=$result")
+        finalizeStagedPassphrase(result).also { Log.d("KRON_SWITCH", "downloadAndApplyLatest: final result=$it") }
     }
 
     suspend fun suspendForRestart() {
@@ -247,6 +309,27 @@ class DriveSyncRuntime internal constructor(
         } finally {
             secretStore.clear()
             factory.deactivate()
+        }
+    }
+
+    suspend fun isPassphraseStored(): Boolean = secretStore.isStored()
+
+    suspend fun updateSyncAccount(account: GoogleAccountIdentity) {
+        factory.updateSyncAccount(account)
+    }
+
+    suspend fun clearRestartRequired() {
+        factory.clearRestartRequired()
+    }
+
+    suspend fun startAccountMigration(account: GoogleAccountIdentity) {
+        passphraseOperationMutex.withLock {
+            try {
+                secretStore.commitStaged()
+                factory.installAccountMigration(account)
+            } catch (e: Exception) {
+                // Log but don't fail the UI flow
+            }
         }
     }
 
@@ -290,9 +373,14 @@ class DriveSyncRuntime internal constructor(
             }
             SyncRunResult.Disabled,
             SyncRunResult.FreeOnlyBlocked,
-            is SyncRunResult.RestartRequired,
             -> {
                 secretStore.discardStaged()
+                verifiedResult
+            }
+            is SyncRunResult.RestartRequired -> {
+                if (!secretStore.commitStaged()) {
+                    secretStore.discardStaged()
+                }
                 verifiedResult
             }
             SyncRunResult.AuthorizationRequired,
@@ -381,6 +469,14 @@ class DriveSyncRuntimeFactory @Inject constructor(
         return installBackgroundIfReady(syncImmediately = false)
     }
 
+    internal suspend fun clearRestartRequired() {
+        stateStore.update { it.copy(status = SyncStatus.IDLE, lastError = null) }
+    }
+
+    internal suspend fun updateSyncAccount(account: GoogleAccountIdentity) {
+        stateStore.update { it.copy(accountSubject = account.subjectId, accountEmail = account.email) }
+    }
+
     suspend fun installBackgroundIfReady(syncImmediately: Boolean = false): Boolean = lifecycleMutex.withLock {
         if (!isReady()) {
             DriveSyncScheduler.cancel(context)
@@ -461,6 +557,16 @@ class DriveSyncRuntimeFactory @Inject constructor(
         currentAppVersionCode = BuildConfig.VERSION_CODE,
         syncMutex = processSyncMutex,
     )
+
+    internal suspend fun installAccountMigration(account: GoogleAccountIdentity): SyncRunResult {
+        // After authorization is established, set up background sync for the new account
+        return try {
+            installBackgroundIfReady(syncImmediately = true)
+            SyncRunResult.NoChanges
+        } catch (e: Exception) {
+            SyncRunResult.Error("Migration account: ${e.message}", retryable = false)
+        }
+    }
 
     private data class SyncWatch(
         val localGeneration: Long,

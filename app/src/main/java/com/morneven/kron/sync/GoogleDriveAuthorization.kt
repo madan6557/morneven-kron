@@ -131,13 +131,9 @@ class AuthorizationClientDriveSession(
         val account = accountStore.read()
         val token = cachedGrant?.accessToken
         cachedGrant = null
-        var failure: Throwable? = null
-        if (token != null) runCatching { authorizationClient.clearToken(token) }.onFailure { failure = it }
-        if (account != null) runCatching { authorizationClient.revokeAccess(account) }.onFailure {
-            if (failure == null) failure = it
-        }
+        if (token != null) runCatching { authorizationClient.clearToken(token) }
+        if (account != null) runCatching { authorizationClient.revokeAccess(account) }
         accountStore.write(null)
-        failure?.let { throw it }
     }
 
     private suspend fun authorize(

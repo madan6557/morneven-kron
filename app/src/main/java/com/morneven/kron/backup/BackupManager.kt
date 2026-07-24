@@ -252,9 +252,6 @@ class BackupManager @Inject constructor(
             databaseEncryption.prepareValidatedRestoreKey()
 
             val pending = File(context.filesDir, PENDING_DIRECTORY)
-            require(!File(pending, COMMITTED_MARKER).exists()) {
-                "Buka ulang KRON sekali lagi sebelum menyiapkan pemulihan berikutnya"
-            }
             deleteScopedDirectory(pending, context.filesDir)
             val pendingReceipts = File(pending, "receipts").apply { mkdirs() }
             installReceiptPayloads(validationFile, extracted.attachments, pendingReceipts)
@@ -920,12 +917,7 @@ class BackupManager @Inject constructor(
                 return
             }
             val metadata = captureSwapMetadata(paths)
-            val staleOldArtifact = listOf(paths.oldDatabase, paths.oldWal, paths.oldShm, paths.oldReceipts)
-                .any(File::exists)
-            if (staleOldArtifact) {
-                deleteChildRecursively(pending, context.filesDir)
-                return
-            }
+            listOf(paths.oldDatabase, paths.oldWal, paths.oldShm, paths.oldReceipts).forEach { it.delete() }
 
             runCatching {
                 deletePath(paths.newDatabase)
@@ -967,6 +959,9 @@ class BackupManager @Inject constructor(
                         restoreError.addSuppressed(rollbackError)
                         throw IllegalStateException("Restore gagal dan data lama tidak dapat dipulihkan", restoreError)
                     }
+            }
+            if (paths.committedMarker.exists()) {
+                finalizeCommittedRestore(paths)
             }
         }
 

@@ -127,10 +127,12 @@ import com.morneven.kron.sync.DriveConnectResult
 import com.morneven.kron.sync.DriveSyncRuntime
 import com.morneven.kron.sync.GoogleAccountIdentity
 import com.morneven.kron.sync.SyncConflict
+import com.morneven.kron.sync.SyncConflictReason
 import com.morneven.kron.sync.SyncRunResult
 import com.morneven.kron.ui.theme.KronTheme
 import java.time.LocalDate
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.launch
 
 private enum class ActionDialog { INCOME, EXPENSE, TRANSFER, PORTFOLIO, RESOLVE, CHANNEL_TRANSFER, ACCOUNT }
@@ -335,6 +337,7 @@ private fun MainScaffold(
     }
     var launchedAuthorizationId by rememberSaveable { mutableStateOf<String?>(null) }
     var cloudConflict by remember { mutableStateOf<SyncConflict?>(null) }
+    var isAccountSwitching by remember { mutableStateOf(false) }
     var restartRequired by rememberSaveable { mutableStateOf(false) }
     var cloudWifiOnly by rememberSaveable(driveSyncRuntime) {
         mutableStateOf(driveSyncRuntime?.isWifiOnly() ?: false)
@@ -389,9 +392,15 @@ private fun MainScaffold(
     fun handleConnectResult(result: DriveConnectResult) {
         when (result) {
             is DriveConnectResult.Connected -> {
-                viewModel.showMessage("Terhubung ke ${result.account.email}")
                 driveSyncRuntime?.let { runtime ->
-                    scope.launch { handleSyncResult(runtime.syncNow()) }
+                    scope.launch {
+                        if (!isAccountSwitching) viewModel.showMessage("Terhubung ke ${result.account.email}")
+                        handleSyncResult(
+                            if (isAccountSwitching) runtime.downloadAndApplyLatest()
+                            else runtime.syncNow()
+                        )
+                        isAccountSwitching = false
+                    }
                 }
             }
             is DriveConnectResult.UserActionRequired -> {
@@ -511,6 +520,22 @@ private fun MainScaffold(
                 runtime.cancelAuthorization(pending.resolutionId)
                 viewModel.showMessage("Permintaan otorisasi Drive sudah tidak berlaku")
             }
+    }
+    val accountSwitchLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode != Activity.RESULT_OK || result.data == null) {
+            viewModel.showMessage("Pemilihan akun dibatalkan")
+            return@rememberLauncherForActivityResult
+        }
+        val email = result.data!!.getStringExtra(android.accounts.AccountManager.KEY_ACCOUNT_NAME)
+        val runtime = driveSyncRuntime
+        if (runtime == null) {
+            viewModel.showMessage("Konfigurasi OAuth Drive belum tersedia")
+        } else if (email.isNullOrBlank()) {
+            viewModel.showMessage("Akun tidak dipilih")
+        } else {
+            isAccountSwitching = true
+            scope.launch { handleConnectResult(runtime.switchAccount(email)) }
+        }
     }
     LaunchedEffect(state.message) {
         state.message?.let {
@@ -684,11 +709,8 @@ private fun MainScaffold(
                         driveSyncRuntime?.let { runtime -> scope.launch { runtime.disconnect(); viewModel.showMessage("Google Drive diputuskan") } }
                     },
                     onChangeCloudAccount = {
-                        driveSyncRuntime?.let { runtime ->
-                            scope.launch {
-                                runtime.disconnect()
-                                passwordMode = "DRIVE_CONNECT"
-                            }
+                        driveSyncRuntime?.let {
+                            passwordMode = "DRIVE_CONNECT"
                         }
                     },
                     onWifiOnly = { enabled ->
@@ -900,6 +922,7 @@ private fun MainScaffold(
             // Prepare an account-picker launcher and a temporary passphrase holder
             var stagedPassphraseForManualPick by remember { mutableStateOf<CharArray?>(null) }
             val accountPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+                passwordMode = null
                 if (result.resultCode != Activity.RESULT_OK || result.data == null) {
                     stagedPassphraseForManualPick?.fill('\u0000')
                     stagedPassphraseForManualPick = null
@@ -920,6 +943,8 @@ private fun MainScaffold(
                     pass.fill('\u0000')
                     viewModel.showMessage("Akun tidak dipilih")
                 } else {
+                    isAccountSwitching = true
+                    viewModel.showMessage("Menyinkronkan dengan akun baru...")
                     scope.launch {
                         handleConnectResult(runtime.connectWithAccountEmail(email, pass))
                     }
@@ -1058,6 +1083,9 @@ private fun MainScaffold(
             },
             confirmButton = {
                 Button(onClick = {
+                    runBlocking {
+                        driveSyncRuntime?.clearRestartRequired()
+                    }
                     activity.finishAffinity()
                     Process.killProcess(Process.myPid())
                 }) { Text("Tutup KRON") }

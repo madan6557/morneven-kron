@@ -1,5 +1,6 @@
 package com.morneven.kron.sync
 
+import android.util.Log
 import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.TimeoutCancellationException
@@ -310,8 +311,10 @@ class DriveSyncCoordinator(
                 )
                 ConflictResolution.USE_DRIVE -> {
                     requireNotNull(expectedRemote) { "Tidak ada snapshot Drive yang dapat dipulihkan" }
-                    val recovery = uploadRecovery(tokenResult, local.describe(), state.lastSnapshotId)
-                    if (recovery !is SyncRunResult.Synchronized) return recovery
+                    if (conflict.reason != SyncConflictReason.ACCOUNT_CHANGED) {
+                        val recovery = uploadRecovery(tokenResult, local.describe(), state.lastSnapshotId)
+                        if (recovery !is SyncRunResult.Synchronized) return recovery
+                    }
                     downloadAndApply(tokenResult, expectedRemote)
                 }
             }
@@ -333,10 +336,49 @@ class DriveSyncCoordinator(
             stateStore.update {
                 it.copy(
                     status = SyncStatus.DISCONNECTED,
+                    accountSubject = null,
+                    accountEmail = null,
                     conflictRemoteFileId = null,
                     lastError = null,
                 )
             }
+        }
+    }
+
+    suspend fun clearSyncAccountState() = syncMutex.withLock {
+        stateStore.update {
+            it.copy(
+                accountSubject = null,
+                accountEmail = null,
+                conflictRemoteFileId = null,
+            )
+        }
+    }
+
+    suspend fun downloadLatestSnapshot(): SyncRunResult = syncMutex.withLock {
+        val state = stateStore.read()
+        Log.d("KRON_SWITCH", "downloadLatestSnapshot: status=${state.status}")
+        if (state.status == SyncStatus.RESTART_REQUIRED) {
+            Log.d("KRON_SWITCH", "downloadLatestSnapshot: RESTART_REQUIRED")
+            return SyncRunResult.RestartRequired(state.lastSnapshotId ?: "pending-restore")
+        }
+        if (state.disabledDueToBilling) return SyncRunResult.FreeOnlyBlocked
+        stateStore.update { it.copy(status = SyncStatus.SYNCING, lastError = null) }
+        val tokenResult = authorization.accessToken(interactive = false)
+        Log.d("KRON_SWITCH", "downloadLatestSnapshot: tokenResult=$tokenResult")
+        if (tokenResult !is DriveAccessTokenResult.Granted) return handleTokenFailure(tokenResult)
+        try {
+            val remoteFiles = drive.listSnapshots(tokenResult.accessToken)
+            Log.d("KRON_SWITCH", "downloadLatestSnapshot: snapshotCount=${remoteFiles.size}")
+            val latest = remoteFiles
+                .filter { it.manifest.kind == SnapshotKind.ACTIVE }
+                .maxWithOrNull(compareBy<RemoteDriveSnapshot>({ it.manifest.generation }, { it.createdAt }))
+            Log.d("KRON_SWITCH", "downloadLatestSnapshot: latest=${latest?.manifest?.snapshotId}")
+            if (latest == null) return SyncRunResult.NoData
+            downloadAndApply(tokenResult, latest)
+        } catch (error: Throwable) {
+            Log.d("KRON_SWITCH", "downloadLatestSnapshot: error=${error.message}", error)
+            handleFailure(error)
         }
     }
 
