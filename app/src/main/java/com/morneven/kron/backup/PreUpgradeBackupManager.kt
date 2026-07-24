@@ -36,10 +36,8 @@ class PreUpgradeBackupManager(private val context: Context) {
     fun export(uri: Uri, password: CharArray) {
         require(password.size >= MIN_PASSWORD_LENGTH) { "Password backup minimal 12 karakter" }
         val workspace = File(context.cacheDir, "pre-upgrade-${UUID.randomUUID()}")
-        var workspaceReady = false
+        require(workspace.mkdirs()) { "Ruang kerja backup tidak dapat dibuat" }
         try {
-            require(workspace.mkdirs()) { "Ruang kerja backup tidak dapat dibuat" }
-            workspaceReady = true
             val portable = File(workspace, DATABASE_ENTRY)
             val primary = context.getDatabasePath(KronDatabase.DATABASE_NAME)
             encryption.exportPlaintext(primary, portable)
@@ -54,14 +52,12 @@ class PreUpgradeBackupManager(private val context: Context) {
                 staged.inputStream().buffered().use { source -> source.copyTo(destination) }
                 destination.flush()
             }
-            val stagedSha = sha256(staged)
-            val stagedLength = staged.length()
             val destinationDigest = MessageDigest.getInstance("SHA-256")
             var destinationBytes = 0L
             val verificationInput = context.contentResolver.openInputStream(uri)
                 ?: error("Backup tujuan tidak dapat diperiksa ulang")
-            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
             verificationInput.buffered().use { input ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                 while (true) {
                     val read = input.read(buffer)
                     if (read < 0) break
@@ -70,11 +66,12 @@ class PreUpgradeBackupManager(private val context: Context) {
                     destinationDigest.update(buffer, 0, read)
                 }
             }
-            require(destinationBytes == stagedLength) { "Ukuran backup tujuan tidak cocok" }
-            require(destinationDigest.digest().joinToString("") { "%02x".format(it) } == stagedSha) { "Checksum backup tujuan tidak cocok" }
+            require(destinationBytes == staged.length()) { "Ukuran backup tujuan tidak cocok" }
+            val destinationSha = destinationDigest.digest().joinToString("") { "%02x".format(it) }
+            require(destinationSha == sha256(staged)) { "Checksum backup tujuan tidak cocok" }
         } finally {
             password.fill('\u0000')
-            if (workspaceReady) workspace.deleteRecursively()
+            workspace.deleteRecursively()
         }
     }
 
@@ -94,19 +91,11 @@ class PreUpgradeBackupManager(private val context: Context) {
                 "SELECT storageId, localPath, encryptionVersion FROM receipts ORDER BY storageId",
                 null,
             ).use { cursor ->
-                    buildList {
+                buildList {
                     while (cursor.moveToNext()) {
                         val storageId = cursor.getString(0)
                         require(STORAGE_ID.matches(storageId)) { "Storage ID lampiran tidak valid" }
-                        val localPath = cursor.getString(1)
-                        val source = File(localPath).canonicalFile
-                        val privateRoots = listOf(
-                            File(context.filesDir, "receipts"),
-                            File(context.noBackupFilesDir, "receipts"),
-                        )
-                        require(privateRoots.any { root -> source.toPath().startsWith(root.canonicalFile.toPath()) }) {
-                            "Path lampiran $storageId tidak aman"
-                        }
+                        val source = File(cursor.getString(1))
                         require(source.isFile) { "Lampiran $storageId tidak ditemukan" }
                         val target = File(workspace, "attachment-$storageId.bin")
                         if (cursor.getInt(2) == EncryptedAttachmentStore.ENCRYPTION_VERSION) {
@@ -153,23 +142,21 @@ class PreUpgradeBackupManager(private val context: Context) {
             listOf("CASH", "EBUDGET").forEach { channel ->
                 val channelCash = scalar(
                     opened,
-                    "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines WHERE fundingChannel=?",
-                    arrayOf(channel),
+                    "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines WHERE fundingChannel='$channel'",
                 )
                 val channelAvailable = scalar(
                     opened,
                     "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines " +
-                        "WHERE fundingChannel=? AND " +
+                        "WHERE fundingChannel='$channel' AND " +
                         "(bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)",
-                    arrayOf(channel),
                 )
                 require(channelCash == channelAvailable) { "Invariant kanal $channel tidak seimbang" }
             }
         }
     }
 
-    private fun scalar(database: android.database.sqlite.SQLiteDatabase, sql: String, args: Array<String>? = null): Long =
-        database.rawQuery(sql, args).use { cursor ->
+    private fun scalar(database: android.database.sqlite.SQLiteDatabase, sql: String): Long =
+        database.rawQuery(sql, null).use { cursor ->
             require(cursor.moveToFirst())
             cursor.getLong(0)
         }
@@ -194,7 +181,6 @@ class PreUpgradeBackupManager(private val context: Context) {
                 deriveKey(password, salt, PBKDF2_ITERATIONS),
                 GCMParameterSpec(GCM_TAG_BITS, nonce),
             )
-            cipher.updateAAD(MAGIC_V3)
             CipherOutputStream(header, cipher).use { encrypted ->
                 writePortablePackage(encrypted, database, attachments)
             }
@@ -259,7 +245,6 @@ class PreUpgradeBackupManager(private val context: Context) {
                     deriveKey(password, salt, iterations),
                     GCMParameterSpec(GCM_TAG_BITS, nonce),
                 )
-                cipher.updateAAD(MAGIC_V3)
                 extracted.outputStream().use { output ->
                     CipherInputStream(input, cipher).use { encrypted ->
                         encrypted.copyToLimited(output, MAX_PACKAGE_BYTES)

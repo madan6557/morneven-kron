@@ -78,7 +78,7 @@ class BackupManager @Inject constructor(
     private suspend fun writeEncryptedBackup(target: File, password: CharArray) {
         target.delete()
         val salt = ByteArray(SALT_BYTES).also(SecureRandom()::nextBytes)
-        val nonce = com.morneven.kron.security.generateNonce(NONCE_BYTES)
+        val nonce = ByteArray(NONCE_BYTES).also(SecureRandom()::nextBytes)
         FileOutputStream(target).buffered().use { rawOutput ->
             val data = DataOutputStream(rawOutput)
             data.write(MAGIC_V3)
@@ -91,7 +91,6 @@ class BackupManager @Inject constructor(
                 deriveKey(password, salt, PBKDF2_ITERATIONS),
                 GCMParameterSpec(GCM_TAG_BITS, nonce),
             )
-            cipher.updateAAD(MAGIC_V3)
             CipherOutputStream(data, cipher).use { encrypted ->
                 writePortableSnapshot(encrypted)
             }
@@ -107,7 +106,7 @@ class BackupManager @Inject constructor(
     }
 
     suspend fun createPortableSnapshotPayload(): ByteArray = withContext(Dispatchers.IO) {
-        snapshotOperationLock.withReadLock {
+        snapshotOperationLock.withLock {
             ByteArrayOutputStream().use { output ->
                 writePortableSnapshot(output)
                 require(output.size().toLong() <= MAX_SYNC_PAYLOAD_BYTES) { "Snapshot terlalu besar untuk sinkronisasi Drive" }
@@ -373,8 +372,8 @@ class BackupManager @Inject constructor(
                 val data = DataInputStream(raw)
                 val magic = data.readExact(MAGIC_V2.size)
                 when {
-                    magic.contentEquals(MAGIC_V3) -> decryptV2(data, password, target, MAGIC_V3)
-                    magic.contentEquals(MAGIC_V2) -> decryptV2(data, password, target, MAGIC_V2)
+                    magic.contentEquals(MAGIC_V3) -> decryptV2(data, password, target)
+                    magic.contentEquals(MAGIC_V2) -> decryptV2(data, password, target)
                     magic.contentEquals(MAGIC_V1) -> decryptV1(data, password, target)
                     else -> throw IllegalArgumentException("Format backup tidak dikenali")
                 }
@@ -386,7 +385,7 @@ class BackupManager @Inject constructor(
         }
     }
 
-    private fun decryptV2(data: DataInputStream, password: CharArray, target: File, headerMagic: ByteArray) {
+    private fun decryptV2(data: DataInputStream, password: CharArray, target: File) {
         require(password.size >= MIN_PASSWORD_LENGTH) { "Password backup v2 minimal 12 karakter" }
         val salt = data.readExact(SALT_BYTES)
         val nonce = data.readExact(NONCE_BYTES)
@@ -394,7 +393,6 @@ class BackupManager @Inject constructor(
         require(iterations in MIN_PBKDF2_ITERATIONS..MAX_PBKDF2_ITERATIONS) { "Parameter enkripsi backup tidak valid" }
         val cipher = Cipher.getInstance(AES_GCM)
         cipher.init(Cipher.DECRYPT_MODE, deriveKey(password, salt, iterations), GCMParameterSpec(GCM_TAG_BITS, nonce))
-        cipher.updateAAD(headerMagic)
         target.outputStream().buffered().use { output ->
             CipherInputStream(LimitedInputStream(data, MAX_ENCRYPTED_PACKAGE_BYTES), cipher).use { decrypted ->
                 decrypted.copyToWithLimit(output, MAX_PLAIN_PACKAGE_BYTES)
@@ -413,7 +411,6 @@ class BackupManager @Inject constructor(
             deriveKey(password, salt, LEGACY_PBKDF2_ITERATIONS),
             GCMParameterSpec(GCM_TAG_BITS, nonce),
         )
-        cipher.updateAAD(MAGIC_V1)
         target.outputStream().buffered().use { output ->
             CipherInputStream(ExactLengthInputStream(data, encryptedSize.toLong()), cipher).use { decrypted ->
                 decrypted.copyToWithLimit(output, MAX_PLAIN_PACKAGE_BYTES)
@@ -433,10 +430,8 @@ class BackupManager @Inject constructor(
             while (true) {
                 val entry = zip.nextEntry ?: break
                 val name = entry.name
-                val entryFile = File(workspace, name).canonicalFile
-                require(name.isNotBlank()) { "Nama file dalam backup tidak boleh kosong" }
-                require(entryFile.toPath().startsWith(workspace.canonicalFile.toPath())) {
-                    "Nama file dalam backup tidak aman: $name"
+                require(name.isNotBlank() && !name.contains('\\') && !name.startsWith('/') && !name.contains("../")) {
+                    "Nama file dalam backup tidak aman"
                 }
                 require(seen.add(name)) { "Backup memiliki file ganda" }
                 when {
@@ -629,19 +624,16 @@ class BackupManager @Inject constructor(
                 "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL",
             )
             require(cash == available) { "Invariant total aset backup tidak seimbang" }
-            val channelPairs = listOf(FundingChannel.CASH to "CASH", FundingChannel.EBUDGET to "EBUDGET")
-            channelPairs.forEach { (_, channelName) ->
+            listOf(FundingChannel.CASH, FundingChannel.EBUDGET).forEach { channel ->
                 val channelCash = scalar(
                     it,
-                    "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines WHERE fundingChannel=?",
-                    arrayOf(channelName),
+                    "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines WHERE fundingChannel='$channel'",
                 )
                 val channelAvailable = scalar(
                     it,
-                    "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE fundingChannel=? AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)",
-                    arrayOf(channelName),
+                    "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE fundingChannel='$channel' AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)",
                 )
-                require(channelCash == channelAvailable) { "Invariant kanal $channelName tidak seimbang" }
+                require(channelCash == channelAvailable) { "Invariant kanal $channel tidak seimbang" }
             }
             val accounts = it.rawQuery("SELECT id FROM accounts", null).use { cursor ->
                 buildList {
@@ -649,32 +641,27 @@ class BackupManager @Inject constructor(
                 }
             }
             accounts.forEach { accountId ->
-                val accountIdStr = accountId.toString()
                 val accountCash = scalar(
                     it,
-                    "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines WHERE accountId=?",
-                    arrayOf(accountIdStr),
+                    "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines WHERE accountId=$accountId",
                 )
                 val accountAvailable = scalar(
                     it,
-                    "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE accountId=? " +
+                    "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines WHERE accountId=$accountId " +
                         "AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)",
-                    arrayOf(accountIdStr),
                 )
                 require(accountCash == accountAvailable) { "Invariant akun tidak seimbang" }
-                channelPairs.forEach { (_, channelName) ->
+                listOf(FundingChannel.CASH, FundingChannel.EBUDGET).forEach { channel ->
                     val channelCash = scalar(
                         it,
                         "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines " +
-                            "WHERE accountId=? AND fundingChannel=?",
-                        arrayOf(accountIdStr, channelName),
+                            "WHERE accountId=$accountId AND fundingChannel='$channel'",
                     )
                     val channelAvailable = scalar(
                         it,
                         "SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines " +
-                            "WHERE accountId=? AND fundingChannel=? " +
+                            "WHERE accountId=$accountId AND fundingChannel='$channel' " +
                             "AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)",
-                        arrayOf(accountIdStr, channelName),
                     )
                     require(channelCash == channelAvailable) { "Invariant kanal akun tidak seimbang" }
                 }
@@ -682,7 +669,7 @@ class BackupManager @Inject constructor(
         }
     }
 
-    private fun scalar(database: SQLiteDatabase, sql: String, args: Array<String>? = null): Long = database.rawQuery(sql, args).use { cursor ->
+    private fun scalar(database: SQLiteDatabase, sql: String): Long = database.rawQuery(sql, null).use { cursor ->
         require(cursor.moveToFirst())
         cursor.getLong(0)
     }
@@ -700,21 +687,9 @@ class BackupManager @Inject constructor(
     }
 
     private fun isAppPrivate(file: File): Boolean {
-        val filesDir = context.filesDir.canonicalFile.toPath()
-        val noBackupDir = context.noBackupFilesDir.canonicalFile.toPath()
-        val absolutePath = file.absoluteFile.toPath().normalize()
-        if (!absolutePath.startsWith(filesDir) && !absolutePath.startsWith(noBackupDir)) return false
-        val canonicalPath = file.canonicalFile.toPath()
-        if (!canonicalPath.startsWith(filesDir) && !canonicalPath.startsWith(noBackupDir)) return false
-        var parent = file.absoluteFile.parentFile
-        while (parent != null) {
-            if (java.nio.file.Files.isSymbolicLink(parent.toPath())) {
-                val linkTarget = parent.canonicalFile.toPath()
-                if (!linkTarget.startsWith(filesDir) && !linkTarget.startsWith(noBackupDir)) return false
-            }
-            parent = parent.parentFile
-        }
-        return true
+        val path = file.canonicalFile.toPath()
+        return path.startsWith(context.filesDir.canonicalFile.toPath()) ||
+            path.startsWith(context.noBackupFilesDir.canonicalFile.toPath())
     }
 
     private fun ZipOutputStream.writeEntry(name: String, value: ByteArray) {

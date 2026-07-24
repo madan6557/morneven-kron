@@ -21,7 +21,6 @@ import java.time.LocalDate
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.math.abs
 
 @Singleton
 class LedgerPostingEngine @Inject constructor(
@@ -110,7 +109,6 @@ class LedgerPostingEngine @Inject constructor(
                 LedgerAccountEntity("expense:general", "5000", "Pengeluaran", LedgerAccountKind.EXPENSE),
                 LedgerAccountEntity("equity:opening", "3000", "Modal awal", LedgerAccountKind.EQUITY),
                 LedgerAccountEntity("clearing:legacy", "9999", "Legacy clearing", LedgerAccountKind.CLEARING),
-                LedgerAccountEntity("clearing:budget", "9998", "Budget clearing", LedgerAccountKind.CLEARING),
             ),
         )
         dao.allAccounts().forEach { account ->
@@ -123,26 +121,7 @@ class LedgerPostingEngine @Inject constructor(
     private suspend fun ensureLedgerLines(event: ActivityEventEntity) {
         if (dao.ledgerLinesForEvent(event.id).isNotEmpty()) return
         val cash = dao.cashLinesForEvent(event.id).filter { it.amount != 0L }
-        if (cash.isEmpty()) {
-            val budget = dao.budgetLinesForEvent(event.id).filter { it.amount != 0L }
-            if (budget.isNotEmpty()) {
-                val lines = budget.map { line ->
-                    LedgerLineEntity(
-                        eventId = event.id,
-                        ledgerAccountId = "clearing:budget",
-                        side = if (line.amount > 0) LedgerSide.DEBIT else LedgerSide.CREDIT,
-                        amount = safeAbs(line.amount),
-                        accountId = line.accountId,
-                        fundingChannel = line.fundingChannel,
-                        categoryId = null,
-                        correlationId = event.relatedEventId,
-                        legacyBackfill = false,
-                    )
-                }
-                dao.insertLedgerLines(lines)
-            }
-            return
-        }
+        if (cash.isEmpty()) return
         val lines = when (event.type) {
             LedgerType.TRANSFER, LedgerType.CHANNEL_TRANSFER -> cash.map {
                 assetLine(event, it.accountId, it.fundingChannel, it.amount)
@@ -174,9 +153,9 @@ class LedgerPostingEngine @Inject constructor(
             cash.forEach { cashLine ->
                 add(assetLine(event, cashLine.accountId, cashLine.fundingChannel, cashLine.amount, legacy))
                 val counterpartSide = if (cashLine.amount > 0) LedgerSide.CREDIT else LedgerSide.DEBIT
-                val expected = safeAbs(cashLine.amount)
+                val expected = kotlin.math.abs(cashLine.amount)
                 val matchingSplits = splits.filter { it.amount > 0 }
-                if (matchingSplits.isNotEmpty() && safeSumOf(matchingSplits.map { it.amount }) == expected) {
+                if (matchingSplits.isNotEmpty() && matchingSplits.sumOf { it.amount } == expected) {
                     matchingSplits.forEach { split ->
                         val account = counterpartAccount(event, cashLine.amount, split.categoryId, legacy)
                         dao.insertLedgerAccount(account)
@@ -214,34 +193,14 @@ class LedgerPostingEngine @Inject constructor(
         }
     }
 
-    private suspend fun counterpartAccount(event: ActivityEventEntity, cashAmount: Long, categoryId: Long?, legacy: Boolean): LedgerAccountEntity {
+    private fun counterpartAccount(event: ActivityEventEntity, cashAmount: Long, categoryId: Long?, legacy: Boolean): LedgerAccountEntity {
         if (legacy) return LedgerAccountEntity("clearing:legacy", "9999", "Legacy clearing", LedgerAccountKind.CLEARING)
         if (event.type == LedgerType.OPENING_BALANCE) {
             return LedgerAccountEntity("equity:opening", "3000", "Modal awal", LedgerAccountKind.EQUITY)
         }
-        if (event.type == LedgerType.RESTORE_REVERSAL) {
-            val originalId = event.relatedEventId
-            val originalEvent = originalId?.let { runCatching { dao.eventById(it) }.getOrNull() }
-            val originalType = originalEvent?.type
-            val income = originalType == LedgerType.INCOME
-            val expense = originalType in setOf(LedgerType.EXPENSE, LedgerType.UNEXPECTED_EXPENSE)
-            return when {
-                income && categoryId != null -> LedgerAccountEntity(
-                    "income:category:$categoryId", "4${categoryId.toString().padStart(6, '0')}",
-                    "Pemasukan kategori $categoryId", LedgerAccountKind.INCOME, categoryId = categoryId,
-                )
-                expense && categoryId != null -> LedgerAccountEntity(
-                    "expense:category:$categoryId", "5${categoryId.toString().padStart(6, '0')}",
-                    "Pengeluaran kategori $categoryId", LedgerAccountKind.EXPENSE, categoryId = categoryId,
-                )
-                income -> LedgerAccountEntity("income:general", "4000", "Pemasukan", LedgerAccountKind.INCOME)
-                expense -> LedgerAccountEntity("expense:general", "5000", "Pengeluaran", LedgerAccountKind.EXPENSE)
-                else -> LedgerAccountEntity("clearing:legacy", "9999", "Legacy clearing", LedgerAccountKind.CLEARING)
-            }
-        }
-        val income = event.type == LedgerType.INCOME || (event.type == LedgerType.AUTOMATION && cashAmount > 0)
+        val income = event.type == LedgerType.INCOME || (event.type == LedgerType.AUTOMATION && cashAmount > 0) || (event.type == LedgerType.RESTORE_REVERSAL && cashAmount > 0)
         val expense = event.type in setOf(LedgerType.EXPENSE, LedgerType.UNEXPECTED_EXPENSE) ||
-            (event.type == LedgerType.AUTOMATION && cashAmount < 0)
+            (event.type == LedgerType.AUTOMATION && cashAmount < 0) || (event.type == LedgerType.RESTORE_REVERSAL && cashAmount < 0)
         return when {
             income && categoryId != null -> LedgerAccountEntity(
                 "income:category:$categoryId", "4${categoryId.toString().padStart(6, '0')}",
@@ -280,7 +239,7 @@ class LedgerPostingEngine @Inject constructor(
             eventId = event.id,
             ledgerAccountId = ledgerAccount.id,
             side = if (signedAmount > 0) LedgerSide.DEBIT else LedgerSide.CREDIT,
-            amount = safeAbs(signedAmount),
+            amount = kotlin.math.abs(signedAmount),
             accountId = accountId,
             fundingChannel = channel,
             correlationId = event.relatedEventId,
@@ -289,10 +248,10 @@ class LedgerPostingEngine @Inject constructor(
     }
 
     private fun List<LedgerLineEntity>.balancedWithClearing(event: ActivityEventEntity): List<LedgerLineEntity> {
-        val debit = safeSumOf(filter { it.side == LedgerSide.DEBIT }.map { it.amount })
-        val credit = safeSumOf(filter { it.side == LedgerSide.CREDIT }.map { it.amount })
+        val debit = filter { it.side == LedgerSide.DEBIT }.sumOf { it.amount }
+        val credit = filter { it.side == LedgerSide.CREDIT }.sumOf { it.amount }
         if (debit == credit) return this
-        val difference = safeAbs(debit - credit)
+        val difference = kotlin.math.abs(debit - credit)
         return this + LedgerLineEntity(
             eventId = event.id,
             ledgerAccountId = "clearing:legacy",
@@ -310,21 +269,21 @@ class LedgerPostingEngine @Inject constructor(
             require(ledger.all { it.amount > 0 && it.side in setOf(LedgerSide.DEBIT, LedgerSide.CREDIT) }) {
                 "Baris ledger tidak valid"
             }
-            require(safeSumOf(ledger.filter { it.side == LedgerSide.DEBIT }.map { it.amount }) ==
-                safeSumOf(ledger.filter { it.side == LedgerSide.CREDIT }.map { it.amount })) {
+            require(ledger.filter { it.side == LedgerSide.DEBIT }.sumOf { it.amount } ==
+                ledger.filter { it.side == LedgerSide.CREDIT }.sumOf { it.amount }) {
                 "Debit dan kredit event tidak seimbang"
             }
         }
         val budget = dao.budgetLinesForEvent(eventId)
-        require(budget.isEmpty() || safeSumOf(budget.map { it.amount }) == 0L) { "Subledger budget event tidak seimbang" }
+        require(budget.isEmpty() || budget.sumOf { it.amount } == 0L) { "Subledger budget event tidak seimbang" }
         require(
             budget.groupBy { it.accountId to it.fundingChannel }
-                .all { (_, lines) -> safeSumOf(lines.map { it.amount }) == 0L },
+                .all { (_, lines) -> lines.sumOf { it.amount } == 0L },
         ) { "Subledger budget per akun dan kanal tidak seimbang" }
         val splits = dao.splitsForEvent(eventId)
         if (splits.isNotEmpty()) {
-            val cashMagnitude = dao.cashLinesForEvent(eventId).sumOf { safeAbs(it.amount) }
-            require(safeSumOf(splits.map { it.amount }) == cashMagnitude) { "Total split tidak sama dengan nominal transaksi" }
+            val cashMagnitude = dao.cashLinesForEvent(eventId).sumOf { kotlin.math.abs(it.amount) }
+            require(splits.sumOf { it.amount } == cashMagnitude) { "Total split tidak sama dengan nominal transaksi" }
         }
     }
 
@@ -377,24 +336,5 @@ class LedgerPostingEngine @Inject constructor(
     companion object {
         const val GENESIS_HASH = "0000000000000000000000000000000000000000000000000000000000000000"
         private const val RELEASE_EPOCH_MILLIS = 1_784_678_400_000L
-
-        fun safeAbs(value: Long): Long {
-            if (value == Long.MIN_VALUE) throw ArithmeticException("Long overflow on absolute value")
-            return abs(value)
-        }
-
-        fun safeAdd(a: Long, b: Long): Long {
-            val result = a + b
-            if ((a xor result) and (b xor result) < 0) throw ArithmeticException("Long overflow on addition")
-            return result
-        }
-
-        fun safeSumOf(values: Sequence<Long>): Long {
-            var sum = 0L
-            values.forEach { sum = safeAdd(sum, it) }
-            return sum
-        }
-
-        fun safeSumOf(values: Iterable<Long>): Long = safeSumOf(values.asSequence())
     }
 }

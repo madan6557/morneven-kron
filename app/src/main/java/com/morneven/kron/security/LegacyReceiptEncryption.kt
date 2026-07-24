@@ -59,30 +59,36 @@ object LegacyReceiptEncryption {
             require(source.delete() || !source.exists()) { "Lampiran lama ${receipt.id} tidak dapat diamankan" }
         }
 
-        database.execSQL(
-            """
-            UPDATE receipts
-            SET localPath = ?, byteSize = ?, sha256 = ?, encryptionNonce = ?, encryptionVersion = ?
-            WHERE id = ? AND encryptionVersion != ?
-            """.trimIndent(),
-            arrayOf(
-                stored.file.absolutePath,
-                stored.byteSize,
-                stored.sha256,
-                stored.nonce,
-                EncryptedAttachmentStore.ENCRYPTION_VERSION,
-                receipt.id,
-                EncryptedAttachmentStore.ENCRYPTION_VERSION,
-            ),
-        )
-        database.execSQL(
-            """
-            INSERT INTO audit_snapshots(eventId, reason, beforeJson, afterJson)
-            SELECT ?, 'ENCRYPT_LEGACY_RECEIPT', '{"encryptionVersion":0}', '{"encryptionVersion":1}'
-            WHERE changes() = 1
-            """.trimIndent(),
-            arrayOf(receipt.eventId),
-        )
+        database.beginTransaction()
+        try {
+            database.execSQL(
+                """
+                UPDATE receipts
+                SET localPath = ?, byteSize = ?, sha256 = ?, encryptionNonce = ?, encryptionVersion = ?
+                WHERE id = ? AND encryptionVersion != ?
+                """.trimIndent(),
+                arrayOf(
+                    stored.file.absolutePath,
+                    stored.byteSize,
+                    stored.sha256,
+                    stored.nonce,
+                    EncryptedAttachmentStore.ENCRYPTION_VERSION,
+                    receipt.id,
+                    EncryptedAttachmentStore.ENCRYPTION_VERSION,
+                ),
+            )
+            database.execSQL(
+                """
+                INSERT INTO audit_snapshots(eventId, reason, beforeJson, afterJson)
+                SELECT ?, 'ENCRYPT_LEGACY_RECEIPT', '{"encryptionVersion":0}', '{"encryptionVersion":1}'
+                WHERE changes() = 1
+                """.trimIndent(),
+                arrayOf(receipt.eventId),
+            )
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
     }
 
     private fun isPrivateLegacyReceipt(context: Context, source: File): Boolean {

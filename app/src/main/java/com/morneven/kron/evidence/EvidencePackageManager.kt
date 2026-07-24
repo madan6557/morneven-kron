@@ -365,7 +365,7 @@ class EvidencePackageManager @Inject constructor(
 
     private fun encrypt(source: File, target: File, passphrase: CharArray) {
         val salt = ByteArray(SALT_BYTES).also(SecureRandom()::nextBytes)
-        val nonce = com.morneven.kron.security.generateNonce(NONCE_BYTES)
+        val nonce = ByteArray(NONCE_BYTES).also(SecureRandom()::nextBytes)
         val key = deriveKey(passphrase, salt)
         val cipher = Cipher.getInstance(AES_GCM).apply {
             init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_BITS, nonce))

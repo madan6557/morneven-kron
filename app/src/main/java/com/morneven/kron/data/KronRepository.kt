@@ -11,13 +11,8 @@ import kotlin.math.min
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.transformLatest
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 data class ExpenseSplitInput(
     val categoryId: Long?,
@@ -95,49 +90,23 @@ class KronRepository @Inject constructor(
         .map { it?.id ?: 0L }
         .distinctUntilChanged()
 
-    val rules = activeAccountFlow.transformLatest { accountId ->
-        emit(emptyList())
-        emitAll(dao.observeRulesForAccount(accountId))
-    }
-    val portfolios = activeAccountFlow.transformLatest { accountId ->
-        emit(emptyList())
-        emitAll(dao.observePortfoliosForAccount(accountId))
-    }
-    val archivedPortfolios = activeAccountFlow.transformLatest { accountId ->
-        emit(emptyList())
-        emitAll(dao.observeArchivedPortfoliosForAccount(accountId))
-    }
-    val periods = activeAccountFlow.transformLatest { accountId ->
-        emit(emptyList())
-        emitAll(dao.observePeriodsForAccount(accountId))
-    }
-    val allocations = activeAccountFlow.transformLatest { accountId ->
-        emit(emptyList())
-        emitAll(dao.observeAllocationBalancesForAccount(accountId))
-    }
-    val activities = activeAccountFlow.transformLatest { accountId ->
-        emit(emptyList())
-        emitAll(dao.observeActivitiesForAccount(accountId))
-    }
-    val eventChannels = activeAccountFlow.transformLatest { accountId ->
-        emit(emptyList())
-        emitAll(dao.observeEventChannelsForAccount(accountId))
-    }
-    val receipts = activeAccountFlow.transformLatest { accountId ->
-        emit(emptyList())
-        emitAll(dao.observeReceiptsForAccount(accountId))
+    val rules = activeAccountFlow.flatMapLatest(dao::observeRulesForAccount)
+    val portfolios = activeAccountFlow.flatMapLatest(dao::observePortfoliosForAccount)
+    val archivedPortfolios = activeAccountFlow.flatMapLatest(dao::observeArchivedPortfoliosForAccount)
+    val periods = activeAccountFlow.flatMapLatest(dao::observePeriodsForAccount)
+    val allocations = activeAccountFlow.flatMapLatest(dao::observeAllocationBalancesForAccount)
+    val activities = activeAccountFlow.flatMapLatest(dao::observeActivitiesForAccount)
+    val eventChannels = activeAccountFlow.flatMapLatest(dao::observeEventChannelsForAccount)
+    val receipts = activeAccountFlow.flatMapLatest(dao::observeReceiptsForAccount)
+
+    val vault = activeAccountFlow.flatMapLatest { accountId ->
+        if (accountId == 0L) dao.observeVaultBalance()
+        else dao.observeVaultBalance(accountId)
     }
 
-    val vault = activeAccountFlow.transformLatest { accountId ->
-        emit(0L)
-        if (accountId == 0L) emitAll(dao.observeVaultBalance())
-        else emitAll(dao.observeVaultBalance(accountId))
-    }
-
-    val vaultByChannel = activeAccountFlow.transformLatest { accountId ->
-        emit(emptyList())
-        if (accountId == 0L) emitAll(dao.observeVaultByChannel())
-        else emitAll(dao.observeVaultByChannel(accountId))
+    val vaultByChannel = activeAccountFlow.flatMapLatest { accountId ->
+        if (accountId == 0L) dao.observeVaultByChannel()
+        else dao.observeVaultByChannel(accountId)
     }
 
     val unallocated = activeAccountFlow.flatMapLatest { accountId ->
@@ -386,7 +355,7 @@ class KronRepository @Inject constructor(
         dao.insertCashLines(listOf(CashJournalLineEntity(eventId = eventId, accountId = accountId, fundingChannel = fundingChannel, amount = -amount)))
         val budgetLines = if (unexpected) {
             listOf(
-                BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = fundingChannel, amount = -amount, accountId = accountId),
+                BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.UNEXPECTED, fundingChannel = fundingChannel, amount = -amount, accountId = accountId),
                 BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.EXTERNAL, fundingChannel = fundingChannel, amount = amount, accountId = accountId),
             )
         } else {
@@ -496,9 +465,9 @@ class KronRepository @Inject constructor(
             accountId = activeId,
         ))
         resolvedDrafts.groupBy { it.categoryId }.forEach { (categoryId, channelDrafts) ->
-            val categoryTotal = LedgerPostingEngine.safeSumOf(channelDrafts.map { it.plannedAmount })
-            val cashTotal = LedgerPostingEngine.safeSumOf(channelDrafts.filter { it.fundingChannel == FundingChannel.CASH }.map { it.plannedAmount })
-            val cashPercentage = if (categoryTotal == 0L) 0 else ((cashTotal * 100 + categoryTotal / 2) / categoryTotal).toInt()
+            val categoryTotal = channelDrafts.sumOf { it.plannedAmount }
+            val cashTotal = channelDrafts.filter { it.fundingChannel == FundingChannel.CASH }.sumOf { it.plannedAmount }
+            val cashPercentage = if (categoryTotal == 0L) 0 else ((cashTotal * 100) / categoryTotal).toInt()
             dao.insertAllocationTemplate(PortfolioAllocationTemplateEntity(
                 portfolioId = portfolioId,
                 categoryId = categoryId,
@@ -506,7 +475,7 @@ class KronRepository @Inject constructor(
                 cashPercentage = cashPercentage,
             ))
         }
-        val total = LedgerPostingEngine.safeSumOf(resolvedDrafts.map { it.plannedAmount })
+        val total = resolvedDrafts.sumOf { it.plannedAmount }
         val requestedByChannel = resolvedDrafts.groupBy { it.fundingChannel }.mapValues { (_, values) -> values.sumOf { it.plannedAmount } }
         val withinPeriod = !today.isBefore(start) && !today.isAfter(end)
         val canFund = withinPeriod && requestedByChannel.all { (channel, value) -> dao.vaultBalance(channel, activeId) >= value }
@@ -627,7 +596,7 @@ class KronRepository @Inject constructor(
         eventId
     }
 
-    suspend fun resolveFromVault(targetAllocationId: Long, amount: Long, note: String) = withTransactionLock {
+    suspend fun resolveFromVault(targetAllocationId: Long, amount: Long, note: String) = database.withTransaction {
         require(amount > 0)
         val target = requireNotNull(dao.allocationById(targetAllocationId))
         val activeId = activeAccountId()
@@ -654,7 +623,7 @@ class KronRepository @Inject constructor(
         eventId
     }
 
-    suspend fun resolveFromRollover(targetAllocationId: Long, amount: Long, note: String) = withTransactionLock {
+    suspend fun resolveFromRollover(targetAllocationId: Long, amount: Long, note: String) = database.withTransaction {
         require(amount > 0)
         val target = requireNotNull(dao.allocationById(targetAllocationId))
         val activeId = activeAccountId()
@@ -1099,13 +1068,17 @@ class KronRepository @Inject constructor(
 
     suspend fun processDueRules(today: LocalDate = LocalDate.now(), direction: String? = null) {
         database.withTransaction {
-            dao.dueRules(today.toEpochDay(), direction)
-                .filter { it.endEpochDay != null && it.nextEpochDay > it.endEpochDay }
+            dao.allRules()
+                .filter { !it.isPaused && (direction == null || it.direction == direction) && it.endEpochDay != null && it.nextEpochDay > it.endEpochDay }
                 .forEach { dao.updateRule(it.copy(isPaused = true)) }
         }
         repeat(500) {
             val next = dao.dueRules(today.toEpochDay(), direction).firstOrNull() ?: return
             database.withTransaction {
+                if (next.endEpochDay != null && next.nextEpochDay > next.endEpochDay) {
+                    dao.updateRule(next.copy(isPaused = true))
+                    return@withTransaction
+                }
                 if (dao.occurrenceExists(next.id, next.nextEpochDay)) {
                     dao.updateRule(advanceRule(next))
                     return@withTransaction
@@ -1237,13 +1210,7 @@ class KronRepository @Inject constructor(
 
     private suspend fun refreshPeriodStatus(periodId: Long) {
         val period = dao.periodById(periodId) ?: return
-        if (period.status == PeriodStatus.CLOSED || period.status == PeriodStatus.UNDERFUNDED) {
-            if (period.status == PeriodStatus.UNDERFUNDED) {
-                val hasNegative = dao.allocationIdsForPeriod(periodId).any { dao.allocationAvailable(it) < 0 }
-                if (hasNegative) dao.updatePeriod(period.copy(status = PeriodStatus.RESOLUTION_REQUIRED))
-            }
-            return
-        }
+        if (period.status == PeriodStatus.CLOSED || period.status == PeriodStatus.UNDERFUNDED) return
         val hasNegative = dao.allocationIdsForPeriod(periodId).any { dao.allocationAvailable(it) < 0 }
         dao.updatePeriod(period.copy(status = if (hasNegative) PeriodStatus.RESOLUTION_REQUIRED else PeriodStatus.ACTIVE))
     }
@@ -1284,12 +1251,4 @@ class KronRepository @Inject constructor(
             }
         }
     }
-
-    private val transactionMutex = Mutex()
-
-    private suspend fun <T> withTransactionLock(block: suspend () -> T): T =
-        transactionMutex.withLock {
-            dao.acquireWriteLock()
-            database.withTransaction { block() }
-        }
 }

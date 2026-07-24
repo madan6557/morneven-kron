@@ -188,14 +188,12 @@ class DatabaseKeyManager @Inject constructor(
         return loadAndVerify(file)
     }
 
-    @Synchronized
     fun deriveSubkey(label: String): SecretKeySpec {
         val root = getOrCreateDatabasePassphrase()
-        try {
+        return try {
             val mac = Mac.getInstance("HmacSHA256")
             mac.init(SecretKeySpec(root, "HmacSHA256"))
-            val derived = mac.doFinal(label.toByteArray(Charsets.UTF_8))
-            return SecretKeySpec(derived, "AES")
+            SecretKeySpec(mac.doFinal(label.toByteArray(Charsets.UTF_8)), "AES")
         } finally {
             root.fill(0)
         }
@@ -335,19 +333,16 @@ class DatabaseKeyManager @Inject constructor(
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .setKeySize(256)
-                .setRandomizedEncryptionRequired(true)
+                .setRandomizedEncryptionRequired(false)
                 .build(),
         )
         return generator.generateKey()
     }
 
     private fun wrap(target: File, wrappingKey: SecretKey, dataKey: ByteArray) {
+        val nonce = ByteArray(GCM_NONCE_BYTES).also(SecureRandom()::nextBytes)
         val cipher = Cipher.getInstance(AES_GCM)
-        // For AndroidKeyStore-backed keys with randomizedEncryptionRequired=true,
-        // caller-provided IVs are not permitted for encryption. Let the Cipher
-        // generate a secure IV and retrieve it via `cipher.iv` after init.
-        cipher.init(Cipher.ENCRYPT_MODE, wrappingKey)
-        val nonce = cipher.iv ?: generateNonce(GCM_NONCE_BYTES)
+        cipher.init(Cipher.ENCRYPT_MODE, wrappingKey, GCMParameterSpec(GCM_TAG_BITS, nonce))
         val encrypted = cipher.doFinal(dataKey)
         FileOutputStream(target).use { output ->
             DataOutputStream(output).use { data ->
@@ -381,19 +376,14 @@ class DatabaseKeyManager @Inject constructor(
 
     private fun atomicReplace(source: File, target: File) {
         target.parentFile?.mkdirs()
-        if (source.renameTo(target)) return
-        val temp = File(target.parentFile, "${target.name}.${System.nanoTime()}.tmp")
-        try {
+        if (!source.renameTo(target)) {
             source.inputStream().use { input ->
-                temp.outputStream().use { output ->
+                target.outputStream().use { output ->
                     input.copyTo(output)
                     output.flush()
                     output.fd.sync()
                 }
             }
-            require(temp.renameTo(target)) { "Gagal mengganti file target secara atomik" }
-        } finally {
-            temp.delete()
             source.delete()
         }
     }

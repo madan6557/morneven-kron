@@ -1346,33 +1346,42 @@ private fun SyncPassphraseDialog(
                         }
                     },
                 )
-                if (onManualPick != null) {
-                    Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                        TextButton(
-                            onClick = {
-                                val chars = password.toCharArray()
-                                password = ""
-                                confirmation = ""
-                                onManualPick(chars)
-                            },
-                            enabled = valid,
-                        ) { Text("Pilih akun manual") }
-                    }
-                }
             }
         },
         confirmButton = {
-            Button(
-                onClick = {
-                    val chars = password.toCharArray()
-                    password = ""
-                    confirmation = ""
-                    onConfirm(chars)
-                },
-                enabled = valid,
-            ) { Text(if (reconnecting) "Gunakan passphrase" else "Pilih akun Google") }
+            if (reconnecting) {
+                Button(
+                    onClick = {
+                        val chars = password.toCharArray()
+                        password = ""
+                        confirmation = ""
+                        onConfirm(chars)
+                    },
+                    enabled = valid,
+                ) { Text("Gunakan passphrase") }
+            } else {
+                Spacer(modifier = Modifier.size(0.dp))
+            }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Batal") } },
+        dismissButton = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onDismiss) { Text("Batal") }
+                if (onManualPick != null) {
+                    TextButton(
+                        onClick = {
+                            val chars = password.toCharArray()
+                            password = ""
+                            confirmation = ""
+                            onManualPick(chars)
+                        },
+                        enabled = valid,
+                    ) { Text("Pilih akun") }
+                }
+            }
+        },
     )
 }
 

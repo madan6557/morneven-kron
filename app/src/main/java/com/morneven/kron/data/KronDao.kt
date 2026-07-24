@@ -186,21 +186,21 @@ interface KronDao {
 
     @Query("""
         SELECT
-            COALESCE(SUM(CASE WHEN e.type IN ('INCOME','OPENING_BALANCE') OR (e.type = 'AUTOMATION' AND c.amount > 0) THEN c.amount ELSE 0 END), 0) AS income,
-            -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','UNEXPECTED_EXPENSE') OR (e.type = 'AUTOMATION' AND c.amount < 0) THEN c.amount ELSE 0 END), 0) AS expense
+            COALESCE(SUM(CASE WHEN e.type IN ('INCOME','OPENING_BALANCE','AUTOMATION') AND c.amount > 0 THEN c.amount ELSE 0 END), 0) AS income,
+            -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','UNEXPECTED_EXPENSE','AUTOMATION') AND c.amount < 0 THEN c.amount ELSE 0 END), 0) AS expense
         FROM activity_events e
         JOIN cash_journal_lines c ON c.eventId = e.id
-        WHERE e.effectiveEpochDay >= :startDay AND e.effectiveEpochDay < :endDay + 1
+        WHERE e.effectiveEpochDay BETWEEN :startDay AND :endDay
           AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id)
     """)
     fun observeCashflow(startDay: Long, endDay: Long): Flow<CashflowRow>
     @Query("""
         SELECT
-            COALESCE(SUM(CASE WHEN e.type IN ('INCOME','OPENING_BALANCE') OR (e.type = 'AUTOMATION' AND c.amount > 0) THEN c.amount ELSE 0 END), 0) AS income,
-            -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','UNEXPECTED_EXPENSE') OR (e.type = 'AUTOMATION' AND c.amount < 0) THEN c.amount ELSE 0 END), 0) AS expense
+            COALESCE(SUM(CASE WHEN e.type IN ('INCOME','OPENING_BALANCE','AUTOMATION') AND c.amount > 0 THEN c.amount ELSE 0 END), 0) AS income,
+            -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','UNEXPECTED_EXPENSE','AUTOMATION') AND c.amount < 0 THEN c.amount ELSE 0 END), 0) AS expense
         FROM activity_events e
         JOIN cash_journal_lines c ON c.eventId = e.id
-        WHERE e.effectiveEpochDay >= :startDay AND e.effectiveEpochDay < :endDay + 1 AND e.accountId = :accountId
+        WHERE e.effectiveEpochDay BETWEEN :startDay AND :endDay AND e.accountId = :accountId
           AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id)
     """)
     fun observeCashflow(startDay: Long, endDay: Long, accountId: Long): Flow<CashflowRow>
@@ -280,5 +280,4 @@ interface KronDao {
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'ROLLOVER' AND fundingChannel = :channel AND accountId = :accountId") suspend fun rolloverBalance(channel: String, accountId: Long): Long
     @Query("SELECT fundingChannel, COALESCE(SUM(amount), 0) AS balance FROM budget_journal_lines WHERE bucket = 'ROLLOVER' GROUP BY fundingChannel") fun observeRolloverByChannel(): Flow<List<ChannelBalanceRow>>
     @Query("SELECT fundingChannel, COALESCE(SUM(amount), 0) AS balance FROM budget_journal_lines WHERE bucket = 'ROLLOVER' AND accountId = :accountId GROUP BY fundingChannel") fun observeRolloverByChannel(accountId: Long): Flow<List<ChannelBalanceRow>>
-    @Query("UPDATE sync_state SET updatedAt = updatedAt WHERE id = 1") suspend fun acquireWriteLock()
 }

@@ -295,7 +295,6 @@ class DatabaseEncryptionManager @Inject constructor(
         continuityMarker.readBytes().contentEquals(CONTINUITY_MAGIC)
     }.getOrDefault(false)
 
-    @Synchronized
     private fun markContinuityValidated() {
         continuityMarker.parentFile?.mkdirs()
         val temporary = File(continuityMarker.parentFile, "${continuityMarker.name}.new")
@@ -306,14 +305,7 @@ class DatabaseEncryptionManager @Inject constructor(
                 output.fd.sync()
             }
             if (!temporary.renameTo(continuityMarker)) {
-                val atomicTemp = File(continuityMarker.parentFile, "${continuityMarker.name}.${System.nanoTime()}.tmp")
-                try {
-                    temporary.copyTo(atomicTemp, overwrite = true)
-                    FileOutputStream(atomicTemp, true).use { it.fd.sync() }
-                    require(atomicTemp.renameTo(continuityMarker)) { "Gagal mengganti marker kontinuitas secara atomik" }
-                } finally {
-                    atomicTemp.delete()
-                }
+                temporary.copyTo(continuityMarker, overwrite = true)
             }
         } finally {
             temporary.delete()
@@ -559,43 +551,19 @@ class DatabaseEncryptionManager @Inject constructor(
 
         fun rollback() {
             if (!recoveryDatabase.exists()) return
-            val tempDb = File(liveDatabase.parentFile, ".${liveDatabase.name}.rollback-${System.nanoTime()}")
-            try {
-                recoveryDatabase.inputStream().use { input ->
-                    FileOutputStream(tempDb, false).use { output ->
-                        input.copyTo(output)
-                        output.flush()
-                        output.fd.sync()
-                    }
+            liveDatabase.delete()
+            File(liveDatabase.path + "-wal").delete()
+            File(liveDatabase.path + "-shm").delete()
+            recoveryDatabase.inputStream().use { input ->
+                FileOutputStream(liveDatabase, false).use { output ->
+                    input.copyTo(output)
+                    output.flush()
+                    output.fd.sync()
                 }
-                listOf("-wal", "-shm").forEach { suffix ->
-                    val source = File(recoveryDatabase.path + suffix)
-                    if (source.isFile) {
-                        source.inputStream().use { input ->
-                            FileOutputStream(File(tempDb.path + suffix), false).use { output ->
-                                input.copyTo(output)
-                                output.flush()
-                                output.fd.sync()
-                            }
-                        }
-                    }
-                }
-                liveDatabase.delete()
-                File(liveDatabase.path + "-wal").delete()
-                File(liveDatabase.path + "-shm").delete()
-                require(tempDb.renameTo(liveDatabase)) { "Gagal memulihkan database secara atomik" }
-                listOf("-wal", "-shm").forEach { suffix ->
-                    val tempSidecar = File(tempDb.path + suffix)
-                    if (tempSidecar.isFile) {
-                        require(tempSidecar.renameTo(File(liveDatabase.path + suffix))) {
-                            "Gagal memulihkan file pendamping database"
-                        }
-                    }
-                }
-            } finally {
-                tempDb.delete()
-                File(tempDb.path + "-wal").delete()
-                File(tempDb.path + "-shm").delete()
+            }
+            listOf("-wal", "-shm").forEach { suffix ->
+                val source = File(recoveryDatabase.path + suffix)
+                if (source.isFile) source.copyTo(File(liveDatabase.path + suffix), overwrite = true)
             }
         }
     }

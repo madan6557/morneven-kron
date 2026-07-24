@@ -53,11 +53,10 @@ class EncryptedAttachmentStore @Inject constructor(
     }
 
     fun encryptTo(input: InputStream, target: File): StoredAttachment {
-        val nonce = generateNonce(NONCE_BYTES)
+        val nonce = ByteArray(NONCE_BYTES).also(SecureRandom()::nextBytes)
         val key = keyManager.deriveSubkey(ATTACHMENT_KEY_LABEL)
         val cipher = Cipher.getInstance(AES_GCM)
         cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_BITS, nonce))
-        cipher.updateAAD(MAGIC)
         val digest = MessageDigest.getInstance("SHA-256")
         var byteSize = 0L
         target.parentFile?.mkdirs()
@@ -99,7 +98,6 @@ class EncryptedAttachmentStore @Inject constructor(
                     keyManager.deriveSubkey(ATTACHMENT_KEY_LABEL),
                     GCMParameterSpec(TAG_BITS, nonce),
                 )
-                cipher.updateAAD(MAGIC)
                 CipherInputStream(data, cipher).use { encrypted ->
                     encrypted.copyToWithLimit(output, MAX_ATTACHMENT_BYTES)
                 }
@@ -123,7 +121,6 @@ class EncryptedAttachmentStore @Inject constructor(
                     keyManager.deriveSubkey(ATTACHMENT_KEY_LABEL),
                     GCMParameterSpec(TAG_BITS, nonce),
                 )
-                cipher.updateAAD(MAGIC)
                 CipherInputStream(data, cipher).use { encrypted ->
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                     while (true) {
