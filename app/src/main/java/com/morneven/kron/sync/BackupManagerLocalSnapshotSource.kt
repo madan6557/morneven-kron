@@ -47,7 +47,7 @@ class BackupManagerLocalSnapshotSource(
         require(AesGcmDriveSnapshotCryptor.sha256(payload) == manifest.payloadSha256) {
             "Checksum payload Drive tidak cocok"
         }
-        backupManager.applyPortableSnapshotPayloadAtomically(
+        backupManager.applyPortableSnapshotDirectly(
             payload = payload,
             datasetId = manifest.datasetId,
             generation = manifest.generation,
@@ -56,6 +56,6 @@ class BackupManagerLocalSnapshotSource(
             accountSubject = account.subjectId,
             accountEmail = account.email,
         )
-        return LocalApplyOutcome.RESTART_REQUIRED
+        return LocalApplyOutcome.APPLIED
     }
 }

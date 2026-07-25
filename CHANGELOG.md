@@ -16,6 +16,13 @@
 - UI hanya menampilkan `KRON 1.5.0` tanpa label Full Release atau LTS.
 - Kontrak SQLCipher passphrase KRON 1.4.7 dipertahankan tanpa rekey. Raw-key 1.4.x tetap hanya menjadi mode baca historis.
 
+## 1.5.20 - 2026-07-25
+
+- Fix: sync snapshot langsung (`applyPortableSnapshotDirectly`) — drop `append_only_*` trigger sebelum copy, `DELETE + INSERT` semua tabel dari restore_db, set `lastSyncedGeneration = localGeneration`, recreates trigger setelah commit. Status `SYNCED` ditulis sebelum copy agar `sync_write_guard` tidak blokir.
+- Fix: vault unexpected expense sekarang kurangi bucket VAULT (bukan UNEXPECTED) di `KronRepository.kt`.
+- Fix: tambah `Log.w` tracing di `DriveSyncCoordinator` dan `BackupManager` untuk diagnostik sync stuck.
+- Panggil `database.kronDao().syncState()` setelah transaksi raw SQL commit untuk memaksa Room baca ulang `sync_state`.
+
 ## 1.5.18 - 2026-07-23
 
 - Fix: CameraCaptureScreen bocor thread executor — tambah DisposableEffect untuk shutdown executor saat komposisi dibuang.

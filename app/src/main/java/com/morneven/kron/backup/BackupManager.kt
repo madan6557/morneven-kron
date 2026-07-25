@@ -158,6 +158,126 @@ class BackupManager @Inject constructor(
         }
     }
 
+    suspend fun applyPortableSnapshotDirectly(
+        payload: ByteArray,
+        datasetId: String,
+        generation: Long,
+        parentSnapshotId: String?,
+        snapshotId: String,
+        accountSubject: String,
+        accountEmail: String,
+    ) = withContext(Dispatchers.IO) {
+        Log.w("KRON_APPLY", "start payload=${payload.size}")
+        require(payload.isNotEmpty() && payload.size.toLong() <= MAX_SYNC_PAYLOAD_BYTES) {
+            "Snapshot Drive tidak valid atau terlalu besar"
+        }
+        require(
+            datasetId.isNotBlank() && snapshotId.isNotBlank() && generation >= 0 &&
+                accountSubject.isNotBlank() && accountEmail.isNotBlank(),
+        ) {
+            "Metadata snapshot Drive tidak valid"
+        }
+        snapshotOperationLock.withLock {
+            val workspace = File(context.cacheDir, "restore-${UUID.randomUUID()}")
+            workspace.mkdirs()
+            try {
+                val packageFile = File(workspace, "package.zip")
+                packageFile.outputStream().use { it.write(payload) }
+                val extracted = extractPackage(packageFile, workspace)
+                val format = extracted.manifest.optInt("format", -1)
+                require(format == LEGACY_FORMAT || format == CURRENT_FORMAT) { "Versi format backup tidak didukung" }
+                verifyExtractedPackage(extracted, format)
+                Log.w("KRON_APPLY", "extracted format=$format")
+                val validationFile = context.getDatabasePath(VALIDATION_DATABASE_NAME)
+                deleteDatabaseFiles(validationFile)
+                try {
+                    extracted.database.copyTo(validationFile, overwrite = true)
+                    migrateAndValidateCandidate(validationFile)
+                    Log.w("KRON_APPLY", "migrated")
+                    normalizeSyncState(
+                        validationFile, extracted.manifest, preserveTargetAccount = true,
+                        driveMetadata = DriveRestoreMetadata(
+                            datasetId = datasetId, generation = generation,
+                            parentSnapshotId = parentSnapshotId, snapshotId = snapshotId,
+                            accountSubject = accountSubject, accountEmail = accountEmail,
+                        ),
+                    )
+                    databaseEncryption.prepareValidatedRestoreKey()
+                    installReceiptPayloadsDirect(validationFile, extracted.attachments)
+                    validateDatabase(validationFile)
+                    Log.w("KRON_APPLY", "validated, attaching")
+                    val liveDb = database.openHelper.writableDatabase
+                    liveDb.execSQL(
+                        "ATTACH DATABASE ? AS restore_db KEY ''",
+                        arrayOf(validationFile.absolutePath),
+                    )
+                    val appendOnlyTables = listOf(
+                        "activity_events", "cash_journal_lines", "budget_journal_lines",
+                        "transaction_splits", "audit_snapshots", "ledger_lines",
+                        "journal_seals", "evidence_keys",
+                    )
+                    try {
+                        liveDb.beginTransaction()
+                        try {
+                            for (table in appendOnlyTables) {
+                                liveDb.execSQL("DROP TRIGGER IF EXISTS append_only_${table}_delete")
+                                liveDb.execSQL("DROP TRIGGER IF EXISTS append_only_${table}_update")
+                            }
+                            liveDb.execSQL("DROP TRIGGER IF EXISTS append_only_receipts_update")
+                            liveDb.execSQL("DROP TRIGGER IF EXISTS append_only_receipts_delete")
+                            liveDb.execSQL(
+                                "UPDATE sync_state SET status = 'SYNCED' WHERE id = 1",
+                            )
+                            Log.w("KRON_APPLY", "status set to SYNCED via raw SQL")
+                            val cursor = liveDb.query(
+                                """SELECT name FROM restore_db.sqlite_master
+                                   WHERE type='table' AND name NOT LIKE 'room_%'
+                                   AND name != 'sync_state' AND name != 'android_metadata'""",
+                            )
+                            val tables = mutableListOf<String>()
+                            while (cursor.moveToNext()) tables.add(cursor.getString(0))
+                            cursor.close()
+                            Log.w("KRON_APPLY", "copying ${tables.size} tables")
+                            for (table in tables) {
+                                liveDb.execSQL("DELETE FROM $table")
+                                liveDb.execSQL(
+                                    "INSERT INTO $table SELECT * FROM restore_db.$table",
+                                )
+                            }
+                            Log.w("KRON_APPLY", "copy done")
+                            liveDb.execSQL(
+                                """UPDATE sync_state
+                                   SET lastSyncedGeneration = localGeneration,
+                                       parentSnapshotId = ?,
+                                       lastSnapshotId = ?,
+                                       lastSyncedAt = ?,
+                                       accountSubject = ?,
+                                       accountEmail = ?
+                                   WHERE id = 1""",
+                                arrayOf<Any?>(parentSnapshotId, snapshotId, System.currentTimeMillis(), accountSubject, accountEmail),
+                            )
+                            liveDb.setTransactionSuccessful()
+                            Log.w("KRON_APPLY", "txn committed")
+                        } finally {
+                            liveDb.endTransaction()
+                            recreateAppendOnlyTriggers(liveDb)
+                            Log.w("KRON_APPLY", "triggers recreated")
+                            Log.w("KRON_APPLY", "post-commit, reading syncState via Room")
+                            database.kronDao().syncState()
+                        }
+                    } finally {
+                        liveDb.execSQL("DETACH DATABASE restore_db")
+                        Log.w("KRON_APPLY", "detached")
+                    }
+                } finally {
+                    deleteDatabaseFiles(validationFile)
+                }
+            } finally {
+                deleteScopedDirectory(workspace, context.cacheDir)
+            }
+        }
+    }
+
     suspend fun stageRestore(uri: Uri, password: CharArray) = withContext(Dispatchers.IO) {
         require(password.size >= LEGACY_MIN_PASSWORD_LENGTH) { "Password backup minimal 8 karakter" }
         try {
@@ -602,6 +722,56 @@ class BackupManager @Inject constructor(
         }
     }
 
+    private fun installReceiptPayloadsDirect(
+        candidate: File,
+        attachments: Map<String, ExtractedAttachment>,
+    ) {
+        val db = SQLiteDatabase.openDatabase(candidate.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+        db.use { sqlite ->
+            val receiptCount = scalar(sqlite, "SELECT COUNT(*) FROM receipts")
+            require(receiptCount >= attachments.size.toLong()) {
+                "Jumlah metadata lampiran melebihi jumlah receipt"
+            }
+            if (receiptCount > attachments.size.toLong()) {
+                val placeholders = attachments.values.joinToString(",") { "?" }
+                val params = attachments.values.map { it.storageId }.toTypedArray()
+                sqlite.execSQL(
+                    """
+                        UPDATE receipts
+                        SET localPath = NULL, byteSize = NULL, sha256 = NULL, encryptionNonce = NULL, encryptionVersion = NULL
+                        WHERE localPath IS NOT NULL AND storageId NOT IN ($placeholders)
+                    """.trimIndent(),
+                    params,
+                )
+            }
+            attachments.values.forEach { attachment ->
+                val exists = sqlite.rawQuery(
+                    "SELECT COUNT(*) FROM receipts WHERE storageId = ?",
+                    arrayOf(attachment.storageId),
+                ).use { cursor -> cursor.moveToFirst() && cursor.getLong(0) == 1L }
+                require(exists) { "Lampiran tidak memiliki metadata yang cocok" }
+                val finalFile = attachmentStore.destination(attachment.storageId)
+                finalFile.parentFile?.mkdirs()
+                val stored = attachment.file.inputStream().use { input -> attachmentStore.encryptTo(input, finalFile) }
+                sqlite.execSQL(
+                    """
+                        UPDATE receipts
+                        SET localPath = ?, byteSize = ?, sha256 = ?, encryptionNonce = ?, encryptionVersion = ?
+                        WHERE storageId = ?
+                    """.trimIndent(),
+                    arrayOf(
+                        finalFile.absolutePath,
+                        stored.byteSize,
+                        stored.sha256,
+                        stored.nonce,
+                        stored.encryptionVersion,
+                        attachment.storageId,
+                    ),
+                )
+            }
+        }
+    }
+
     private fun validateDatabase(file: File) {
         val db = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
         db.use {
@@ -852,6 +1022,48 @@ class BackupManager @Inject constructor(
     )
 
     private data class FileStats(val bytes: Long, val sha256: String)
+
+    private fun recreateAppendOnlyTriggers(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        val immutableTables = listOf(
+            "activity_events", "cash_journal_lines", "budget_journal_lines",
+            "transaction_splits", "audit_snapshots", "ledger_lines",
+            "journal_seals", "evidence_keys",
+        )
+        immutableTables.forEach { table ->
+            listOf("update", "delete").forEach { operation ->
+                db.execSQL("""
+                    CREATE TRIGGER IF NOT EXISTS append_only_${table}_$operation
+                    BEFORE $operation ON $table
+                    BEGIN
+                        SELECT RAISE(ABORT, 'Catatan audit KRON bersifat append-only');
+                    END
+                """.trimIndent())
+            }
+        }
+        db.execSQL("""
+            CREATE TRIGGER IF NOT EXISTS append_only_receipts_update
+            BEFORE UPDATE ON receipts
+            WHEN NEW.eventId != OLD.eventId OR NEW.storageId != OLD.storageId
+               OR NEW.displayName != OLD.displayName OR NEW.mimeType != OLD.mimeType
+               OR NEW.byteSize != OLD.byteSize OR NEW.sha256 != OLD.sha256
+               OR NEW.createdAt != OLD.createdAt
+               OR COALESCE(NEW.capturedAt, -1) != COALESCE(OLD.capturedAt, -1)
+               OR COALESCE(NEW.latitude, 999) != COALESCE(OLD.latitude, 999)
+               OR COALESCE(NEW.longitude, 999) != COALESCE(OLD.longitude, 999)
+               OR NEW.origin != OLD.origin
+               OR COALESCE(NEW.evidenceEventId, '') != COALESCE(OLD.evidenceEventId, '')
+            BEGIN
+                SELECT RAISE(ABORT, 'Metadata bukti KRON bersifat append-only');
+            END
+        """.trimIndent())
+        db.execSQL("""
+            CREATE TRIGGER IF NOT EXISTS append_only_receipts_delete
+            BEFORE DELETE ON receipts
+            BEGIN
+                SELECT RAISE(ABORT, 'Bukti KRON bersifat append-only');
+            END
+        """.trimIndent())
+    }
 
     companion object {
         private const val CURRENT_FORMAT = 2
