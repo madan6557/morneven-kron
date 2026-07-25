@@ -218,8 +218,12 @@ private fun ActivityCard(event: ActivityRow, valuesVisible: Boolean, onEvent: (S
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.tertiary,
             )
+            val date = LocalDate.ofEpochDay(event.effectiveEpochDay).format(fullDateFormat)
+            val time = java.time.Instant.ofEpochMilli(event.createdAt)
+                .atZone(java.time.ZoneId.systemDefault())
+                .format(timeFormat)
             Text(
-                LocalDate.ofEpochDay(event.effectiveEpochDay).format(fullDateFormat),
+                "$date, $time",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -347,5 +351,6 @@ private fun eventTypeLabel(type: String): String = when (type) {
 
 private val fullDateFormat = DateTimeFormatter.ofPattern("EEEE, d MMMM yyyy", Locale.forLanguageTag("id-ID"))
 private val groupDateFormat = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.forLanguageTag("id-ID"))
+private val timeFormat = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.forLanguageTag("id-ID"))
 private const val PAGE_SIZE = 50
 private const val LOAD_MORE_THRESHOLD = 8

@@ -529,23 +529,16 @@ class DriveSyncCoordinator(
                     parentSnapshotId = remote.manifest.parentSnapshotId,
                     lastSnapshotId = remote.manifest.snapshotId,
                     lastSyncedAtEpochMillis = nowEpochMillis(),
-                    status = if (outcome == LocalApplyOutcome.RESTART_REQUIRED) {
-                        SyncStatus.RESTART_REQUIRED
-                    } else {
-                        SyncStatus.SYNCED
-                    },
+                    status = SyncStatus.SYNCED,
                     lastError = null,
                     conflictRemoteFileId = null,
                     accountSubject = token.account.subjectId,
                     accountEmail = token.account.email,
                 )
             }
-            Log.w("KRON_DOWNLOAD", "stateStore.update done, about to return")
-            return if (outcome == LocalApplyOutcome.RESTART_REQUIRED) {
-                SyncRunResult.RestartRequired(remote.manifest.snapshotId)
-            } else {
-                SyncRunResult.Synchronized(remote.manifest.snapshotId, uploaded = false)
-            }
+            Log.w("KRON_DOWNLOAD", "stateStore.update done, emitting data refresh")
+            DataRefreshBridge.emit()
+            return SyncRunResult.Synchronized(remote.manifest.snapshotId, uploaded = false)
         } finally {
             envelope.fill(0)
             passphrase.fill('\u0000')

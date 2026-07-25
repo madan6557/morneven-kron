@@ -858,7 +858,10 @@ fun AuditDialog(
             Text(event.type.replace('_', ' '), color = MaterialTheme.colorScheme.tertiary)
             Text(event.auditStatus, color = if (event.auditStatus == "Integrity problem") MaterialTheme.colorScheme.error else KronGreen)
         }
-        Text("Tanggal efektif: ${LocalDate.ofEpochDay(event.effectiveEpochDay)}")
+        val createdAtTime = java.time.Instant.ofEpochMilli(event.createdAt)
+            .atZone(java.time.ZoneId.systemDefault())
+            .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss", java.util.Locale.forLanguageTag("id-ID")))
+        Text("Tanggal efektif: ${LocalDate.ofEpochDay(event.effectiveEpochDay)}, $createdAtTime")
         Text("Sumber: ${event.source}")
         Text("Dampak akun: ${displayMoney(event.cashImpact, state.valuesVisible)}")
         Text("Dampak Vault: ${displayMoney(event.vaultImpact, state.valuesVisible)}")

@@ -4,7 +4,9 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.RawQuery
 import androidx.room.Update
+import androidx.sqlite.db.SupportSQLiteQuery
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -32,6 +34,7 @@ interface KronDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertEvidenceKey(value: EvidenceKeyEntity)
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertActorProfile(value: ActorProfileEntity)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertSyncState(value: SyncStateEntity)
+    @RawQuery suspend fun executeRaw(query: SupportSQLiteQuery): Int
 
     @Update suspend fun updatePeriod(value: BudgetPeriodEntity)
     @Update suspend fun updateAllocation(value: AllocationEntity)
@@ -272,6 +275,8 @@ interface KronDao {
     @Query("SELECT * FROM cash_journal_lines ORDER BY id") suspend fun allCashLines(): List<CashJournalLineEntity>
     @Query("SELECT * FROM budget_journal_lines ORDER BY id") suspend fun allBudgetLines(): List<BudgetJournalLineEntity>
     @Query("SELECT * FROM transaction_splits ORDER BY id") suspend fun allSplits(): List<TransactionSplitEntity>
+    @Query("SELECT * FROM transaction_splits ORDER BY id") fun observeSplits(): Flow<List<TransactionSplitEntity>>
+    @Query("SELECT * FROM transaction_splits WHERE eventId IN (SELECT id FROM activity_events WHERE accountId = :accountId) ORDER BY id") fun observeSplitsForAccount(accountId: Long): Flow<List<TransactionSplitEntity>>
     @Query("SELECT * FROM audit_snapshots WHERE eventId = :eventId ORDER BY id") suspend fun auditsForEvent(eventId: String): List<AuditSnapshotEntity>
     @Query("SELECT * FROM recurring_rules ORDER BY createdAt") suspend fun allRules(): List<RecurringRuleEntity>
     @Query("SELECT COALESCE(SUM(amount), 0) FROM cash_journal_lines WHERE fundingChannel = :channel") suspend fun cashTotal(channel: String): Long

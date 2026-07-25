@@ -118,6 +118,7 @@ fun SettingsScreen(
     onClearDriveData: (() -> Unit)? = null,
     onBudgetAlertsChanged: ((Boolean) -> Unit)? = null,
     onNotificationSettings: (() -> Unit)? = null,
+    onScreenshotAllowed: ((Boolean) -> Unit)? = null,
 ) {
     var showArchive by rememberSaveable { mutableStateOf(false) }
     var showGlossary by rememberSaveable { mutableStateOf(false) }
@@ -254,6 +255,13 @@ fun SettingsScreen(
                     "Kunci aplikasi tetap menyembunyikan nilai saat sesi terkunci",
                     state.rememberVisibility,
                     onRememberVisibility,
+                )
+                ToggleRow(
+                    Icons.Outlined.Security,
+                    "Izinkan screenshot",
+                    "Aktifkan untuk mengizinkan tangkapan layar",
+                    state.screenshotAllowed,
+                    onScreenshotAllowed ?: {},
                 )
             }
         }

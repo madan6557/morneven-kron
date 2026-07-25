@@ -16,6 +16,18 @@
 - UI hanya menampilkan `KRON 1.5.0` tanpa label Full Release atau LTS.
 - Kontrak SQLCipher passphrase KRON 1.4.7 dipertahankan tanpa rekey. Raw-key 1.4.x tetap hanya menjadi mode baca historis.
 
+## 1.5.22 - 2026-07-25
+
+- Sync on-change debounce dikurangi dari 30 detik menjadi 7 detik agar data lebih cepat muncul di perangkat lain.
+- Setiap log aktivitas sekarang menampilkan timestamp HH:mm:ss untuk tracking skala harian.
+- Toggle "Izinkan screenshot" di Pengaturan > Privasi dan keamanan. Mengaktifkan toggle memerlukan autentikasi biometric atau PIN perangkat. Screenshot diblokir secara default saat nilai atau dialog sensitif ditampilkan.
+- Card "Pengeluaran tak terduga" sekarang full width dan expandable. Ketuk untuk melihat rincian pengeluaran per kategori.
+- CSV export ditingkatkan: kolom catatan dan jumlah split pada Activity Journal, section "KRON TRANSACTION SPLITS" per-event per-kategori, section "KRON SUMMARY" berisi ringkasan metrik (total event, pemasukan, pengeluaran, pengeluaran tak terduga, reversal, lampiran).
+
+## 1.5.21 - 2026-07-25
+
+- Fix: sync Drive tidak perlu restart — hapus raw SQL write ke sync_state, ganti dengan drop sync_write_guard trigger sebelum copy data dan recreate setelah commit. Sync_state hanya ditulis via Room DAO (stateStore.update) agar InvalidationTracker terpicu dan UI langsung update.
+
 ## 1.5.20 - 2026-07-25
 
 - Fix: sync snapshot langsung (`applyPortableSnapshotDirectly`) — drop `append_only_*` trigger sebelum copy, `DELETE + INSERT` semua tabel dari restore_db, set `lastSyncedGeneration = localGeneration`, recreates trigger setelah commit. Status `SYNCED` ditulis sebelum copy agar `sync_write_guard` tidak blokir.

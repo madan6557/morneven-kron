@@ -28,6 +28,7 @@ import com.morneven.kron.data.ReceiptEntity
 import com.morneven.kron.data.ScheduleCalculator
 import com.morneven.kron.data.SyncStateEntity
 import com.morneven.kron.data.TransactionDirection
+import com.morneven.kron.data.TransactionSplitEntity
 import com.morneven.kron.preferences.PrivacyPreferences
 import com.morneven.kron.report.CsvExporter
 import com.morneven.kron.security.ImageCompressor
@@ -53,6 +54,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.onStart
+import com.morneven.kron.sync.DataRefreshBridge
 import kotlinx.coroutines.launch
 
 data class KronUiState(
@@ -68,6 +72,7 @@ data class KronUiState(
     val eventChannels: Map<String, Set<String>> = emptyMap(),
     val receipts: List<ReceiptEntity> = emptyList(),
     val syncState: SyncStateEntity? = null,
+    val splits: List<TransactionSplitEntity> = emptyList(),
     val rules: List<RecurringRuleEntity> = emptyList(),
     val cashflow: CashflowRow = CashflowRow(0, 0),
     val vaultCash: Long = 0,
@@ -84,6 +89,7 @@ data class KronUiState(
     val authFailures: Int = 0,
     val authLockedUntil: Long = 0L,
     val budgetAlertsEnabled: Boolean = false,
+    val screenshotAllowed: Boolean = false,
     val message: String? = null,
 ) {
     val activeAccount: AccountEntity? get() = accounts.firstOrNull { it.isActive }
@@ -107,6 +113,7 @@ private data class LedgerSlice(
     val rollover: Map<String, Long>,
     val receipts: List<ReceiptEntity> = emptyList(),
     val syncState: SyncStateEntity? = null,
+    val splits: List<TransactionSplitEntity> = emptyList(),
 )
 
 private data class MetadataSlice(
@@ -128,8 +135,10 @@ private data class PreferenceSlice(
     val authFailures: Int = 0,
     val authLockedUntil: Long = 0L,
     val budgetAlertsEnabled: Boolean = false,
+    val screenshotAllowed: Boolean = false,
 )
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class MainViewModel @Inject constructor(
     private val savedStateHandle: SavedStateHandle,
@@ -157,55 +166,66 @@ class MainViewModel @Inject constructor(
     val pendingDriveResolutionId: StateFlow<String?> = savedStateHandle.getStateFlow(PENDING_DRIVE_RESOLUTION, null)
 
     private val month = YearMonth.now()
-    private val cashflow = repository.cashflow(month.atDay(1), month.atEndOfMonth())
 
-    private val ledger = combine(
-        repository.accountBalances,
-        repository.allocations,
-        repository.activities,
-        repository.rules,
-        repository.vaultByChannel,
-    ) { balances, allocations, activities, rules, vaults ->
-        LedgerSlice(
-            balances = balances,
-            allocations = allocations,
-            activities = activities,
-            rules = rules,
-            vaults = vaults.associate { it.fundingChannel to it.balance },
-            rollover = emptyMap(),
-        )
-    }.combine(repository.rolloverByChannel) { slice, rollover ->
-        slice.copy(rollover = rollover.associate { it.fundingChannel to it.balance })
-    }.combine(repository.receipts) { slice, receipts ->
-        slice.copy(receipts = receipts)
-    }.combine(repository.eventChannels) { slice, channels ->
-        slice.copy(
-            eventChannels = channels
-                .groupBy(EventChannelRow::eventId, EventChannelRow::fundingChannel)
-                .mapValues { (_, values) -> values.toSet() },
-        )
-    }.combine(repository.syncState) { slice, syncState ->
-        slice.copy(syncState = syncState)
+    private val dataRefresh = DataRefreshBridge.refresh.onStart { emit(Unit) }
+
+    private val ledger = dataRefresh.flatMapLatest {
+        combine(
+            repository.accountBalances,
+            repository.allocations,
+            repository.activities,
+            repository.rules,
+            repository.vaultByChannel,
+        ) { balances, allocations, activities, rules, vaults ->
+            LedgerSlice(
+                balances = balances,
+                allocations = allocations,
+                activities = activities,
+                rules = rules,
+                vaults = vaults.associate { it.fundingChannel to it.balance },
+                rollover = emptyMap(),
+            )
+        }.combine(repository.rolloverByChannel) { slice, rollover ->
+            slice.copy(rollover = rollover.associate { it.fundingChannel to it.balance })
+        }.combine(repository.receipts) { slice, receipts ->
+            slice.copy(receipts = receipts)
+        }.combine(repository.eventChannels) { slice, channels ->
+            slice.copy(
+                eventChannels = channels
+                    .groupBy(EventChannelRow::eventId, EventChannelRow::fundingChannel)
+                    .mapValues { (_, values) -> values.toSet() },
+            )
+        }.combine(repository.syncState) { slice, syncState ->
+            slice.copy(syncState = syncState)
+        }.combine(repository.splits) { slice, splits ->
+            slice.copy(splits = splits)
+        }
     }
 
-    private val metadata = combine(
-        repository.accounts,
-        repository.categories,
-        repository.portfolios,
-        repository.periods,
-        repository.unallocatedByChannel,
-    ) { accounts, categories, portfolios, periods, unallocated ->
-        MetadataSlice(
-            accounts = accounts,
-            categories = categories,
-            portfolios = portfolios,
-            periods = periods,
-            unallocated = unallocated.associate { it.fundingChannel to it.balance },
-        )
-    }.combine(repository.archivedAccounts) { metadata, archivedAccounts ->
-        metadata.copy(archivedAccounts = archivedAccounts)
-    }.combine(repository.archivedPortfolios) { metadata, archivedPortfolios ->
-        metadata.copy(archivedPortfolios = archivedPortfolios)
+    private val metadata = dataRefresh.flatMapLatest {
+        combine(
+            repository.accounts,
+            repository.categories,
+            repository.portfolios,
+            repository.periods,
+            repository.unallocatedByChannel,
+        ) { accounts, categories, portfolios, periods, unallocated ->
+            MetadataSlice(
+                accounts = accounts,
+                categories = categories,
+                portfolios = portfolios,
+                periods = periods,
+                unallocated = unallocated.associate { it.fundingChannel to it.balance },
+            )
+        }.combine(repository.archivedAccounts) { metadata, archivedAccounts ->
+            metadata.copy(archivedAccounts = archivedAccounts)
+        }.combine(repository.archivedPortfolios) { metadata, archivedPortfolios ->
+            metadata.copy(archivedPortfolios = archivedPortfolios)
+        }
+    }
+
+    private val cashflow = dataRefresh.flatMapLatest {
+        repository.cashflow(month.atDay(1), month.atEndOfMonth())
     }
 
     private val visibilityPreference = combine(sessionVisibility, preferences.rememberVisibility, preferences.rememberedVisibility) { session, remember, remembered -> Triple(session, remember, remembered) }
@@ -229,6 +249,8 @@ class MainViewModel @Inject constructor(
     }
     private val preferenceState = basePreferenceState.combine(preferences.budgetAlertsEnabled) { prefs, enabled ->
         prefs.copy(budgetAlertsEnabled = enabled)
+    }.combine(preferences.screenshotAllowed) { prefs, allowed ->
+        prefs.copy(screenshotAllowed = allowed)
     }
 
     val uiState: StateFlow<KronUiState> = combine(ledger, metadata, cashflow, preferenceState, message) { ledger, metadata, cashflow, prefs, message ->
@@ -245,6 +267,7 @@ class MainViewModel @Inject constructor(
             eventChannels = ledger.eventChannels,
             receipts = ledger.receipts,
             syncState = ledger.syncState,
+            splits = ledger.splits,
             rules = ledger.rules,
             cashflow = cashflow,
             vaultCash = ledger.vaults[FundingChannel.CASH] ?: 0,
@@ -262,6 +285,7 @@ class MainViewModel @Inject constructor(
             authFailures = prefs.authFailures,
             authLockedUntil = prefs.authLockedUntil,
             budgetAlertsEnabled = prefs.budgetAlertsEnabled,
+            screenshotAllowed = prefs.screenshotAllowed,
         )
     }.retry(Long.MAX_VALUE) {
         Log.e("KRON_UI", "Aliran data UI dimulai ulang")
@@ -315,6 +339,7 @@ class MainViewModel @Inject constructor(
     fun setTheme(value: String) = viewModelScope.launch { preferences.setTheme(value) }
     fun setAppLock(value: Boolean) = viewModelScope.launch { preferences.setAppLockEnabled(value) }
     fun setBudgetAlertsEnabled(value: Boolean) = viewModelScope.launch { preferences.setBudgetAlertsEnabled(value) }
+    fun setScreenshotAllowed(value: Boolean) = viewModelScope.launch { preferences.setScreenshotAllowed(value) }
     fun completeOnboarding() = viewModelScope.launch { preferences.completeOnboarding() }
     fun clearMessage() { message.value = null }
     fun showMessage(value: String) { message.value = value }

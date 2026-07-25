@@ -9,6 +9,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.min
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.runBlocking
+import com.morneven.kron.sync.SyncStateBridge
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
@@ -84,7 +86,17 @@ class KronRepository @Inject constructor(
     val archivedAccounts = dao.observeArchivedAccounts()
     val accountBalances = dao.observeAccountBalances()
     val categories = dao.observeCategories()
-    val syncState = dao.observeSyncState()
+    val syncState = SyncStateBridge.syncState
+
+    init {
+        runBlocking {
+            SyncStateBridge.emit(dao.syncState() ?: SyncStateEntity(
+                datasetId = java.util.UUID.randomUUID().toString(),
+                deviceId = java.util.UUID.randomUUID().toString(),
+                lastSyncedGeneration = -1,
+            ))
+        }
+    }
 
     private val activeAccountFlow: Flow<Long> = dao.observeActiveAccount()
         .map { it?.id ?: 0L }
@@ -98,6 +110,10 @@ class KronRepository @Inject constructor(
     val activities = activeAccountFlow.flatMapLatest(dao::observeActivitiesForAccount)
     val eventChannels = activeAccountFlow.flatMapLatest(dao::observeEventChannelsForAccount)
     val receipts = activeAccountFlow.flatMapLatest(dao::observeReceiptsForAccount)
+    val splits = activeAccountFlow.flatMapLatest { accountId ->
+        if (accountId == 0L) dao.observeSplits()
+        else dao.observeSplitsForAccount(accountId)
+    }
 
     val vault = activeAccountFlow.flatMapLatest { accountId ->
         if (accountId == 0L) dao.observeVaultBalance()

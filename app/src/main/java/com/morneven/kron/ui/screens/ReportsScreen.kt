@@ -49,7 +49,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.morneven.kron.data.ActivityRow
+import com.morneven.kron.data.CategoryEntity
 import com.morneven.kron.data.FundingChannel
+import com.morneven.kron.data.TransactionSplitEntity
 import com.morneven.kron.ui.KronUiState
 import com.morneven.kron.ui.components.ChannelBadge
 import com.morneven.kron.ui.components.HudCard
@@ -191,6 +193,17 @@ fun ReportsScreen(
             .sortedByDescending { it.value.firstOrNull()?.startEpochDay ?: 0L }
     }
     val unexpectedTotal = cashFlowEvents.filter { it.type == "UNEXPECTED_EXPENSE" }.sumOf { (-it.cashImpact).coerceAtLeast(0L) }
+    val unexpectedEvents = cashFlowEvents.filter { it.type == "UNEXPECTED_EXPENSE" }
+    val unexpectedSplitsByCategory = remember(unexpectedEvents, state.splits, state.categories) {
+        val splitMap = state.splits.filter { split -> unexpectedEvents.any { it.id == split.eventId } }
+        val categoryMap = state.categories.associateBy { it.id }
+        splitMap.groupBy { it.categoryId }.map { (catId, splits) ->
+            val catName = catId?.let { categoryMap[it]?.name } ?: "Tanpa kategori"
+            val cat = catId?.let { categoryMap[it] }
+            Triple(catName, splits.sumOf { it.amount }, cat?.direction)
+        }.sortedByDescending { it.second }
+    }
+    var unexpectedExpanded by rememberSaveable { mutableStateOf(false) }
     val money: (Long) -> String = { value -> displayMoney(value, visible) }
     val rangeLabel = if (range == ReportRange.CUSTOM) "${shortDate(start)} sampai ${shortDate(end)}" else range.label.lowercase()
 
@@ -429,10 +442,50 @@ fun ReportsScreen(
         }
 
         if (unexpectedTotal > 0) item {
-            HudCard(accent = MaterialTheme.colorScheme.error) {
-                Text("Pengeluaran tak terduga", style = MaterialTheme.typography.titleMedium)
+            HudCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { unexpectedExpanded = !unexpectedExpanded }
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = "Pengeluaran tak terduga ${money(unexpectedTotal)}, ${if (unexpectedExpanded) "rincian terbuka" else "ketuk untuk rincian"}"
+                    },
+                accent = MaterialTheme.colorScheme.error,
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Pengeluaran tak terduga", style = MaterialTheme.typography.titleMedium)
+                        Text("Tidak mengurangi alokasi budget", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Icon(
+                        if (unexpectedExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                        contentDescription = if (unexpectedExpanded) "Tutup rincian" else "Lihat rincian",
+                    )
+                }
                 Text(money(unexpectedTotal), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.error)
-                Text("Tidak mengurangi alokasi budget", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (unexpectedExpanded && unexpectedSplitsByCategory.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(8.dp))
+                    unexpectedSplitsByCategory.forEach { (catName, amount, _) ->
+                        Column(Modifier.fillMaxWidth().padding(vertical = 7.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(catName, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
+                            Text(
+                                "Total ${money(amount)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                } else if (unexpectedExpanded) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("Tidak ada rincian per kategori", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
         item { Spacer(Modifier.height(24.dp)) }

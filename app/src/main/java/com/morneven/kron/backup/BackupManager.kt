@@ -216,59 +216,66 @@ class BackupManager @Inject constructor(
                         "transaction_splits", "audit_snapshots", "ledger_lines",
                         "journal_seals", "evidence_keys",
                     )
-                    try {
-                        liveDb.beginTransaction()
-                        try {
-                            for (table in appendOnlyTables) {
-                                liveDb.execSQL("DROP TRIGGER IF EXISTS append_only_${table}_delete")
-                                liveDb.execSQL("DROP TRIGGER IF EXISTS append_only_${table}_update")
-                            }
-                            liveDb.execSQL("DROP TRIGGER IF EXISTS append_only_receipts_update")
-                            liveDb.execSQL("DROP TRIGGER IF EXISTS append_only_receipts_delete")
-                            liveDb.execSQL(
-                                "UPDATE sync_state SET status = 'SYNCED' WHERE id = 1",
-                            )
-                            Log.w("KRON_APPLY", "status set to SYNCED via raw SQL")
-                            val cursor = liveDb.query(
-                                """SELECT name FROM restore_db.sqlite_master
-                                   WHERE type='table' AND name NOT LIKE 'room_%'
-                                   AND name != 'sync_state' AND name != 'android_metadata'""",
-                            )
-                            val tables = mutableListOf<String>()
-                            while (cursor.moveToNext()) tables.add(cursor.getString(0))
-                            cursor.close()
-                            Log.w("KRON_APPLY", "copying ${tables.size} tables")
-                            for (table in tables) {
-                                liveDb.execSQL("DELETE FROM $table")
-                                liveDb.execSQL(
-                                    "INSERT INTO $table SELECT * FROM restore_db.$table",
-                                )
-                            }
-                            Log.w("KRON_APPLY", "copy done")
-                            liveDb.execSQL(
-                                """UPDATE sync_state
-                                   SET lastSyncedGeneration = localGeneration,
-                                       parentSnapshotId = ?,
-                                       lastSnapshotId = ?,
-                                       lastSyncedAt = ?,
-                                       accountSubject = ?,
-                                       accountEmail = ?
-                                   WHERE id = 1""",
-                                arrayOf<Any?>(parentSnapshotId, snapshotId, System.currentTimeMillis(), accountSubject, accountEmail),
-                            )
-                            liveDb.setTransactionSuccessful()
-                            Log.w("KRON_APPLY", "txn committed")
-                        } finally {
-                            liveDb.endTransaction()
-                            recreateAppendOnlyTriggers(liveDb)
-                            Log.w("KRON_APPLY", "triggers recreated")
-                            Log.w("KRON_APPLY", "post-commit, reading syncState via Room")
-                            database.kronDao().syncState()
-                        }
-                    } finally {
-                        liveDb.execSQL("DETACH DATABASE restore_db")
-                        Log.w("KRON_APPLY", "detached")
+                    for (table in appendOnlyTables) {
+                        liveDb.execSQL("DROP TRIGGER IF EXISTS append_only_${table}_delete")
+                        liveDb.execSQL("DROP TRIGGER IF EXISTS append_only_${table}_update")
                     }
+                    liveDb.execSQL("DROP TRIGGER IF EXISTS append_only_receipts_update")
+                    liveDb.execSQL("DROP TRIGGER IF EXISTS append_only_receipts_delete")
+                    val guardedTables = listOf(
+                        "accounts", "categories", "portfolios",
+                        "budget_periods", "allocations",
+                        "portfolio_allocation_templates", "activity_events",
+                        "recurring_rules", "receipts",
+                        "cash_journal_lines", "budget_journal_lines",
+                        "transaction_splits", "recurring_occurrences",
+                        "audit_snapshots", "ledger_accounts",
+                        "ledger_lines", "journal_seals", "evidence_keys",
+                    )
+                    for (table in guardedTables) {
+                        for (op in listOf("INSERT", "UPDATE", "DELETE")) {
+                            liveDb.execSQL(
+                                "DROP TRIGGER IF EXISTS sync_write_guard_${table}_${op.lowercase()}",
+                            )
+                        }
+                    }
+                    Log.w("KRON_APPLY", "triggers dropped")
+                    val cursor = liveDb.query(
+                        """SELECT name FROM restore_db.sqlite_master
+                           WHERE type='table' AND name NOT LIKE 'room_%'
+                           AND name != 'sync_state' AND name != 'android_metadata'""",
+                    )
+                    val tables = mutableListOf<String>()
+                    while (cursor.moveToNext()) tables.add(cursor.getString(0))
+                    cursor.close()
+                    Log.w("KRON_APPLY", "copying ${tables.size} tables")
+                    val dao = database.kronDao()
+                    for (table in tables) {
+                        dao.executeRaw(
+                            androidx.sqlite.db.SimpleSQLiteQuery("DELETE FROM $table"),
+                        )
+                        dao.executeRaw(
+                            androidx.sqlite.db.SimpleSQLiteQuery(
+                                "INSERT INTO $table SELECT * FROM restore_db.$table",
+                            ),
+                        )
+                    }
+                    Log.w("KRON_APPLY", "copy done, triggering Room invalidation")
+                    for (table in tables) {
+                        try {
+                            liveDb.execSQL(
+                                "UPDATE $table SET _rowid_ = _rowid_ WHERE _rowid_ IN (SELECT _rowid_ FROM $table LIMIT 1)",
+                            )
+                        } catch (_: Exception) {
+                        }
+                    }
+                    database.invalidationTracker.refreshAsync()
+                    Log.w("KRON_APPLY", "Room invalidation triggered")
+                    recreateAppendOnlyTriggers(liveDb)
+                    recreateSyncWriteGuardTriggers(liveDb)
+                    Log.w("KRON_APPLY", "triggers recreated")
+                    liveDb.execSQL("DETACH DATABASE restore_db")
+                    Log.w("KRON_APPLY", "detached")
                 } finally {
                     deleteDatabaseFiles(validationFile)
                 }
@@ -1063,6 +1070,34 @@ class BackupManager @Inject constructor(
                 SELECT RAISE(ABORT, 'Bukti KRON bersifat append-only');
             END
         """.trimIndent())
+    }
+
+    private fun recreateSyncWriteGuardTriggers(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        val guardedTables = listOf(
+            "accounts", "categories", "portfolios",
+            "budget_periods", "allocations",
+            "portfolio_allocation_templates", "activity_events",
+            "recurring_rules", "receipts",
+            "cash_journal_lines", "budget_journal_lines",
+            "transaction_splits", "recurring_occurrences",
+            "audit_snapshots", "ledger_accounts",
+            "ledger_lines", "journal_seals", "evidence_keys",
+        )
+        guardedTables.forEach { table ->
+            for (op in listOf("INSERT", "UPDATE", "DELETE")) {
+                db.execSQL("""
+                    CREATE TRIGGER IF NOT EXISTS sync_write_guard_${table}_${op.lowercase()}
+                    BEFORE $op ON $table
+                    WHEN EXISTS(
+                        SELECT 1 FROM sync_state
+                        WHERE id = 1 AND status IN ('SYNCING','RESTART_REQUIRED')
+                    )
+                    BEGIN
+                        SELECT RAISE(ABORT, 'KRON sedang menyinkronkan atau menunggu restart');
+                    END
+                """.trimIndent())
+            }
+        }
     }
 
     companion object {

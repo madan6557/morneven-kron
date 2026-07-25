@@ -343,7 +343,7 @@ private fun MainScaffold(
         mutableStateOf(driveSyncRuntime?.isWifiOnly() ?: false)
     }
     val scope = rememberCoroutineScope()
-    val screenshotProtected = state.valuesVisible || dialog != null || auditId != null || showEvidenceCenter || passwordMode != null
+    val screenshotProtected = !state.screenshotAllowed && (state.valuesVisible || dialog != null || auditId != null || showEvidenceCenter || passwordMode != null)
     DisposableEffect(activity, screenshotProtected) {
         if (screenshotProtected) activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -747,6 +747,15 @@ private fun MainScaffold(
                                 putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName)
                             },
                         )
+                    },
+                    onScreenshotAllowed = { enabled ->
+                        if (enabled) {
+                            authenticateCriticalAction("Izinkan screenshot") {
+                                viewModel.setScreenshotAllowed(true)
+                            }
+                        } else {
+                            viewModel.setScreenshotAllowed(false)
+                        }
                     },
                 )
             }

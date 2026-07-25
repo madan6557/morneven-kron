@@ -26,6 +26,7 @@ class PrivacyPreferences @Inject constructor(
         val authFailures = androidx.datastore.preferences.core.intPreferencesKey("auth_failures")
         val authLockedUntil = androidx.datastore.preferences.core.longPreferencesKey("auth_locked_until")
         val budgetAlertsEnabled = booleanPreferencesKey("budget_alerts_enabled")
+        val screenshotAllowed = booleanPreferencesKey("screenshot_allowed")
     }
 
     val rememberVisibility: Flow<Boolean> = context.dataStore.data.map { it[Keys.rememberVisibility] ?: false }
@@ -38,6 +39,7 @@ class PrivacyPreferences @Inject constructor(
     val authFailures: Flow<Int> = context.dataStore.data.map { it[Keys.authFailures] ?: 0 }
     val authLockedUntil: Flow<Long> = context.dataStore.data.map { it[Keys.authLockedUntil] ?: 0L }
     val budgetAlertsEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.budgetAlertsEnabled] ?: false }
+    val screenshotAllowed: Flow<Boolean> = context.dataStore.data.map { it[Keys.screenshotAllowed] ?: false }
 
     suspend fun setRememberVisibility(value: Boolean) = context.dataStore.edit { it[Keys.rememberVisibility] = value }
     suspend fun setLastVisibility(value: Boolean) = context.dataStore.edit { it[Keys.lastVisibility] = value }
@@ -45,6 +47,7 @@ class PrivacyPreferences @Inject constructor(
     suspend fun setTheme(value: String) = context.dataStore.edit { it[Keys.theme] = value }
     suspend fun completeOnboarding() = context.dataStore.edit { it[Keys.onboardingComplete] = true }
     suspend fun setBudgetAlertsEnabled(value: Boolean) = context.dataStore.edit { it[Keys.budgetAlertsEnabled] = value }
+    suspend fun setScreenshotAllowed(value: Boolean) = context.dataStore.edit { it[Keys.screenshotAllowed] = value }
     suspend fun recordAuthFailure(now: Long = System.currentTimeMillis()) = context.dataStore.edit { prefs ->
         val failures = (prefs[Keys.authFailures] ?: 0) + 1
         prefs[Keys.authFailures] = failures

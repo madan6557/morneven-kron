@@ -7,7 +7,11 @@ import com.morneven.kron.data.AllocationBalanceRow
 import com.morneven.kron.data.KronDatabase
 import com.morneven.kron.data.LedgerSide
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -18,22 +22,30 @@ class CsvExporter @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val database: KronDatabase,
 ) {
+    private val timeFmt = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.forLanguageTag("id-ID"))
+
     suspend fun export(uri: Uri, activities: List<ActivityRow>, allocations: List<AllocationBalanceRow>) = withContext(Dispatchers.IO) {
         val dao = database.kronDao()
         val ledgerByEvent = dao.allLedgerLines().groupBy { it.eventId }
         val receiptsByEvent = dao.allReceipts().groupBy { it.eventId }
+        val splitsByEvent = dao.allSplits().groupBy { it.eventId }
+        val categories = dao.allCategories().associateBy { it.id }
         context.contentResolver.openOutputStream(uri, "w")?.bufferedWriter(Charsets.UTF_8)?.use { writer ->
             writer.write("\uFEFF")
+
             writer.appendLine("KRON ACTIVITY JOURNAL")
-            writer.appendLine("event_id,tanggal_efektif,waktu_dicatat,tipe,judul,sumber,debit,kredit,kanal,dampak_akun,dampak_vault,dampak_budget,reversal,attachment_hash,status_audit")
+            writer.appendLine("event_id,tanggal_efektif,waktu_dicatat,tipe,judul,catatan,sumber,debit,kredit,kanal,dampak_akun,dampak_vault,dampak_budget,reversal,jumlah_split,attachment_hash,status_audit")
             activities.forEach { event ->
                 val ledger = ledgerByEvent[event.id].orEmpty()
+                val splits = splitsByEvent[event.id].orEmpty()
+                val createdAtZoned = Instant.ofEpochMilli(event.createdAt).atZone(ZoneId.systemDefault())
                 writer.appendLine(listOf(
                     event.id,
                     LocalDate.ofEpochDay(event.effectiveEpochDay),
-                    java.time.Instant.ofEpochMilli(event.createdAt),
+                    createdAtZoned.format(timeFmt),
                     event.type,
                     event.title,
+                    event.note,
                     event.source,
                     ledger.filter { it.side == LedgerSide.DEBIT }.sumOf { it.amount },
                     ledger.filter { it.side == LedgerSide.CREDIT }.sumOf { it.amount },
@@ -42,10 +54,31 @@ class CsvExporter @Inject constructor(
                     event.vaultImpact,
                     event.budgetImpact,
                     event.reversedByEventId.orEmpty(),
+                    splits.size,
                     receiptsByEvent[event.id].orEmpty().joinToString("|") { it.sha256 },
                     event.auditStatus,
                 ).joinToString(",") { csv(it) })
             }
+
+            writer.appendLine()
+            writer.appendLine("KRON TRANSACTION SPLITS")
+            writer.appendLine("event_id,tanggal_efektif,tipe,judul,kategori_id,nama_kategori,dampak_nominal")
+            activities.forEach { event ->
+                val splits = splitsByEvent[event.id].orEmpty()
+                splits.forEach { split ->
+                    val catName = split.categoryId?.let { categories[it]?.name } ?: ""
+                    writer.appendLine(listOf(
+                        event.id,
+                        LocalDate.ofEpochDay(event.effectiveEpochDay),
+                        event.type,
+                        event.title,
+                        split.categoryId ?: "",
+                        catName,
+                        split.amount,
+                    ).joinToString(",") { csv(it) })
+                }
+            }
+
             writer.appendLine()
             writer.appendLine("KRON BUDGET VS ACTUAL")
             writer.appendLine("portfolio,kategori,kanal,rencana,booking,pengeluaran,sisa,status")
@@ -61,6 +94,22 @@ class CsvExporter @Inject constructor(
                     row.periodStatus,
                 ).joinToString(",") { csv(it) })
             }
+
+            writer.appendLine()
+            writer.appendLine("KRON SUMMARY")
+            val income = activities.filter { it.type in setOf("INCOME", "OPENING_BALANCE") && it.reversedByEventId == null }.sumOf { it.cashImpact.coerceAtLeast(0L) }
+            val expense = activities.filter { it.type in setOf("EXPENSE", "AUTOMATION") && it.reversedByEventId == null }.sumOf { (-it.cashImpact).coerceAtLeast(0L) }
+            val unexpected = activities.filter { it.type == "UNEXPECTED_EXPENSE" && it.reversedByEventId == null }.sumOf { (-it.cashImpact).coerceAtLeast(0L) }
+            val reversalCount = activities.count { it.reversedByEventId != null }
+            val totalEvents = activities.size
+            val totalReceipts = receiptsByEvent.size
+            writer.appendLine("metrik,nilai")
+            writer.appendLine("total_event,$totalEvents")
+            writer.appendLine("total_pemasukan,$income")
+            writer.appendLine("total_pengeluaran,$expense")
+            writer.appendLine("total_pengeluaran_tak_terduga,$unexpected")
+            writer.appendLine("total_reversal,$reversalCount")
+            writer.appendLine("total_lampiran,$totalReceipts")
         } ?: error("Tidak dapat membuka file CSV")
     }
 

@@ -85,7 +85,7 @@ object DriveSyncScheduler {
     fun scheduleAfterChange(context: Context, wifiOnly: Boolean = false) {
         val request = OneTimeWorkRequestBuilder<DriveSyncWorker>()
             .setConstraints(constraints(wifiOnly, requireBatteryNotLow = true))
-            .setInitialDelay(30, TimeUnit.SECONDS)
+            .setInitialDelay(7, TimeUnit.SECONDS)
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
             DriveSyncWorker.UNIQUE_DEBOUNCED_WORK,

@@ -19,11 +19,19 @@ class RoomSyncStateStore(
     }
 
     override suspend fun update(transform: (SyncState) -> SyncState): SyncState = mutex.withLock {
-        database.withTransaction {
-            val updated = transform(readOrCreate().toModel())
-            database.kronDao().upsertSyncState(updated.toEntity())
-            updated
+        val updated = database.withTransaction {
+            val current = transform(readOrCreate().toModel())
+            database.kronDao().upsertSyncState(current.toEntity())
+            current
         }
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE sync_state SET updatedAt = ? WHERE id = 1",
+            arrayOf(System.currentTimeMillis()),
+        )
+        val entity = updated.toEntity()
+        SyncStateBridge.emit(entity)
+        database.invalidationTracker.refreshAsync()
+        updated
     }
 
     private suspend fun readOrCreate(): SyncStateEntity = database.kronDao().syncState() ?: SyncStateEntity(
