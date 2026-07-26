@@ -5,6 +5,7 @@ import androidx.sqlite.db.SupportSQLiteOpenHelper
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.FileOutputStream
+import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
 import net.zetetic.database.sqlcipher.SQLiteDatabase
@@ -64,7 +65,7 @@ class DatabaseEncryptionManager @Inject constructor(
         return net.zetetic.database.sqlcipher.SupportOpenHelperFactory(effectiveKey)
     }
 
-    fun preparePrimaryDatabase(database: File): DatabasePreparation {
+    fun preparePrimaryDatabase(database: File, targetSchemaVersion: Int? = null): DatabasePreparation {
         if (!database.exists()) {
             if (
                 keyManager.isAnyKeyProfileProvisioned() ||
@@ -80,6 +81,20 @@ class DatabaseEncryptionManager @Inject constructor(
 
         val existingMode = resolveKnownMode(database)
         if (existingMode != null) {
+            val sourceSchemaVersion = encryptedUserVersion(database, existingMode)
+            if (targetSchemaVersion != null && sourceSchemaVersion != null && sourceSchemaVersion < targetSchemaVersion) {
+                keyManager.preserveKeyMetadataForUpgrade()
+                val rollback = prepareSchemaRecoveryCopy(
+                    database,
+                    existingMode,
+                    sourceSchemaVersion,
+                    targetSchemaVersion,
+                )
+                return DatabasePreparation(
+                    existingMode,
+                    EncryptionGuard(database, rollback, ::markContinuityValidated),
+                )
+            }
             if (isContinuityValidated()) {
                 return DatabasePreparation(existingMode, null)
             }
@@ -208,7 +223,7 @@ class DatabaseEncryptionManager @Inject constructor(
             resolveKnownMode(rollback) != null || canOpenPlaintext(rollback) ||
                 canOpenEncrypted(rollback, ByteArray(0)),
         ) { "Salinan pra-upgrade tidak dapat diverifikasi" }
-        keyManager.restoreKeyMetadataFromUpgradeCopy()
+        if (!rollback.name.contains(".pre-schema-")) keyManager.restoreKeyMetadataFromUpgradeCopy()
         val quarantine = File(database.parentFile, ".${database.name}.unreadable-${System.currentTimeMillis()}")
         deleteDatabaseFiles(quarantine)
         if (hasDatabaseFiles(database)) moveDatabaseFiles(database, quarantine)
@@ -224,6 +239,18 @@ class DatabaseEncryptionManager @Inject constructor(
     fun discardValidatedPreUpgradeCopy(database: File) {
         if (!isContinuityValidated()) return
         deleteDatabaseFiles(preUpgradeCopy(database))
+        schemaRecoveryCopies(database).forEach { recovery ->
+            val launches = File(recovery.path + SCHEMA_LAUNCH_SUFFIX)
+            val count = (launches.takeIf(File::isFile)?.readText()?.toIntOrNull() ?: 0) + 1
+            if (count >= REQUIRED_SCHEMA_LAUNCHES) {
+                deleteDatabaseFiles(recovery)
+                File(recovery.path + SCHEMA_PROOF_SUFFIX).delete()
+                launches.delete()
+                schemaKeyRecoveryDirectory(recovery).deleteRecursively()
+            } else {
+                writeSynced(launches, count.toString().toByteArray(Charsets.US_ASCII))
+            }
+        }
     }
 
     fun markFreshDatabaseValidated() = markContinuityValidated()
@@ -328,6 +355,108 @@ class DatabaseEncryptionManager @Inject constructor(
             raw.fill(0)
             root.fill(0)
         }
+    }
+
+    private fun encryptedUserVersion(database: File, mode: DatabaseKeyMode): Int? {
+        val root = runCatching { keyManager.loadExistingDatabasePassphrase() }.getOrNull() ?: return null
+        val key = keyBytes(root, mode)
+        root.fill(0)
+        return try {
+            SQLiteDatabase.openDatabase(
+                database.absolutePath,
+                key,
+                null,
+                SQLiteDatabase.OPEN_READONLY,
+                null,
+            ).use { opened ->
+                opened.query("PRAGMA user_version").use { cursor ->
+                    cursor.takeIf { it.moveToFirst() }?.getInt(0)
+                }
+            }
+        } finally {
+            key.fill(0)
+        }
+    }
+
+    private fun prepareSchemaRecoveryCopy(
+        database: File,
+        mode: DatabaseKeyMode,
+        sourceVersion: Int,
+        targetVersion: Int,
+    ): File {
+        val recovery = File(database.parentFile, ".${database.name}.pre-schema-$sourceVersion-to-$targetVersion")
+        val proof = File(recovery.path + SCHEMA_PROOF_SUFFIX)
+        val expected = schemaRecoveryProof(database, mode, sourceVersion, targetVersion)
+        if (hasDatabaseFiles(recovery)) {
+            require(
+                proof.isFile && proof.readText() == expected && schemaKeyMetadataMatches(recovery),
+            ) { "Salinan pemulihan schema sudah stale" }
+        } else {
+            copyDatabaseFiles(database, recovery)
+            copySchemaKeyMetadata(recovery)
+            require(resolveKnownMode(recovery) == mode) { "Salinan pemulihan schema tidak dapat dibuka" }
+            require(encryptedUserVersion(recovery, mode) == sourceVersion) { "Versi salinan pemulihan schema berubah" }
+            require(schemaRecoveryProof(recovery, mode, sourceVersion, targetVersion) == expected) {
+                "Checksum salinan pemulihan schema tidak cocok"
+            }
+            require(schemaKeyMetadataMatches(recovery)) { "Metadata kunci salinan pemulihan schema tidak cocok" }
+            writeSynced(proof, expected.toByteArray(Charsets.UTF_8))
+        }
+        return recovery
+    }
+
+    private fun copySchemaKeyMetadata(recovery: File) {
+        val directory = schemaKeyRecoveryDirectory(recovery)
+        directory.deleteRecursively()
+        require(directory.mkdirs()) { "Direktori metadata kunci pemulihan tidak dapat dibuat" }
+        schemaKeyFiles().filter(File::isFile).forEach { source ->
+            copyFileAndSync(source, File(directory, source.name))
+        }
+        syncDirectory(directory)
+    }
+
+    private fun schemaKeyMetadataMatches(recovery: File): Boolean {
+        val directory = schemaKeyRecoveryDirectory(recovery)
+        return directory.isDirectory && schemaKeyFiles().all { source ->
+            val copy = File(directory, source.name)
+            !source.exists() || copy.isFile && source.length() == copy.length() && sha256(source) == sha256(copy)
+        }
+    }
+
+    private fun schemaKeyFiles(): List<File> = listOf(
+        "database-key-v1.bin",
+        "database-key-profile-v1.bin",
+        "database-key-profile-v2.bin",
+        "database-key-initialization-v1.pending",
+    ).map { File(context.noBackupFilesDir, "security/$it") }
+
+    private fun schemaKeyRecoveryDirectory(recovery: File) = File(recovery.path + ".security")
+
+    private fun schemaRecoveryProof(
+        database: File,
+        mode: DatabaseKeyMode,
+        sourceVersion: Int,
+        targetVersion: Int,
+    ): String = buildString {
+        append(sourceVersion).append(':').append(targetVersion).append(':').append(mode.name)
+        listOf("", "-wal", "-shm").forEach { suffix ->
+            val file = File(database.path + suffix)
+            append('\n').append(suffix.ifEmpty { "db" }).append(':')
+            if (file.isFile) append(file.length()).append(':').append(sha256(file)) else append("missing")
+        }
+    }
+
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun canOpenEncrypted(database: File, passphrase: ByteArray): Boolean {
@@ -471,10 +600,15 @@ class DatabaseEncryptionManager @Inject constructor(
     private fun preUpgradeCopy(database: File): File =
         File(database.parentFile, ".${database.name}.pre-1.5.0")
 
-    private fun recoveryCopies(database: File): List<File> = listOf(
+    private fun recoveryCopies(database: File): List<File> = schemaRecoveryCopies(database) + listOf(
         preUpgradeCopy(database),
         File(database.parentFile, ".${database.name}.pre-1.4.7"),
     )
+
+    private fun schemaRecoveryCopies(database: File): List<File> =
+        database.parentFile?.listFiles().orEmpty().filter {
+            it.isFile && it.name.matches(Regex("\\.${Regex.escape(database.name)}\\.pre-schema-\\d+-to-\\d+"))
+        }
 
     private fun hasPrimaryRecoveryArtifacts(database: File): Boolean =
         database.parentFile?.listFiles()?.any { candidate ->
@@ -523,6 +657,16 @@ class DatabaseEncryptionManager @Inject constructor(
         }
     }
 
+    private fun writeSynced(target: File, bytes: ByteArray) {
+        target.parentFile?.mkdirs()
+        FileOutputStream(target, false).use { output ->
+            output.write(bytes)
+            output.flush()
+            output.fd.sync()
+        }
+        syncDirectory(requireNotNull(target.parentFile))
+    }
+
     private fun deleteDatabaseFiles(database: File) {
         database.delete()
         File(database.path + "-wal").delete()
@@ -542,7 +686,7 @@ class DatabaseEncryptionManager @Inject constructor(
 
     private fun sqlString(value: String): String = value.replace("'", "''")
 
-    class EncryptionGuard internal constructor(
+    inner class EncryptionGuard internal constructor(
         private val liveDatabase: File,
         private val recoveryDatabase: File,
         private val onCommit: () -> Unit,
@@ -550,20 +694,16 @@ class DatabaseEncryptionManager @Inject constructor(
         fun commit() = onCommit()
 
         fun rollback() {
-            if (!recoveryDatabase.exists()) return
-            liveDatabase.delete()
-            File(liveDatabase.path + "-wal").delete()
-            File(liveDatabase.path + "-shm").delete()
-            recoveryDatabase.inputStream().use { input ->
-                FileOutputStream(liveDatabase, false).use { output ->
-                    input.copyTo(output)
-                    output.flush()
-                    output.fd.sync()
-                }
-            }
-            listOf("-wal", "-shm").forEach { suffix ->
-                val source = File(recoveryDatabase.path + suffix)
-                if (source.isFile) source.copyTo(File(liveDatabase.path + suffix), overwrite = true)
+            if (!hasDatabaseFiles(recoveryDatabase)) return
+            val quarantine = File(liveDatabase.parentFile, ".${liveDatabase.name}.failed-upgrade-${System.currentTimeMillis()}")
+            deleteDatabaseFiles(quarantine)
+            if (hasDatabaseFiles(liveDatabase)) moveDatabaseFiles(liveDatabase, quarantine)
+            try {
+                copyDatabaseFiles(recoveryDatabase, liveDatabase)
+            } catch (error: Exception) {
+                deleteDatabaseFiles(liveDatabase)
+                if (hasDatabaseFiles(quarantine)) moveDatabaseFiles(quarantine, liveDatabase)
+                throw error
             }
         }
     }
@@ -571,6 +711,9 @@ class DatabaseEncryptionManager @Inject constructor(
     companion object {
         private const val HEX_DIGITS = "0123456789abcdef"
         private const val MIN_DATABASE_BYTES = 16
+        private const val REQUIRED_SCHEMA_LAUNCHES = 2
+        private const val SCHEMA_PROOF_SUFFIX = ".proof"
+        private const val SCHEMA_LAUNCH_SUFFIX = ".launches"
         private val CONTINUITY_MAGIC = "KRONCONT150".toByteArray(Charsets.US_ASCII)
     }
 }

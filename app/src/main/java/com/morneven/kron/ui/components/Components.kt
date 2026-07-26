@@ -28,6 +28,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -84,6 +85,7 @@ private fun offsetForDigitCount(value: String, digits: Int): Int {
 @Composable
 fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
     var field by remember { mutableStateOf(TextFieldValue(formatMoneyInput(value))) }
+    var touched by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(value) {
         val formatted = formatMoneyInput(value)
         if (field.text != formatted) field = TextFieldValue(formatted, TextRange(formatted.length))
@@ -91,6 +93,7 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
     androidx.compose.material3.OutlinedTextField(
         value = field,
         onValueChange = { candidate ->
+            touched = true
             val raw = sanitizeMoneyDigits(candidate.text)
             if (raw.isNotEmpty() && raw.toLongOrNull() == null) return@OutlinedTextField
             val digitsBeforeCursor = digitCountBefore(candidate.text, candidate.selection.start)
@@ -104,12 +107,39 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        isError = touched && parseMoneyInput(value) <= 0,
+        supportingText = if (touched && parseMoneyInput(value) <= 0) {
+            { Text("Nominal harus lebih dari nol") }
+        } else {
+            null
+        },
     )
 }
 
 private const val MONEY_MASK = "Rp ••••••"
 
 fun displayMoney(value: Long, visible: Boolean): String = if (visible) formatIdr(value) else MONEY_MASK
+
+fun eventTypeLabel(type: String): String = when (type) {
+    "INCOME" -> "Pemasukan"
+    "EXPENSE" -> "Pengeluaran"
+    "UNEXPECTED_EXPENSE" -> "Pengeluaran tak terduga"
+    "TRANSFER" -> "Transfer antar akun"
+    "CHANNEL_TRANSFER" -> "Transfer antar kanal"
+    "OPENING_BALANCE" -> "Saldo awal"
+    "PORTFOLIO_BOOKING" -> "Booking budget"
+    "REALLOCATION" -> "Realokasi budget"
+    "OVERBUDGET_COVERAGE" -> "Penutupan overbudget"
+    "RELEASE" -> "Pelepasan budget"
+    "ROLLOVER" -> "Rollover"
+    "AUTOMATION" -> "Transaksi otomatis"
+    "REVERSAL" -> "Reversal"
+    "ARCHIVE" -> "Arsip"
+    "RESTORE" -> "Pemulihan"
+    "RESTORE_REVERSAL" -> "Pemulihan reversal"
+    "CORRECTION" -> "Koreksi jurnal"
+    else -> type.replace('_', ' ').lowercase().replaceFirstChar { it.titlecase() }
+}
 
 fun shouldCompactPrimaryHomeMoney(value: Long): Boolean = BigDecimal.valueOf(value).abs() >= BigDecimal.valueOf(1_000_000L)
 

@@ -272,17 +272,19 @@ fun ReportsScreen(
                     )
                 }
             }
-            Text("Seri", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(end = 12.dp)) {
-                items(ReportSeries.entries, key = { it.name }) { item ->
-                    FilterChip(
-                        selected = series == item,
-                        onClick = {
-                            series = item
-                            selectedPoint = -1
-                        },
-                        label = { Text(item.label) },
-                    )
+            if (mode == ReportMode.CASH_FLOW) {
+                Text("Seri", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(end = 12.dp)) {
+                    items(ReportSeries.entries, key = { it.name }) { item ->
+                        FilterChip(
+                            selected = series == item,
+                            onClick = {
+                                series = item
+                                selectedPoint = -1
+                            },
+                            label = { Text(item.label) },
+                        )
+                    }
                 }
             }
             Text("Kanal aset dan budget", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -310,7 +312,7 @@ fun ReportsScreen(
         item {
             HudCard {
                 SectionHeader(
-                    if (mode == ReportMode.CUMULATIVE) "Saldo $rangeLabel" else "Cash flow $rangeLabel"
+                    if (mode == ReportMode.CUMULATIVE) "Perubahan saldo $rangeLabel" else "Cash flow $rangeLabel"
                 )
                 ReportMetric("Masuk", money(income), KronGreen) {
                     ChangeIndicator(income, prevIncome, ComparisonType.INCOME, visible, ::compactChange)
@@ -518,7 +520,7 @@ fun ReportsScreen(
 }
 
 private enum class ReportMode(val label: String) {
-    CUMULATIVE("Saldo"),
+    CUMULATIVE("Akumulasi net"),
     CASH_FLOW("Arus kas"),
 }
 

@@ -1,5 +1,7 @@
 package com.morneven.kron.sync
 
+import kotlinx.coroutines.CancellationException
+
 /**
  * Implement this interface with Credential Manager. ID tokens are used only to
  * identify the selected account and must not replace the local KRON app lock.
@@ -73,7 +75,11 @@ class AuthorizationClientDriveSession(
     override suspend fun connect(): DriveConnectResult {
         val selector = accountSelector
             ?: return DriveConnectResult.Failed("Pemilih akun Google tidak tersedia", retryable = false)
-        val account = runCatching { selector.selectAccount() }.getOrElse { error ->
+        val account = try {
+            selector.selectAccount()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
             return DriveConnectResult.Failed(
                 error.message ?: "Pemilihan akun Google tidak dapat diselesaikan",
                 retryable = true,
@@ -131,8 +137,20 @@ class AuthorizationClientDriveSession(
         val account = accountStore.read()
         val token = cachedGrant?.accessToken
         cachedGrant = null
-        if (token != null) runCatching { authorizationClient.clearToken(token) }
-        if (account != null) runCatching { authorizationClient.revokeAccess(account) }
+        if (token != null) try {
+            authorizationClient.clearToken(token)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            Unit
+        }
+        if (account != null) try {
+            authorizationClient.revokeAccess(account)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            Unit
+        }
         accountStore.write(null)
     }
 

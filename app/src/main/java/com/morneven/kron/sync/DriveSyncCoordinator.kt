@@ -1,8 +1,8 @@
 package com.morneven.kron.sync
 
-import android.util.Log
 import java.io.IOException
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -215,9 +215,7 @@ class DriveSyncCoordinator(
                     lastError = null,
                 )
             }
-            Log.w("KRON_SYNC", "describe start")
             val descriptor = local.describe()
-            Log.w("KRON_SYNC", "describe done: gen=${descriptor.generation}")
             val state = stateStore.update {
                 it.copy(
                     datasetId = descriptor.datasetId,
@@ -228,24 +226,18 @@ class DriveSyncCoordinator(
                     },
                 )
             }
-            Log.w("KRON_SYNC", "listSnapshots start")
             val remote = drive.listSnapshots(tokenResult.accessToken)
-            Log.w("KRON_SYNC", "listSnapshots done: ${remote.size} files")
             when (val decision = DriveSyncDecisionEngine.decide(state, descriptor, tokenResult.account, remote)) {
                 is SyncDecision.Upload -> {
-                    Log.w("KRON_SYNC", "decision: Upload")
                     uploadActive(tokenResult, descriptor, decision.parentSnapshotId)
                 }
                 is SyncDecision.Download -> {
-                    Log.w("KRON_SYNC", "decision: Download sn=${decision.remote.manifest.snapshotId}")
                     downloadAndApply(tokenResult, decision.remote)
                 }
                 is SyncDecision.Conflict -> {
-                    Log.w("KRON_SYNC", "decision: Conflict")
                     recordConflict(state, descriptor, decision)
                 }
                 SyncDecision.NoChanges -> {
-                    Log.w("KRON_SYNC", "decision: NoChanges")
                     stateStore.update {
                         it.copy(
                             status = SyncStatus.SYNCED,
@@ -257,7 +249,6 @@ class DriveSyncCoordinator(
                     SyncRunResult.NoChanges
                 }
                 SyncDecision.NoData -> {
-                    Log.w("KRON_SYNC", "decision: NoData")
                     stateStore.update {
                         it.copy(
                             status = SyncStatus.SYNCED,
@@ -270,7 +261,6 @@ class DriveSyncCoordinator(
                 }
             }
         } catch (error: Throwable) {
-            Log.w("KRON_SYNC", "exception: ${error.message}")
             handleFailure(error)
         }
         }
@@ -369,27 +359,21 @@ class DriveSyncCoordinator(
 
     suspend fun downloadLatestSnapshot(): SyncRunResult = syncMutex.withLock {
         val state = stateStore.read()
-        Log.d("KRON_SWITCH", "downloadLatestSnapshot: status=${state.status}")
         if (state.status == SyncStatus.RESTART_REQUIRED) {
-            Log.d("KRON_SWITCH", "downloadLatestSnapshot: RESTART_REQUIRED")
             return SyncRunResult.RestartRequired(state.lastSnapshotId ?: "pending-restore")
         }
         if (state.disabledDueToBilling) return SyncRunResult.FreeOnlyBlocked
         stateStore.update { it.copy(status = SyncStatus.SYNCING, lastError = null) }
         val tokenResult = authorization.accessToken(interactive = false)
-        Log.d("KRON_SWITCH", "downloadLatestSnapshot: tokenResult=$tokenResult")
         if (tokenResult !is DriveAccessTokenResult.Granted) return handleTokenFailure(tokenResult)
         try {
             val remoteFiles = drive.listSnapshots(tokenResult.accessToken)
-            Log.d("KRON_SWITCH", "downloadLatestSnapshot: snapshotCount=${remoteFiles.size}")
             val latest = remoteFiles
                 .filter { it.manifest.kind == SnapshotKind.ACTIVE }
                 .maxWithOrNull(compareBy<RemoteDriveSnapshot>({ it.manifest.generation }, { it.createdAt }))
-            Log.d("KRON_SWITCH", "downloadLatestSnapshot: latest=${latest?.manifest?.snapshotId}")
             if (latest == null) return SyncRunResult.NoData
             downloadAndApply(tokenResult, latest)
         } catch (error: Throwable) {
-            Log.d("KRON_SWITCH", "downloadLatestSnapshot: error=${error.message}", error)
             handleFailure(error)
         }
     }
@@ -499,29 +483,20 @@ class DriveSyncCoordinator(
         token: DriveAccessTokenResult.Granted,
         remote: RemoteDriveSnapshot,
     ): SyncRunResult {
-        Log.w("KRON_DOWNLOAD", "start sn=${remote.manifest.snapshotId}")
         if (remote.manifest.minimumAppVersionCode > currentAppVersionCode) {
-            Log.w("KRON_DOWNLOAD", "minVersion blocked")
             return recordError("Perbarui KRON sebelum memulihkan snapshot ini", retryable = false)
         }
-        val passphrase = secretProvider.acquirePassphrase() ?: return passphraseRequired().also {
-            Log.w("KRON_DOWNLOAD", "passphrase null")
-        }
-        Log.w("KRON_DOWNLOAD", "downloading snapshot")
+        val passphrase = secretProvider.acquirePassphrase() ?: return passphraseRequired()
         val envelope = drive.downloadSnapshot(token.accessToken, remote.fileId)
-        Log.w("KRON_DOWNLOAD", "snapshot downloaded size=${envelope.size}")
         try {
             val decrypted = cryptor.decrypt(envelope, passphrase)
-            Log.w("KRON_DOWNLOAD", "decrypted payload=${decrypted.payload.size}")
             require(decrypted.manifest == remote.manifest) { "Metadata snapshot Drive tidak cocok" }
             val outcome = try {
                 local.applyRemoteAtomically(decrypted.payload, decrypted.manifest, token.account)
             } finally {
                 decrypted.payload.fill(0)
             }
-            Log.w("KRON_DOWNLOAD", "apply done outcome=$outcome, about to stateStore.update")
             stateStore.update {
-                Log.w("KRON_DOWNLOAD", "inside stateStore.update transform")
                 it.copy(
                     datasetId = remote.manifest.datasetId,
                     localGeneration = remote.manifest.generation,
@@ -529,16 +504,23 @@ class DriveSyncCoordinator(
                     parentSnapshotId = remote.manifest.parentSnapshotId,
                     lastSnapshotId = remote.manifest.snapshotId,
                     lastSyncedAtEpochMillis = nowEpochMillis(),
-                    status = SyncStatus.SYNCED,
+                    status = if (outcome == LocalApplyOutcome.RESTART_REQUIRED) {
+                        SyncStatus.RESTART_REQUIRED
+                    } else {
+                        SyncStatus.SYNCED
+                    },
                     lastError = null,
                     conflictRemoteFileId = null,
                     accountSubject = token.account.subjectId,
                     accountEmail = token.account.email,
                 )
             }
-            Log.w("KRON_DOWNLOAD", "stateStore.update done, emitting data refresh")
             DataRefreshBridge.emit()
-            return SyncRunResult.Synchronized(remote.manifest.snapshotId, uploaded = false)
+            return if (outcome == LocalApplyOutcome.RESTART_REQUIRED) {
+                SyncRunResult.RestartRequired(remote.manifest.snapshotId)
+            } else {
+                SyncRunResult.Synchronized(remote.manifest.snapshotId, uploaded = false)
+            }
         } finally {
             envelope.fill(0)
             passphrase.fill('\u0000')
@@ -546,7 +528,7 @@ class DriveSyncCoordinator(
     }
 
     private suspend fun enforceRetention(accessToken: String, datasetId: String) {
-        runCatching {
+        try {
             val state = stateStore.read()
             SnapshotRetention.filesToDelete(
                 snapshots = drive.listSnapshots(accessToken),
@@ -555,6 +537,10 @@ class DriveSyncCoordinator(
                 protectedSnapshotIds = setOfNotNull(state.lastSnapshotId, state.parentSnapshotId),
             )
                 .forEach { drive.deleteSnapshot(accessToken, it.fileId) }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // Retention is best effort and must not turn a successful upload into a failure.
         }
     }
 
@@ -605,7 +591,7 @@ class DriveSyncCoordinator(
     }
 
     private suspend fun handleFailure(error: Throwable): SyncRunResult {
-        Log.w("KRON_ERR", "type=${error::class.simpleName} msg=${error.message}")
+        if (error is CancellationException && error !is TimeoutCancellationException) throw error
         return when (error) {
             is InvalidDrivePassphraseException -> passphraseRequired(error.message)
             is DriveBillingRequiredException -> {

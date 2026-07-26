@@ -2,7 +2,6 @@ package com.morneven.kron.ui
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
-import android.util.Log
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.retry
 import androidx.lifecycle.SavedStateHandle
@@ -48,6 +47,7 @@ import java.util.Locale
 import java.time.YearMonth
 import java.util.UUID
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -165,8 +165,6 @@ class MainViewModel @Inject constructor(
     val pendingDriveDisplayName: StateFlow<String?> = savedStateHandle.getStateFlow(PENDING_DRIVE_NAME, null)
     val pendingDriveResolutionId: StateFlow<String?> = savedStateHandle.getStateFlow(PENDING_DRIVE_RESOLUTION, null)
 
-    private val month = YearMonth.now()
-
     private val dataRefresh = DataRefreshBridge.refresh.onStart { emit(Unit) }
 
     private val ledger = dataRefresh.flatMapLatest {
@@ -225,6 +223,7 @@ class MainViewModel @Inject constructor(
     }
 
     private val cashflow = dataRefresh.flatMapLatest {
+        val month = YearMonth.now()
         repository.cashflow(month.atDay(1), month.atEndOfMonth())
     }
 
@@ -287,10 +286,7 @@ class MainViewModel @Inject constructor(
             budgetAlertsEnabled = prefs.budgetAlertsEnabled,
             screenshotAllowed = prefs.screenshotAllowed,
         )
-    }.retry(Long.MAX_VALUE) {
-        Log.e("KRON_UI", "Aliran data UI dimulai ulang")
-        true
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), KronUiState())
+    }.retry(3).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), KronUiState())
 
     init {
         viewModelScope.launch {
@@ -310,7 +306,10 @@ class MainViewModel @Inject constructor(
                 repository.reconcilePortfolios()
                 repository.processDueRules(direction = TransactionDirection.EXPENSE)
                 repository.purgeExpiredReversalReceipts()
-            }.onFailure { message.value = it.message ?: "Gagal menyiapkan data" }
+            }.onFailure {
+                if (it is CancellationException) throw it
+                message.value = it.message ?: "Gagal menyiapkan data"
+            }
         }
     }
 
@@ -319,6 +318,8 @@ class MainViewModel @Inject constructor(
         sessionVisibility.value = next
         if (uiState.value.rememberVisibility) preferences.setLastVisibility(next)
     }
+
+    fun refreshForCurrentDate() = DataRefreshBridge.emit()
 
     fun hideValuesForLock() {
         sessionVisibility.value = false
@@ -629,7 +630,10 @@ class MainViewModel @Inject constructor(
     private fun runAction(success: String, block: suspend () -> Unit) = viewModelScope.launch {
         runCatching { block() }
             .onSuccess { message.value = success }
-            .onFailure { message.value = it.message ?: "Operasi gagal" }
+            .onFailure {
+                if (it is CancellationException) throw it
+                message.value = it.message ?: "Operasi gagal"
+            }
     }
 
     private companion object {

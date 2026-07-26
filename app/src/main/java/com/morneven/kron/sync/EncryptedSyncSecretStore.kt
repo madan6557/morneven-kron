@@ -23,6 +23,7 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import android.util.Log
 import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
@@ -63,8 +64,10 @@ class EncryptedSyncSecretStore @Inject constructor(
                 try {
                     storeLocked(staged)
                     return@withLock true
-                } catch (error: Throwable) {
-                    Log.w("EncryptedSyncSecretStore", "Failed to store staged passphrase", error)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Throwable) {
+                    Log.w("EncryptedSyncSecretStore", "Failed to store staged passphrase")
                     // Do not rethrow; indicate failure to caller so UI can surface it.
                     return@withLock false
                 }
@@ -274,13 +277,13 @@ internal class CrashSafeSecretFile(
                         try {
                             Files.move(file.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
                         } catch (moveErr: Throwable) {
-                            Log.w(TAG, "Failed to move corrupt secret artifact ${file.name}", moveErr)
+                            Log.w(TAG, "Failed to quarantine a corrupt secret artifact")
                         }
                     }
                 }
                 Log.w(TAG, "Quarantined corrupt secret artifacts; user will need to re-enter drive passphrase")
             } catch (qe: Throwable) {
-                Log.w(TAG, "Failed to quarantine corrupt secret artifacts", qe)
+                Log.w(TAG, "Failed to quarantine corrupt secret artifacts")
             }
             return null
         }

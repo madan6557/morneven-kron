@@ -32,6 +32,7 @@ class BudgetArchiveUiTest {
             isPaused = true,
             isArchived = true,
             archivedAt = System.currentTimeMillis(),
+            accountId = 1,
         )
         val allocation = AllocationBalanceRow(
             id = 1,

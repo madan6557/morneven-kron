@@ -9,6 +9,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.room.testing.MigrationTestHelper
 import org.junit.Rule
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -330,6 +331,58 @@ class KronMigrationTest {
             assertTrue(runCatching { execSQL("UPDATE activity_events SET title='Diubah' WHERE id='income-legacy'") }.isFailure)
             assertTrue(runCatching { execSQL("DELETE FROM ledger_lines WHERE eventId='income-legacy'") }.isFailure)
             query("PRAGMA foreign_key_check").use { cursor -> assertTrue(!cursor.moveToFirst()) }
+            close()
+        }
+    }
+
+    @Test
+    fun migrationThirteenToFourteenMakesOnlyReceiptPathNullable() {
+        val name = "kron-production-13-to-14.db"
+        migrationHelper.createDatabase(name, 13).apply {
+            query("PRAGMA journal_mode=WAL").close()
+            execSQL("INSERT INTO accounts(id,name,isActive,isArchived,archivedAt,createdAt) VALUES(1,'Utama',1,0,NULL,10)")
+            execSQL("INSERT INTO activity_events(id,type,title,note,source,effectiveEpochDay,createdAt,relatedEventId,reversedByEventId,targetAllocationId,accountId) VALUES('receipt-event','INCOME','Bukti lama','','USER',1,10,NULL,NULL,NULL,1)")
+            execSQL("INSERT INTO cash_journal_lines(id,eventId,accountId,fundingChannel,amount) VALUES(1,'receipt-event',1,'CASH',125000)")
+            execSQL("INSERT INTO budget_journal_lines(id,eventId,allocationId,bucket,fundingChannel,amount,accountId) VALUES(1,'receipt-event',NULL,'VAULT','CASH',125000,1)")
+            execSQL("INSERT INTO budget_journal_lines(id,eventId,allocationId,bucket,fundingChannel,amount,accountId) VALUES(2,'receipt-event',NULL,'EXTERNAL','CASH',-125000,1)")
+            execSQL("INSERT INTO receipts(id,eventId,localPath,storageId,displayName,mimeType,byteSize,sha256,encryptionNonce,encryptionVersion,createdAt,capturedAt,latitude,longitude,origin,evidenceEventId) VALUES(1,'receipt-event','/old/proof.kat','storage-13','Nota.jpg','image/jpeg',321,'abc123','nonce',1,20,21,-6.2,106.8,'CAMERA','receipt-event')")
+            close()
+        }
+
+        migrationHelper.runMigrationsAndValidate(name, 14, true, KronDatabase.MIGRATION_13_14).apply {
+            query("SELECT eventId,localPath,storageId,displayName,mimeType,byteSize,sha256,encryptionNonce,encryptionVersion,createdAt,capturedAt,latitude,longitude,origin,evidenceEventId FROM receipts WHERE id=1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("receipt-event", cursor.getString(0))
+                assertEquals("/old/proof.kat", cursor.getString(1))
+                assertEquals("storage-13", cursor.getString(2))
+                assertEquals("Nota.jpg", cursor.getString(3))
+                assertEquals("image/jpeg", cursor.getString(4))
+                assertEquals(321L, cursor.getLong(5))
+                assertEquals("abc123", cursor.getString(6))
+                assertEquals("nonce", cursor.getString(7))
+                assertEquals(1, cursor.getInt(8))
+                assertEquals(20L, cursor.getLong(9))
+                assertEquals(21L, cursor.getLong(10))
+                assertEquals(-6.2, cursor.getDouble(11), 0.0)
+                assertEquals(106.8, cursor.getDouble(12), 0.0)
+                assertEquals("CAMERA", cursor.getString(13))
+                assertEquals("receipt-event", cursor.getString(14))
+            }
+            query("PRAGMA table_info(receipts)").use { cursor ->
+                var nullablePath = false
+                while (cursor.moveToNext()) if (cursor.getString(1) == "localPath") nullablePath = cursor.getInt(3) == 0
+                assertTrue(nullablePath)
+            }
+            execSQL("UPDATE receipts SET localPath=NULL WHERE id=1")
+            query("SELECT localPath,byteSize,sha256 FROM receipts WHERE id=1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertTrue(cursor.isNull(0))
+                assertEquals(321L, cursor.getLong(1))
+                assertEquals("abc123", cursor.getString(2))
+            }
+            query("SELECT SUM(amount) FROM cash_journal_lines").use { cursor -> assertTrue(cursor.moveToFirst()); assertEquals(125000L, cursor.getLong(0)) }
+            query("SELECT SUM(amount) FROM budget_journal_lines").use { cursor -> assertTrue(cursor.moveToFirst()); assertEquals(0L, cursor.getLong(0)) }
+            query("PRAGMA foreign_key_check").use { cursor -> assertFalse(cursor.moveToFirst()) }
             close()
         }
     }

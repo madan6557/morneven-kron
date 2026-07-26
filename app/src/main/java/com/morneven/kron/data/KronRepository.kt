@@ -145,7 +145,11 @@ class KronRepository @Inject constructor(
         else dao.observeCashflow(start.toEpochDay(), end.toEpochDay(), accountId)
     }
 
-    private suspend fun activeAccountId(): Long = dao.activeAccount()?.id ?: 0
+    private suspend fun activeAccountId(): Long = requireNotNull(dao.activeAccount()) { "Tidak ada akun aktif" }.id
+
+    private suspend fun requireActiveAccount(accountId: Long): Long = activeAccountId().also {
+        require(it == accountId) { "Data bukan milik akun aktif" }
+    }
 
     suspend fun isFirstInstall(): Boolean = dao.accountCount() == 0
 
@@ -289,6 +293,11 @@ class KronRepository @Inject constructor(
         require(fundingChannel in setOf(FundingChannel.CASH, FundingChannel.EBUDGET)) { "Kanal dana tidak valid" }
         val account = requireNotNull(dao.accountById(accountId))
         require(account.isActive || eventType == LedgerType.OPENING_BALANCE) { "Pilih akun ini sebagai akun aktif terlebih dahulu" }
+        targetAllocationId?.let { allocationId ->
+            require(dao.portfolioForAllocation(allocationId)?.accountId == accountId) {
+                "Tujuan budget bukan milik akun aktif"
+            }
+        }
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(
             id = eventId,
@@ -353,7 +362,14 @@ class KronRepository @Inject constructor(
         val effectiveSplits = splits.map { split ->
             val allocation = split.allocationId?.let { dao.allocationById(it) }
             val period = allocation?.let { dao.periodById(it.periodId) }
-            if (allocation != null && period?.status in setOf(PeriodStatus.ACTIVE, PeriodStatus.RESOLUTION_REQUIRED)) split else split.copy(allocationId = null)
+            if (allocation != null && period?.status in setOf(PeriodStatus.ACTIVE, PeriodStatus.RESOLUTION_REQUIRED)) {
+                require(dao.portfolioForAllocation(allocation.id)?.accountId == accountId) {
+                    "Kategori budget bukan milik akun aktif"
+                }
+                split
+            } else {
+                split.copy(allocationId = null)
+            }
         }
         require(effectiveSplits.all { split -> split.allocationId == null || dao.allocationById(split.allocationId)?.fundingChannel == fundingChannel }) {
             "Kanal budget harus sama dengan kanal akun pembayaran"
@@ -404,8 +420,9 @@ class KronRepository @Inject constructor(
         require(fromAccountId != toAccountId || fromChannel != toChannel) { "Sumber dan tujuan tidak boleh sama" }
         require(amount > 0) { "Nominal harus lebih dari nol" }
         val fromAccount = requireNotNull(dao.accountById(fromAccountId))
-        requireNotNull(dao.accountById(toAccountId))
+        val toAccount = requireNotNull(dao.accountById(toAccountId))
         require(fromAccount.isActive) { "Akun sumber harus menjadi akun aktif" }
+        require(!toAccount.isArchived) { "Akun tujuan sudah diarsipkan" }
         require(fromChannel in setOf(FundingChannel.CASH, FundingChannel.EBUDGET) && toChannel in setOf(FundingChannel.CASH, FundingChannel.EBUDGET)) { "Kanal transfer tidak valid" }
         require(dao.accountBalance(fromAccountId, fromChannel) >= amount) { "Saldo kanal sumber tidak mencukupi" }
         require(dao.vaultBalance(fromChannel, fromAccountId) >= amount) {
@@ -762,6 +779,7 @@ class KronRepository @Inject constructor(
 
     suspend fun reverseEvent(originalEventId: String, reason: String) = database.withTransaction {
         val original = requireNotNull(dao.eventById(originalEventId))
+        requireActiveAccount(original.accountId)
         require(!dao.isEventReversed(originalEventId)) { "Event sudah dibalik" }
         require(original.type != LedgerType.REVERSAL) { "Reversal tidak dapat dibalik langsung" }
         require(original.type !in setOf(LedgerType.ARCHIVE, LedgerType.RESTORE)) { "Gunakan tindakan Pulihkan atau Arsipkan dari halaman terkait" }
@@ -790,6 +808,7 @@ class KronRepository @Inject constructor(
 
     suspend fun restoreReversedEvent(reversedEventId: String) = database.withTransaction {
         val original = requireNotNull(dao.eventById(reversedEventId)) { "Event tidak ditemukan" }
+        requireActiveAccount(original.accountId)
         require(dao.isEventReversed(reversedEventId)) { "Event belum dibalik" }
         require(original.type != LedgerType.REVERSAL) { "Reversal tidak dapat dipulihkan" }
         require(original.type !in setOf(LedgerType.ARCHIVE, LedgerType.RESTORE)) { "Gunakan tindakan Pulihkan atau Arsipkan dari halaman terkait" }
@@ -827,8 +846,8 @@ class KronRepository @Inject constructor(
         val deadline = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
         val expired = dao.receiptsForReversedEvents(deadline)
         for (receipt in expired) {
-            try { runCatching { java.io.File(receipt.localPath).delete() } } catch (_: Exception) {}
-            dao.clearReceiptLocalPath(receipt.id)
+            val file = receipt.localPath?.let { java.io.File(it) }
+            if (file == null || !file.exists() || file.delete()) dao.clearReceiptLocalPath(receipt.id)
         }
     }
 
@@ -841,6 +860,7 @@ class KronRepository @Inject constructor(
         require(correctedTitle.isNotBlank()) { "Judul koreksi wajib diisi" }
         require(reason.isNotBlank()) { "Alasan koreksi wajib diisi" }
         val original = requireNotNull(dao.eventById(originalEventId)) { "Event asli tidak ditemukan" }
+        requireActiveAccount(original.accountId)
         require(original.type in setOf(LedgerType.INCOME, LedgerType.EXPENSE, LedgerType.UNEXPECTED_EXPENSE, LedgerType.OPENING_BALANCE)) {
             "Jenis event ini tidak dapat dikoreksi dari form transaksi"
         }
@@ -914,17 +934,23 @@ class KronRepository @Inject constructor(
 
     suspend fun addRecurringRule(rule: RecurringRuleEntity) = database.withTransaction {
         require(rule.amount > 0)
+        requireActiveAccount(rule.accountId)
+        rule.allocationId?.let { allocationId ->
+            require(dao.portfolioForAllocation(allocationId)?.accountId == rule.accountId) {
+                "Kategori jadwal bukan milik akun aktif"
+            }
+        }
         dao.insertRule(rule)
     }
 
     suspend fun pauseRecurringRule(ruleId: String, reason: String = "Jadwal transaksi dihentikan pengguna") = database.withTransaction {
         require(reason.isNotBlank()) { "Alasan wajib diisi" }
         val rule = requireNotNull(dao.allRules().firstOrNull { it.id == ruleId })
+        requireActiveAccount(rule.accountId)
         if (rule.isPaused) return@withTransaction
         dao.updateRule(rule.copy(isPaused = true))
-        val activeId = activeAccountId()
         val eventId = UUID.randomUUID().toString()
-        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.SYSTEM, "Jadwal transaksi dihentikan", reason, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.SYSTEM, "Jadwal transaksi dihentikan", reason, "USER", LocalDate.now().toEpochDay(), accountId = rule.accountId))
         dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = reason, beforeJson = "{\"ruleId\":\"$ruleId\",\"paused\":false}", afterJson = "{\"ruleId\":\"$ruleId\",\"paused\":true}"))
         assertInvariant()
     }
@@ -936,6 +962,7 @@ class KronRepository @Inject constructor(
     ) = database.withTransaction {
         require(reason.isNotBlank()) { "Alasan wajib diisi" }
         val rule = requireNotNull(dao.allRules().firstOrNull { it.id == ruleId })
+        requireActiveAccount(rule.accountId)
         require(rule.isPaused) { "Jadwal sudah aktif" }
         require(!rule.pausedByArchive) { "Pulihkan portfolio terkait sebelum melanjutkan jadwal ini" }
         val today = LocalDate.now()
@@ -948,7 +975,6 @@ class KronRepository @Inject constructor(
         val end = rule.endEpochDay?.let(LocalDate::ofEpochDay)
         require(end == null || !next.isAfter(end)) { "Jadwal sudah melewati tanggal akhir" }
         dao.updateRule(rule.copy(nextEpochDay = next.toEpochDay(), isPaused = false))
-        val activeId = activeAccountId()
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(
             ActivityEventEntity(
@@ -958,7 +984,7 @@ class KronRepository @Inject constructor(
                 reason,
                 "USER",
                 today.toEpochDay(),
-                accountId = activeId,
+                accountId = rule.accountId,
             ),
         )
         dao.insertAudit(
@@ -974,12 +1000,12 @@ class KronRepository @Inject constructor(
 
     suspend fun pausePortfolio(portfolioId: Long, reason: String = "Portfolio dijeda pengguna") = database.withTransaction {
         val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == portfolioId })
+        requireActiveAccount(portfolio.accountId)
         require(!portfolio.isArchived) { "Pulihkan portfolio sebelum menjedanya" }
         if (portfolio.isPaused) return@withTransaction
         dao.updatePortfolio(portfolio.copy(isPaused = true))
-        val activeId = activeAccountId()
         val eventId = UUID.randomUUID().toString()
-        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.SYSTEM, "Portfolio dijeda", reason, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.SYSTEM, "Portfolio dijeda", reason, "USER", LocalDate.now().toEpochDay(), accountId = portfolio.accountId))
         dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = reason, beforeJson = "{\"portfolioId\":$portfolioId,\"paused\":false}", afterJson = "{\"portfolioId\":$portfolioId,\"paused\":true}"))
         assertInvariant()
     }
@@ -988,13 +1014,13 @@ class KronRepository @Inject constructor(
         database.withTransaction {
             require(reason.isNotBlank()) { "Alasan wajib diisi" }
             val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == portfolioId })
+            requireActiveAccount(portfolio.accountId)
             require(!portfolio.isArchived) { "Pulihkan portfolio terlebih dahulu" }
             if (!portfolio.isPaused) return@withTransaction
-            val activeId = activeAccountId()
             val eventId = UUID.randomUUID().toString()
             dao.updatePortfolio(portfolio.copy(isPaused = false))
             val resumedRuleCount = resumeRulesPausedByArchive(portfolioId, LocalDate.now())
-            dao.insertEvent(ActivityEventEntity(eventId, LedgerType.RESTORE, "Portfolio dilanjutkan", reason, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
+            dao.insertEvent(ActivityEventEntity(eventId, LedgerType.RESTORE, "Portfolio dilanjutkan", reason, "USER", LocalDate.now().toEpochDay(), accountId = portfolio.accountId))
             dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = reason, beforeJson = "{\"portfolioId\":$portfolioId,\"paused\":true}", afterJson = "{\"portfolioId\":$portfolioId,\"paused\":false,\"resumedRules\":$resumedRuleCount}"))
             assertInvariant()
         }
@@ -1004,13 +1030,14 @@ class KronRepository @Inject constructor(
     suspend fun archivePortfolio(portfolioId: Long, reason: String) = database.withTransaction {
         require(reason.isNotBlank()) { "Alasan wajib diisi" }
         val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == portfolioId })
+        requireActiveAccount(portfolio.accountId)
         require(!portfolio.isArchived) { "Portfolio sudah diarsipkan" }
         val periods = dao.periodsForPortfolio(portfolioId)
         val allocations = periods.flatMap { dao.allocationsForPeriod(it.id) }
         val available = allocations.map { it to dao.allocationAvailable(it.id) }
         require(available.none { it.second < 0 }) { "Selesaikan seluruh kategori minus sebelum mengarsipkan" }
 
-        val activeId = activeAccountId()
+        val activeId = portfolio.accountId
         val eventId = UUID.randomUUID().toString()
         val positive = available.filter { it.second > 0 }
         val releasedByChannel = positive.groupBy { it.first.fundingChannel }
@@ -1050,12 +1077,12 @@ class KronRepository @Inject constructor(
         database.withTransaction {
             require(reason.isNotBlank()) { "Alasan wajib diisi" }
             val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == portfolioId })
+            requireActiveAccount(portfolio.accountId)
             require(portfolio.isArchived) { "Portfolio tidak berada di arsip" }
             val eventId = UUID.randomUUID().toString()
             dao.updatePortfolio(portfolio.copy(isArchived = false, archivedAt = null, isPaused = !activate))
             val resumedRuleCount = if (activate) resumeRulesPausedByArchive(portfolioId, LocalDate.now()) else 0
-            val activeId = activeAccountId()
-            dao.insertEvent(ActivityEventEntity(eventId, LedgerType.RESTORE, if (activate) "Portfolio dipulihkan dan diaktifkan" else "Portfolio dipulihkan", reason, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
+            dao.insertEvent(ActivityEventEntity(eventId, LedgerType.RESTORE, if (activate) "Portfolio dipulihkan dan diaktifkan" else "Portfolio dipulihkan", reason, "USER", LocalDate.now().toEpochDay(), accountId = portfolio.accountId))
             dao.insertAudit(AuditSnapshotEntity(
                 eventId = eventId,
                 reason = reason,

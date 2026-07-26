@@ -110,7 +110,7 @@ data class PortfolioEntity(
     val isArchived: Boolean = false,
     val archivedAt: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),
-    val accountId: Long = 0,
+    val accountId: Long,
 )
 
 @Entity(
@@ -204,7 +204,7 @@ data class ActivityEventEntity(
     val relatedEventId: String? = null,
     val reversedByEventId: String? = null,
     val targetAllocationId: Long? = null,
-    val accountId: Long = 0,
+    val accountId: Long,
 )
 
 @Entity(
@@ -379,7 +379,7 @@ data class BudgetJournalLineEntity(
     val bucket: String? = null,
     val fundingChannel: String,
     val amount: Long,
-    val accountId: Long = 0,
+    val accountId: Long,
 )
 
 @Entity(
@@ -509,7 +509,7 @@ data class AuditSnapshotEntity(
 data class ReceiptEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val eventId: String,
-    val localPath: String,
+    val localPath: String?,
     val storageId: String,
     val displayName: String,
     val mimeType: String,

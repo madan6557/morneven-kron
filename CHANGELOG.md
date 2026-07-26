@@ -18,6 +18,13 @@
 
 ## 1.5.23 - 2026-07-25
 
+- Room schema 14 mengizinkan `receipts.localPath` bernilai null tanpa mengubah metadata bukti lain. Migrasi 13 ke 14 menyalin seluruh kolom, memverifikasi checksum metadata, relasi, integritas, schema Room, dan invariant finansial.
+- Upgrade schema membuat salinan rollback privat berisi database beserta WAL dan SHM, mempertahankan metadata kunci, serta memulihkan database lama jika pembukaan atau validasi kandidat gagal.
+- Purge dan restore bukti hanya mengosongkan path file lokal. Ukuran, hash, nonce, nama, asal, lokasi, dan timestamp audit tetap dipertahankan.
+- Operasi portfolio, recurring rule, reversal, koreksi, dan transfer memverifikasi kepemilikan akun aktif. Fallback akun ID 0 dihapus dan akun tujuan yang diarsipkan ditolak.
+- Sinkronisasi Drive meneruskan cancellation, tidak lagi menulis identifier atau detail payload ke log, serta melaporkan kebutuhan restart secara benar setelah restore.
+- Cash flow bulan aktif dihitung ulang saat aplikasi kembali aktif. Retry aliran UI kini terbatas.
+- UI memperjelas saldo akun aktif, cash flow, label tipe transaksi, mode laporan, validasi nominal, dan mempertahankan state form transaksi saat rotasi.
 - Halaman Beranda sekarang menyembunyikan log sistem (otomatisasi, rollover, reversal, arsip, pemulihan) dari daftar aktivitas terbaru.
 - Akses `ReceiptEntity.localPath` sekarang aman saat nilai path bukti hilang setelah penghapusan atau reversal.
 - AuditDialog untuk event `ATTACH_EVIDENCE` sekarang menampilkan transaksi induk (judul, tipe, tanggal, dampak akun) dan bukti yang terhubung.
@@ -33,22 +40,22 @@
 
 ## 1.5.21 - 2026-07-25
 
-- Fix: sync Drive tidak perlu restart — hapus raw SQL write ke sync_state, ganti dengan drop sync_write_guard trigger sebelum copy data dan recreate setelah commit. Sync_state hanya ditulis via Room DAO (stateStore.update) agar InvalidationTracker terpicu dan UI langsung update.
+- Fix: sync Drive tidak perlu restart. Hapus raw SQL write ke sync_state, ganti dengan drop sync_write_guard trigger sebelum copy data dan recreate setelah commit. Sync_state hanya ditulis via Room DAO (stateStore.update) agar InvalidationTracker terpicu dan UI langsung update.
 
 ## 1.5.20 - 2026-07-25
 
-- Fix: sync snapshot langsung (`applyPortableSnapshotDirectly`) — drop `append_only_*` trigger sebelum copy, `DELETE + INSERT` semua tabel dari restore_db, set `lastSyncedGeneration = localGeneration`, recreates trigger setelah commit. Status `SYNCED` ditulis sebelum copy agar `sync_write_guard` tidak blokir.
+- Fix: sync snapshot langsung (`applyPortableSnapshotDirectly`). Drop `append_only_*` trigger sebelum copy, `DELETE + INSERT` semua tabel dari restore_db, set `lastSyncedGeneration = localGeneration`, recreates trigger setelah commit. Status `SYNCED` ditulis sebelum copy agar `sync_write_guard` tidak blokir.
 - Fix: vault unexpected expense sekarang kurangi bucket VAULT (bukan UNEXPECTED) di `KronRepository.kt`.
 - Fix: tambah `Log.w` tracing di `DriveSyncCoordinator` dan `BackupManager` untuk diagnostik sync stuck.
 - Panggil `database.kronDao().syncState()` setelah transaksi raw SQL commit untuk memaksa Room baca ulang `sync_state`.
 
 ## 1.5.18 - 2026-07-23
 
-- Fix: CameraCaptureScreen bocor thread executor — tambah DisposableEffect untuk shutdown executor saat komposisi dibuang.
+- Fix: CameraCaptureScreen bocor thread executor. Tambah DisposableEffect untuk shutdown executor saat komposisi dibuang.
 
 ## 1.5.17 - 2026-07-23
 
-- Backup tidak lagi gagal jika ada file lampiran yang hilang — lampiran tersebut dilewati.
+- Backup tidak lagi gagal jika ada file lampiran yang hilang. Lampiran tersebut dilewati.
 - Restore backup dengan lampiran tidak lengkap tetap berjalan; receipt tanpa lampiran dikosongkan.
 
 ## 1.5.16 - 2026-07-23
@@ -60,12 +67,12 @@
 
 ## 1.5.15 - 2026-07-23
 
-- RESTORE_REVERSAL bukan lagi lifecycle event — bisa di-revert seperti transaksi biasa.
-- Hapus prefiks "Revert: " dan "Dipulihkan: " dari title — badge sudah cukup.
+- RESTORE_REVERSAL bukan lagi lifecycle event dan bisa di-revert seperti transaksi biasa.
+- Hapus prefiks "Revert: " dan "Dipulihkan: " dari title karena badge sudah cukup.
 
 ## 1.5.14 - 2026-07-23
 
-- Fix: deteksi restore reversal via parameter eksplisit `reversalRestored` di AuditDialog, dihitung di KronApp dari `state.activities` — tidak bergantung perbandingan di dialog.
+- Fix: deteksi restore reversal via parameter eksplisit `reversalRestored` di AuditDialog, dihitung di KronApp dari `state.activities`, dan tidak bergantung perbandingan di dialog.
 
 ## 1.5.13 - 2026-07-23
 
@@ -83,27 +90,27 @@
 
 - Camera: fullscreen + 1:1 square dari preview hingga hasil akhir.
 - Hapus foto bukti sementara jika transaksi dibatalkan (dialog onDismiss).
-- Restore reversal dalam 7 hari — AuditDialog menampilkan tombol "Pulihkan dalam 7 hari" untuk event yang sudah dibalik.
-- Retensi foto bukti reversal 7 hari — file dihapus otomatis setelah 7 hari reversal.
+- Restore reversal dalam 7 hari. AuditDialog menampilkan tombol "Pulihkan dalam 7 hari" untuk event yang sudah dibalik.
+- Retensi foto bukti reversal 7 hari. File dihapus otomatis setelah 7 hari reversal.
 - Fix: CameraX fullscreen Dialog dengan `usePlatformDefaultWidth = false`.
 
 ## 1.5.10 - 2026-07-23
 
-- Fix: CameraX tertimpa dialog form transaksi — render CameraCaptureScreen di window Dialog terpisah dengan `lifecycleOwner` eksplisit (activity).
+- Fix: CameraX tertimpa dialog form transaksi. Render CameraCaptureScreen di window Dialog terpisah dengan `lifecycleOwner` eksplisit (activity).
 
 ## 1.5.8 - 2026-07-22
 
-- Fix: Ganti CameraX embedded preview dengan system camera intent (`TakePicture`) — tombol "Ambil gambar" di form transaksi sekarang langsung buka kamera system, tanpa overlay dialog yang nutup kamera.
+- Fix: Ganti CameraX embedded preview dengan system camera intent (`TakePicture`). Tombol "Ambil gambar" di form transaksi sekarang langsung buka kamera system, tanpa overlay dialog yang nutup kamera.
 
 ## 1.5.7 - 2026-07-22
 
-- Fix: Filter TRANSFER/CHANNEL_TRANSFER dari overview HomeScreen — hanya tampilkan transaksi finansial (INCOME, EXPENSE, REVERSAL, dll).
+- Fix: Filter TRANSFER/CHANNEL_TRANSFER dari overview HomeScreen agar hanya menampilkan transaksi finansial (INCOME, EXPENSE, REVERSAL, dll).
 - Fix: Strikethrough title + sembunyikan nominal untuk transaksi reversal di HomeScreen.
 
 ## 1.5.6 - 2026-07-22
 
 - Fix: Reset status SYNCING ke ERROR saat startup agar sync tidak stuck selamanya kalau proses sebelumnya crash/interrupt.
-- Fix: Tambah timeout 180 detik di `syncNowLocked()` — sinkron yang menggantung (network timeout, process death) akan gagal dengan status ERROR + retryable, bukan stuck SYNCING.
+- Fix: Tambah timeout 180 detik di `syncNowLocked()`. Sinkron yang menggantung (network timeout, process death) akan gagal dengan status ERROR + retryable, bukan stuck SYNCING.
 
 ## 1.5.5 - 2026-07-22
 

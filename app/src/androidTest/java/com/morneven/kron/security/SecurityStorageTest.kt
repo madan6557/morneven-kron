@@ -206,6 +206,74 @@ class SecurityStorageTest {
     }
 
     @Test
+    fun schemaUpgradeRollbackRestoresVersion13Database() {
+        val base = ApplicationProvider.getApplicationContext<Context>()
+        val rootDirectory = File(base.cacheDir, "schema-rollback-${UUID.randomUUID()}")
+        val context = isolatedContext(base, rootDirectory)
+        val primary = context.getDatabasePath("kron-v4.db")
+        try {
+            SqlCipherLibrary.ensureLoaded()
+            val keyManager = DatabaseKeyManager(context)
+            val passphrase = keyManager.getOrCreateDatabasePassphrase()
+            try {
+                net.zetetic.database.sqlcipher.SQLiteDatabase.openOrCreateDatabase(
+                    primary,
+                    passphrase,
+                    null,
+                    null,
+                    null,
+                ).use { database ->
+                    database.rawExecSQL("CREATE TABLE proof (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
+                    database.rawExecSQL("INSERT INTO proof(id, value) VALUES(1, 'schema-13')")
+                    database.rawExecSQL("PRAGMA user_version = 13")
+                }
+
+                val encryption = DatabaseEncryptionManager(context, keyManager)
+                val guard = requireNotNull(encryption.preparePrimaryDatabase(primary, 14).guard)
+                assertTrue(primary.parentFile?.listFiles().orEmpty().any {
+                    it.name == ".${primary.name}.pre-schema-13-to-14"
+                })
+                assertTrue(
+                    File(primary.parentFile, ".${primary.name}.pre-schema-13-to-14.security/database-key-v1.bin").isFile,
+                )
+
+                net.zetetic.database.sqlcipher.SQLiteDatabase.openDatabase(
+                    primary.absolutePath,
+                    passphrase,
+                    null,
+                    net.zetetic.database.sqlcipher.SQLiteDatabase.OPEN_READWRITE,
+                    null,
+                ).use { database ->
+                    database.rawExecSQL("UPDATE proof SET value = 'failed-candidate' WHERE id = 1")
+                    database.rawExecSQL("PRAGMA user_version = 14")
+                }
+                guard.rollback()
+
+                net.zetetic.database.sqlcipher.SQLiteDatabase.openDatabase(
+                    primary.absolutePath,
+                    passphrase,
+                    null,
+                    net.zetetic.database.sqlcipher.SQLiteDatabase.OPEN_READONLY,
+                    null,
+                ).use { database ->
+                    database.query("SELECT value FROM proof WHERE id=1").use { cursor ->
+                        assertTrue(cursor.moveToFirst())
+                        assertEquals("schema-13", cursor.getString(0))
+                    }
+                    database.query("PRAGMA user_version").use { cursor ->
+                        assertTrue(cursor.moveToFirst())
+                        assertEquals(13, cursor.getInt(0))
+                    }
+                }
+            } finally {
+                passphrase.fill(0)
+            }
+        } finally {
+            rootDirectory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun staleLegacyRawProfileCannotOverrideValidPassphraseDatabase() {
         val base = ApplicationProvider.getApplicationContext<Context>()
         val rootDirectory = File(base.cacheDir, "stale-profile-${UUID.randomUUID()}")

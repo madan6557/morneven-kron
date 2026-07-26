@@ -31,6 +31,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -77,7 +78,7 @@ class AndroidCredentialManagerAccountSelector(
             Log.w(TAG, "Credential selection was cancelled")
             throw IllegalStateException("Pemilihan akun Google dibatalkan", error)
         } catch (error: GetCredentialException) {
-            Log.w(TAG, "Credential Manager exception, trying AccountManager fallback", error)
+            Log.w(TAG, "Credential Manager failed, trying AccountManager fallback")
             getAccountFromAccountManager()?.let { return it }
             throw IllegalStateException(
                 "Pemilih akun Google tidak tersedia (${error.type}). Perbarui Google Play Services atau periksa koneksi internet.",
@@ -120,7 +121,7 @@ class AndroidCredentialManagerAccountSelector(
             val email = account.name
             GoogleAccountIdentity(email, email, null)
         } catch (e: Exception) {
-            Log.w(TAG, "AccountManager fallback failed", e)
+            Log.w(TAG, "AccountManager fallback failed")
             null
         }
     }
@@ -192,11 +193,13 @@ class PlayServicesAuthorizationClientBridge(
             builder.setAccount(Account(account.email, GOOGLE_ACCOUNT_TYPE))
         }
         val request = builder.build()
-        return runCatching { client.authorize(request).awaitTask() }
-            .fold(
-                onSuccess = { it.toBridgeResult(interactive) },
-                onFailure = { AuthorizationClientResult.Failed("Otorisasi Google Drive gagal", retryable = true) },
-            )
+        return try {
+            client.authorize(request).awaitTask().toBridgeResult(interactive)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            AuthorizationClientResult.Failed("Otorisasi Google Drive gagal", retryable = true)
+        }
     }
 
     fun pendingIntent(resolutionId: String): PendingIntent? = resolutions[resolutionId]

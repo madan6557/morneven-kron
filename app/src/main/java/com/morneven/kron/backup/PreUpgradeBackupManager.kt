@@ -88,7 +88,7 @@ class PreUpgradeBackupManager(private val context: Context) {
             ).use { cursor -> cursor.moveToFirst() && cursor.getInt(0) == 1 }
             if (!tableExists) return@use emptyList()
             opened.rawQuery(
-                "SELECT storageId, localPath, encryptionVersion FROM receipts ORDER BY storageId",
+                "SELECT storageId, localPath, encryptionVersion FROM receipts WHERE localPath IS NOT NULL ORDER BY storageId",
                 null,
             ).use { cursor ->
                 buildList {

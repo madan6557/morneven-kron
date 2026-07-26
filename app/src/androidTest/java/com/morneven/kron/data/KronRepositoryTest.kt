@@ -166,7 +166,82 @@ class KronRepositoryTest {
     }
 
     @Test
-    fun unexpectedExpenseUsesSeparateCashBucketWithoutReducingBudget() = runBlocking {
+    fun staleObjectsFromAnotherAccountCannotBeChanged() = runBlocking {
+        val first = dao.activeAccount() ?: error("Akun aktif tidak ditemukan")
+        val category = dao.allCategories().first { it.direction == TransactionDirection.EXPENSE }
+        val incomeId = repository.addIncome(first.id, FundingChannel.CASH, 100, null, "Dana", "")
+        val portfolioId = repository.createPortfolio(
+            "Milik akun pertama",
+            "MONTHLY",
+            0,
+            false,
+            listOf(AllocationDraft(category.id, FundingChannel.CASH, 20)),
+        )
+        val allocation = dao.allAllocations().single()
+        val today = LocalDate.now()
+        repository.addRecurringRule(
+            RecurringRuleEntity(
+                "rule-first-account",
+                "Jadwal akun pertama",
+                TransactionDirection.EXPENSE,
+                5,
+                first.id,
+                FundingChannel.CASH,
+                category.id,
+                allocation.id,
+                "MONTHLY",
+                1,
+                today.monthValue,
+                today.dayOfMonth,
+                today.toEpochDay(),
+                today.plusMonths(1).toEpochDay(),
+            ),
+        )
+        val secondId = repository.addAccount("Akun kedua", 50, 0)
+        repository.activateAccount(secondId)
+        val eventCount = dao.eventCount()
+
+        assertTrue(runCatching { repository.reverseEvent(incomeId, "Akun sudah berganti") }.isFailure)
+        assertTrue(runCatching { repository.pauseRecurringRule("rule-first-account") }.isFailure)
+        assertTrue(runCatching { repository.archivePortfolio(portfolioId, "Akun sudah berganti") }.isFailure)
+        assertTrue(runCatching {
+            repository.addIncome(secondId, FundingChannel.CASH, 5, null, "Dana", "", targetAllocationId = allocation.id)
+        }.isFailure)
+        assertTrue(runCatching {
+            repository.addExpense(
+                secondId,
+                FundingChannel.CASH,
+                5,
+                listOf(ExpenseSplitInput(category.id, allocation.id, 5)),
+                "Belanja",
+                "",
+            )
+        }.isFailure)
+
+        assertFalse(dao.isEventReversed(incomeId))
+        assertFalse(dao.allRules().single { it.id == "rule-first-account" }.isPaused)
+        assertFalse(dao.allPortfolios().single { it.id == portfolioId }.isArchived)
+        assertEquals(eventCount, dao.eventCount())
+    }
+
+    @Test
+    fun transferRejectsArchivedDestination() = runBlocking {
+        val source = dao.activeAccount() ?: error("Akun aktif tidak ditemukan")
+        val destinationId = repository.addAccount("Tujuan arsip", 0, 0)
+        repository.archiveAccount(destinationId, "Tidak digunakan")
+        repository.addIncome(source.id, FundingChannel.CASH, 50, null, "Dana", "")
+
+        val result = runCatching {
+            repository.transfer(source.id, FundingChannel.CASH, destinationId, FundingChannel.CASH, 10, "Transfer")
+        }
+
+        assertTrue(result.isFailure)
+        assertEquals(50L, dao.accountBalance(source.id, FundingChannel.CASH))
+        assertEquals(0L, dao.accountBalance(destinationId, FundingChannel.CASH))
+    }
+
+    @Test
+    fun unexpectedExpenseReducesVaultAndKeepsBudgetInSync() = runBlocking {
         val account = dao.activeAccount() ?: error("Akun aktif tidak ditemukan")
         val category = dao.allCategories().first { it.direction == TransactionDirection.EXPENSE }
         repository.addIncome(account.id, FundingChannel.CASH, 100, null, "Dana", "")
@@ -182,8 +257,8 @@ class KronRepositoryTest {
         )
 
         assertEquals(75L, dao.accountBalance(account.id, FundingChannel.CASH))
-        assertEquals(100L, dao.vaultBalance(FundingChannel.CASH))
-        assertEquals(-25L, dao.budgetBucketBalance(BudgetBucket.UNEXPECTED, FundingChannel.CASH))
+        assertEquals(75L, dao.vaultBalance(FundingChannel.CASH))
+        assertEquals(0L, dao.budgetBucketBalance(BudgetBucket.UNEXPECTED, FundingChannel.CASH))
         assertEquals(dao.cashTotal(), dao.budgetAvailableTotal())
     }
 

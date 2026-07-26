@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.util.Log
 import androidx.activity.result.IntentSenderRequest
 import com.morneven.kron.BuildConfig
 import com.morneven.kron.backup.BackupManager
@@ -53,7 +52,6 @@ class DriveSyncRuntime internal constructor(
                 throw cancelled
             } catch (error: IllegalStateException) {
                 discardUncommittedPassphrase()
-                Log.w(TAG, "Otorisasi Drive gagal")
                 return DriveConnectResult.Failed(
                     error.message ?: "Akun Google tidak dapat dihubungkan",
                     retryable = false,
@@ -96,16 +94,13 @@ class DriveSyncRuntime internal constructor(
             return DriveConnectResult.Failed("Konfigurasi OAuth Drive belum tersedia", retryable = false)
         }
         val account = GoogleAccountIdentity(email, email, null)
-        Log.d("KRON_SWITCH", "connectWithAccountEmail: start email=$email")
         return try {
             passphraseOperationMutex.withLock {
                 val hadStored = secretStore.isStored() || secretStore.hasStaged()
-                Log.d("KRON_SWITCH", "connectWithAccountEmail: clear stored=$hadStored")
                 if (hadStored) {
                     secretStore.clear()
                 }
                 secretStore.stage(passphrase)
-                Log.d("KRON_SWITCH", "connectWithAccountEmail: staged")
             }
             val authResult = try {
                 (authorization as? AuthorizationClientDriveSession)?.authorizeAccount(account, interactive = true)
@@ -115,7 +110,6 @@ class DriveSyncRuntime internal constructor(
                 throw cancelled
             } catch (error: IllegalStateException) {
                 discardUncommittedPassphrase()
-                Log.w(TAG, "Otorisasi Drive gagal")
                 return DriveConnectResult.Failed(
                     error.message ?: "Akun Google tidak dapat dihubungkan",
                     retryable = false,
@@ -128,7 +122,6 @@ class DriveSyncRuntime internal constructor(
                 )
             }
             val result = authorization.acceptConnectionResult(account, authResult)
-            Log.d("KRON_SWITCH", "connectWithAccountEmail: authResult=$authResult result=$result")
             when (result) {
                 is DriveConnectResult.Connected -> {
                     factory.updateSyncAccount(account)
@@ -286,17 +279,14 @@ class DriveSyncRuntime internal constructor(
     }
 
     suspend fun downloadAndApplyLatest(): SyncRunResult = passphraseOperationMutex.withLock {
-        Log.d("KRON_SWITCH", "downloadAndApplyLatest: start")
         factory.clearRestartRequired()
-        factory.restartResult()?.let { Log.d("KRON_SWITCH", "downloadAndApplyLatest: restartResult"); return it }
-        factory.networkBlockedResult()?.let { Log.d("KRON_SWITCH", "downloadAndApplyLatest: blocked"); return it }
+        factory.restartResult()?.let { return it }
+        factory.networkBlockedResult()?.let { return it }
         if (!secretStore.isStored() && !secretStore.hasStaged()) {
-            Log.d("KRON_SWITCH", "downloadAndApplyLatest: no passphrase")
             return SyncRunResult.PassphraseRequired
         }
         val result = coordinator.downloadLatestSnapshot()
-        Log.d("KRON_SWITCH", "downloadAndApplyLatest: coordinator result=$result")
-        finalizeStagedPassphrase(result).also { Log.d("KRON_SWITCH", "downloadAndApplyLatest: final result=$it") }
+        finalizeStagedPassphrase(result)
     }
 
     suspend fun suspendForRestart() {
@@ -327,8 +317,10 @@ class DriveSyncRuntime internal constructor(
             try {
                 secretStore.commitStaged()
                 factory.installAccountMigration(account)
-            } catch (e: Exception) {
-                // Log but don't fail the UI flow
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Account migration remains recoverable from the settings flow.
             }
         }
     }
@@ -563,8 +555,10 @@ class DriveSyncRuntimeFactory @Inject constructor(
         return try {
             installBackgroundIfReady(syncImmediately = true)
             SyncRunResult.NoChanges
-        } catch (e: Exception) {
-            SyncRunResult.Error("Migration account: ${e.message}", retryable = false)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            SyncRunResult.Error("Migrasi akun tidak dapat disiapkan", retryable = false)
         }
     }
 
@@ -581,4 +575,3 @@ class DriveSyncRuntimeFactory @Inject constructor(
     }
 }
 
-private const val TAG = "KronDriveSync"

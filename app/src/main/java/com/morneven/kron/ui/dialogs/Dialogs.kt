@@ -46,7 +46,11 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -75,6 +79,7 @@ import com.morneven.kron.ui.components.ChannelBadge
 import com.morneven.kron.ui.components.HudCard
 import com.morneven.kron.ui.components.compactIdr
 import com.morneven.kron.ui.components.displayMoney
+import com.morneven.kron.ui.components.eventTypeLabel
 import com.morneven.kron.ui.components.formatIdr
 import com.morneven.kron.ui.components.MoneyField
 import com.morneven.kron.ui.components.parseMoneyInput
@@ -85,21 +90,36 @@ import java.time.ZoneOffset
 import kotlin.math.abs
 import kotlinx.coroutines.delay
 
+private val dateStateSaver = Saver<MutableState<LocalDate>, Long>(
+    save = { it.value.toEpochDay() },
+    restore = { mutableStateOf(LocalDate.ofEpochDay(it)) },
+)
+private val nullableDateStateSaver = Saver<MutableState<LocalDate?>, Long>(
+    save = { it.value?.toEpochDay() ?: Long.MIN_VALUE },
+    restore = { mutableStateOf(it.takeUnless { day -> day == Long.MIN_VALUE }?.let(LocalDate::ofEpochDay)) },
+)
+
+@Composable
+private fun rememberDate(initial: LocalDate) = rememberSaveable(saver = dateStateSaver) { mutableStateOf(initial) }
+
+@Composable
+private fun rememberNullableDate(initial: LocalDate? = null) = rememberSaveable(saver = nullableDateStateSaver) { mutableStateOf(initial) }
+
 @Composable
 fun IncomeDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, String, Long, Long?, Long?, String, String, String?, LocalDate, LocalDate?, Int, Boolean, Uri?, java.io.File?) -> Unit, receiptUri: Uri? = null, cameraFile: java.io.File? = null, onGalleryPick: () -> Unit = {}, onCameraCapture: () -> Unit = {}) {
     val account = state.activeAccount
     val categories = state.categories.filter { it.direction == TransactionDirection.INCOME }
-    var channel by remember { mutableStateOf(FundingChannel.CASH) }
-    var categoryId by remember { mutableStateOf(categories.firstOrNull()?.id) }
-    var targetAllocationId by remember { mutableStateOf<Long?>(null) }
-    var amount by remember { mutableStateOf("") }
-    var title by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("") }
-    var recurring by remember { mutableStateOf<String?>(null) }
-    var startDate by remember { mutableStateOf(LocalDate.now()) }
-    var endDate by remember { mutableStateOf<LocalDate?>(null) }
-    var intervalCount by remember { mutableIntStateOf(1) }
-    var recordNow by remember { mutableStateOf(true) }
+    var channel by rememberSaveable { mutableStateOf(FundingChannel.CASH) }
+    var categoryId by rememberSaveable { mutableStateOf(categories.firstOrNull()?.id) }
+    var targetAllocationId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var amount by rememberSaveable { mutableStateOf("") }
+    var title by rememberSaveable { mutableStateOf("") }
+    var note by rememberSaveable { mutableStateOf("") }
+    var recurring by rememberSaveable { mutableStateOf<String?>(null) }
+    var startDate by rememberDate(LocalDate.now())
+    var endDate by rememberNullableDate()
+    var intervalCount by rememberSaveable { mutableIntStateOf(1) }
+    var recordNow by rememberSaveable { mutableStateOf(true) }
     FormDialog("Catat pemasukan", onDismiss, confirmEnabled = account != null && money(amount) > 0 && intervalCount > 0 && (endDate == null || !endDate!!.isBefore(startDate)), onConfirm = {
         onSubmit(requireNotNull(account).id, channel, money(amount), categoryId, targetAllocationId, title, note, recurring, startDate, endDate, intervalCount, recordNow, receiptUri, cameraFile)
     }) {
@@ -150,6 +170,27 @@ private data class SplitDraft(
     var allocationId: Long?,
     var amount: String,
     var customCategoryName: String = "",
+)
+
+private val splitDraftsSaver = Saver<SnapshotStateList<SplitDraft>, ArrayList<String>>(
+    save = { drafts ->
+        ArrayList(drafts.flatMap { draft ->
+            listOf(
+                draft.periodId?.toString().orEmpty(),
+                draft.categoryId?.toString().orEmpty(),
+                draft.allocationId?.toString().orEmpty(),
+                draft.amount,
+                draft.customCategoryName,
+            )
+        })
+    },
+    restore = { values ->
+        mutableStateListOf<SplitDraft>().apply {
+            values.chunked(5).forEach { value ->
+                add(SplitDraft(value[0].toLongOrNull(), value[1].toLongOrNull(), value[2].toLongOrNull(), value[3], value[4]))
+            }
+        }
+    },
 )
 
 private val seedExpenseNames = setOf("Belanja", "Makanan", "Transportasi", "Tagihan", "Kesehatan", "Hiburan", "Lainnya")
@@ -218,20 +259,29 @@ private fun UnexpectedCategorySelector(
 }
 private data class BudgetCategoryDraft(var name: String, var amount: String, var cashPercentage: Int = 50)
 
+private val budgetCategoryDraftsSaver = Saver<SnapshotStateList<BudgetCategoryDraft>, ArrayList<String>>(
+    save = { drafts -> ArrayList(drafts.flatMap { listOf(it.name, it.amount, it.cashPercentage.toString()) }) },
+    restore = { values ->
+        mutableStateListOf<BudgetCategoryDraft>().apply {
+            values.chunked(3).forEach { value -> add(BudgetCategoryDraft(value[0], value[1], value[2].toInt())) }
+        }
+    },
+)
+
 @Composable
 fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, String, Long, List<ExpenseSplitInput>, String, String, Boolean, String?, LocalDate, LocalDate?, Int, Boolean, Uri?, java.io.File?) -> Unit, receiptUri: Uri? = null, cameraFile: java.io.File? = null, onGalleryPick: () -> Unit = {}, onCameraCapture: () -> Unit = {}) {
     val account = state.activeAccount
     val categories = state.categories.filter { it.direction == TransactionDirection.EXPENSE }
-    var channel by remember { mutableStateOf(FundingChannel.CASH) }
-    var title by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("") }
-    var recurring by remember { mutableStateOf<String?>(null) }
-    var startDate by remember { mutableStateOf(LocalDate.now()) }
-    var endDate by remember { mutableStateOf<LocalDate?>(null) }
-    var intervalCount by remember { mutableIntStateOf(1) }
-    var recordNow by remember { mutableStateOf(true) }
-    var unexpected by remember { mutableStateOf(false) }
-    val splits = remember { mutableStateListOf(SplitDraft(null, null, null, "")) }
+    var channel by rememberSaveable { mutableStateOf(FundingChannel.CASH) }
+    var title by rememberSaveable { mutableStateOf("") }
+    var note by rememberSaveable { mutableStateOf("") }
+    var recurring by rememberSaveable { mutableStateOf<String?>(null) }
+    var startDate by rememberDate(LocalDate.now())
+    var endDate by rememberNullableDate()
+    var intervalCount by rememberSaveable { mutableIntStateOf(1) }
+    var recordNow by rememberSaveable { mutableStateOf(true) }
+    var unexpected by rememberSaveable { mutableStateOf(false) }
+    val splits = rememberSaveable(saver = splitDraftsSaver) { mutableStateListOf(SplitDraft(null, null, null, "")) }
     val accountRow = state.accountBalances.firstOrNull { it.id == account?.id }
     val accountBalance = if (channel == FundingChannel.CASH) accountRow?.cashBalance ?: 0L else accountRow?.eBudgetBalance ?: 0L
     val splitTotal = splits.sumOf { money(it.amount) }
@@ -367,11 +417,11 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, St
 fun TransferDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, String, Long, String, Long, String) -> Unit) {
     val accounts = state.accounts
     val sourceAccount = state.activeAccount
-    var fromChannel by remember { mutableStateOf(FundingChannel.CASH) }
-    var toAccountId by remember { mutableStateOf(sourceAccount?.id ?: accounts.firstOrNull()?.id) }
-    var toChannel by remember { mutableStateOf(FundingChannel.EBUDGET) }
-    var amount by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("") }
+    var fromChannel by rememberSaveable { mutableStateOf(FundingChannel.CASH) }
+    var toAccountId by rememberSaveable { mutableStateOf(sourceAccount?.id ?: accounts.firstOrNull()?.id) }
+    var toChannel by rememberSaveable { mutableStateOf(FundingChannel.EBUDGET) }
+    var amount by rememberSaveable { mutableStateOf("") }
+    var note by rememberSaveable { mutableStateOf("") }
     val sourceRow = state.accountBalances.firstOrNull { it.id == sourceAccount?.id }
     val sourceBalance = if (fromChannel == FundingChannel.CASH) sourceRow?.cashBalance ?: 0L else sourceRow?.eBudgetBalance ?: 0L
     val targetAccount = accounts.firstOrNull { it.id == toAccountId }
@@ -416,14 +466,14 @@ private fun LedgerPreviewCard(debit: String, credit: String, budget: String, aft
 
 @Composable
 fun PortfolioDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (String, String, Long, Boolean, List<AllocationDraft>, LocalDate, LocalDate?, Int) -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var cadence by remember { mutableStateOf("MONTHLY") }
-    var plannedIncome by remember { mutableStateOf("") }
-    var rollover by remember { mutableStateOf(false) }
-    var startDate by remember { mutableStateOf(LocalDate.now()) }
-    var endDate by remember { mutableStateOf<LocalDate?>(null) }
-    var intervalCount by remember { mutableIntStateOf(1) }
-    val budgetCategories = remember { mutableStateListOf(BudgetCategoryDraft("", "")) }
+    var name by rememberSaveable { mutableStateOf("") }
+    var cadence by rememberSaveable { mutableStateOf("MONTHLY") }
+    var plannedIncome by rememberSaveable { mutableStateOf("") }
+    var rollover by rememberSaveable { mutableStateOf(false) }
+    var startDate by rememberDate(LocalDate.now())
+    var endDate by rememberNullableDate()
+    var intervalCount by rememberSaveable { mutableIntStateOf(1) }
+    val budgetCategories = rememberSaveable(saver = budgetCategoryDraftsSaver) { mutableStateListOf(BudgetCategoryDraft("", "")) }
     val drafts = budgetCategories.flatMap { category ->
         val total = money(category.amount)
         val percent = category.cashPercentage
@@ -481,9 +531,9 @@ fun PortfolioDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (String
 @Composable
 fun BudgetDetailDialog(state: KronUiState, periodId: Long, readOnly: Boolean = false, onDismiss: () -> Unit, onCorrect: (Long, Long, String) -> Unit) {
     val rows = state.allocations.filter { it.periodId == periodId }
-    var correctionId by remember { mutableStateOf<Long?>(null) }
-    var correctedAmount by remember { mutableStateOf("") }
-    var reason by remember { mutableStateOf("Koreksi nominal budget") }
+    var correctionId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var correctedAmount by rememberSaveable { mutableStateOf("") }
+    var reason by rememberSaveable { mutableStateOf("Koreksi nominal budget") }
     val selected = rows.firstOrNull { it.id == correctionId }
     val validCorrection = selected != null && money(correctedAmount) >= 0 && money(correctedAmount) != selected.plannedAmount && reason.isNotBlank()
     Dialog(
@@ -704,12 +754,12 @@ private fun BudgetBarChart(data: List<PeriodChartData>, modifier: Modifier) {
 fun ResolveDialog(state: KronUiState, onDismiss: () -> Unit, onAllocation: (Long, Long, Long, String) -> Unit, onVault: (Long, Long, String) -> Unit, onRollover: (Long, Long, String) -> Unit, onUnallocated: (Long, Long, String) -> Unit) {
     val targets = state.allocations.filter { it.availableAmount < 0 }
     val hasUnallocated = state.unallocatedCash < 0 || state.unallocatedEBudget < 0
-    var mode by remember { mutableStateOf(if (targets.isNotEmpty()) "MINUS" else "UNALLOCATED") }
-    var targetId by remember { mutableStateOf(targets.firstOrNull()?.id) }
-    var sourceId by remember { mutableStateOf<Long?>(null) }
-    var sourceMode by remember { mutableStateOf("VAULT") }
-    var amount by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("Resolusi budget minus") }
+    var mode by rememberSaveable { mutableStateOf(if (targets.isNotEmpty()) "MINUS" else "UNALLOCATED") }
+    var targetId by rememberSaveable { mutableStateOf(targets.firstOrNull()?.id) }
+    var sourceId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var sourceMode by rememberSaveable { mutableStateOf("VAULT") }
+    var amount by rememberSaveable { mutableStateOf("") }
+    var note by rememberSaveable { mutableStateOf("Resolusi budget minus") }
     val target = targets.firstOrNull { it.id == targetId }
     val sources = target?.let { selected -> state.allocations.filter { it.fundingChannel == selected.fundingChannel && it.availableAmount > 0 && it.id != targetId && it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") } }.orEmpty()
     val vault = if (target?.fundingChannel == FundingChannel.CASH) state.vaultCash else state.vaultEBudget
@@ -721,7 +771,7 @@ fun ResolveDialog(state: KronUiState, onDismiss: () -> Unit, onAllocation: (Long
     }
     val requested = money(amount)
     val limit = minOf(sourceAvailable, -(target?.availableAmount ?: 0))
-    var unallocatedChannel by remember { mutableStateOf(if (state.unallocatedCash < 0) FundingChannel.CASH else FundingChannel.EBUDGET) }
+    var unallocatedChannel by rememberSaveable { mutableStateOf(if (state.unallocatedCash < 0) FundingChannel.CASH else FundingChannel.EBUDGET) }
     val destinations = state.allocations.filter { it.fundingChannel == unallocatedChannel && it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") }
     var destinationId by remember(unallocatedChannel) { mutableStateOf(destinations.firstOrNull()?.id) }
     val unallocatedAmount = if (unallocatedChannel == FundingChannel.CASH) state.unallocatedCash else state.unallocatedEBudget
@@ -774,11 +824,11 @@ fun ResolveDialog(state: KronUiState, onDismiss: () -> Unit, onAllocation: (Long
 @Composable
 fun ChannelTransferDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Long, Long, String) -> Unit) {
     val sources = state.allocations.filter { it.availableAmount > 0 }
-    var allocationId by remember { mutableStateOf(sources.firstOrNull()?.id) }
+    var allocationId by rememberSaveable { mutableStateOf(sources.firstOrNull()?.id) }
     val source = sources.firstOrNull { it.id == allocationId }
     val account = state.activeAccount
-    var amount by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("") }
+    var amount by rememberSaveable { mutableStateOf("") }
+    var note by rememberSaveable { mutableStateOf("") }
     val accountRow = state.accountBalances.firstOrNull { it.id == account?.id }
     val accountBalance = if (source?.fundingChannel == FundingChannel.CASH) accountRow?.cashBalance ?: 0L else accountRow?.eBudgetBalance ?: 0L
     val limit = minOf(source?.availableAmount ?: 0, accountBalance)
@@ -802,9 +852,9 @@ fun ChannelTransferDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (
 
 @Composable
 fun AccountDialog(onDismiss: () -> Unit, onSubmit: (String, Long, Long) -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var openingCash by remember { mutableStateOf("") }
-    var openingEBudget by remember { mutableStateOf("") }
+    var name by rememberSaveable { mutableStateOf("") }
+    var openingCash by rememberSaveable { mutableStateOf("") }
+    var openingEBudget by rememberSaveable { mutableStateOf("") }
     FormDialog("Tambah akun", onDismiss, confirmEnabled = name.isNotBlank(), onConfirm = { onSubmit(name, money(openingCash), money(openingEBudget)) }) {
         OutlinedTextField(name, { name = it }, label = { Text("Nama akun") }, modifier = Modifier.fillMaxWidth())
         Text("Setiap akun otomatis memiliki kanal Cash dan eBudget.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -815,7 +865,7 @@ fun AccountDialog(onDismiss: () -> Unit, onSubmit: (String, Long, Long) -> Unit)
 
 @Composable
 fun EditAccountDialog(account: AccountEntity, onDismiss: () -> Unit, onSubmit: (String) -> Unit) {
-    var name by remember { mutableStateOf(account.name) }
+    var name by rememberSaveable(account.id) { mutableStateOf(account.name) }
     FormDialog("Edit akun", onDismiss, confirmEnabled = name.isNotBlank(), onConfirm = { onSubmit(name.trim()) }) {
         OutlinedTextField(name, { name = it }, label = { Text("Nama akun") }, modifier = Modifier.fillMaxWidth())
         Text("Kanal Cash dan eBudget selalu tersedia dan tidak dapat dihapus.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -835,10 +885,10 @@ fun AuditDialog(
     onRestoreReversal: ((String) -> Unit)? = null,
     reversalRestored: Boolean = false,
 ) {
-    var reason by remember { mutableStateOf("") }
-    var correctionMode by remember { mutableStateOf(false) }
-    var correctedTitle by remember(event.id) { mutableStateOf(event.title) }
-    var correctedNote by remember(event.id) { mutableStateOf(event.note) }
+    var reason by rememberSaveable(event.id) { mutableStateOf("") }
+    var correctionMode by rememberSaveable(event.id) { mutableStateOf(false) }
+    var correctedTitle by rememberSaveable(event.id) { mutableStateOf(event.title) }
+    var correctedNote by rememberSaveable(event.id) { mutableStateOf(event.note) }
     val lifecycleEvent = event.type in setOf("ARCHIVE", "RESTORE")
     val isAttachEvidence = event.type == "ATTACH_EVIDENCE"
     val parentEvent = if (isAttachEvidence && event.relatedEventId != null) {
@@ -863,7 +913,7 @@ fun AuditDialog(
     ) {
         Text(event.title, style = MaterialTheme.typography.titleLarge)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(event.type.replace('_', ' '), color = MaterialTheme.colorScheme.tertiary)
+            Text(eventTypeLabel(event.type), color = MaterialTheme.colorScheme.tertiary)
             Text(event.auditStatus, color = if (event.auditStatus == "Integrity problem") MaterialTheme.colorScheme.error else KronGreen)
         }
         val createdAtTime = java.time.Instant.ofEpochMilli(event.createdAt)
@@ -877,7 +927,7 @@ fun AuditDialog(
             Text("Transaksi induk", style = MaterialTheme.typography.titleMedium)
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(parentEvent.title, style = MaterialTheme.typography.bodyLarge)
-                Text("${parentEvent.type.replace('_', ' ')} · ${LocalDate.ofEpochDay(parentEvent.effectiveEpochDay)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("${eventTypeLabel(parentEvent.type)} · ${LocalDate.ofEpochDay(parentEvent.effectiveEpochDay)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (parentEvent.cashImpact != 0L) Text("Dampak akun: ${displayMoney(parentEvent.cashImpact, state.valuesVisible)}", style = MaterialTheme.typography.bodySmall)
             }
         } else {
@@ -895,7 +945,7 @@ fun AuditDialog(
             Text("Belum ada foto bukti untuk event ini.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
             receipts.take(10).forEach { receipt ->
-                val missing = runCatching { java.io.File(receipt.localPath).isFile }.getOrDefault(false).not()
+                val missing = receipt.localPath?.let { java.io.File(it).isFile } != true
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(receipt.displayName, style = MaterialTheme.typography.bodyLarge)
@@ -984,8 +1034,8 @@ fun EvidenceCenterDialog(
     onExportPackage: (Long, Long) -> Unit,
     onVerifyPackage: () -> Unit,
 ) {
-    var startDate by remember { mutableStateOf(LocalDate.now().minusDays(29)) }
-    var endDate by remember { mutableStateOf(LocalDate.now()) }
+    var startDate by rememberDate(LocalDate.now().minusDays(29))
+    var endDate by rememberDate(LocalDate.now())
     FormDialog("Pusat Bukti", onDismiss, confirmText = "Periksa ulang", confirmEnabled = true, onConfirm = onRefresh) {
         HudCard {
             Text(

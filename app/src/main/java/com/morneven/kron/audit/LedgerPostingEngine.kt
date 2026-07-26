@@ -47,7 +47,7 @@ class LedgerPostingEngine @Inject constructor(
                     note = "Kunci perangkat baru digunakan. Sertifikat publik lama tetap dipertahankan untuk verifikasi.",
                     source = "SYSTEM",
                     effectiveEpochDay = LocalDate.now().toEpochDay(),
-                    accountId = dao.activeAccount()?.id ?: 0L,
+                    accountId = requireNotNull(dao.activeAccount()) { "Tidak ada akun aktif untuk event rotasi kunci" }.id,
                 ),
             )
             validateEvent(rotationId)

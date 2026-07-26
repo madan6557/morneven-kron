@@ -3,7 +3,6 @@ package com.morneven.kron.backup
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
-import android.util.Log
 import android.system.Os
 import android.system.OsConstants
 import com.morneven.kron.data.FundingChannel
@@ -167,7 +166,6 @@ class BackupManager @Inject constructor(
         accountSubject: String,
         accountEmail: String,
     ) = withContext(Dispatchers.IO) {
-        Log.w("KRON_APPLY", "start payload=${payload.size}")
         require(payload.isNotEmpty() && payload.size.toLong() <= MAX_SYNC_PAYLOAD_BYTES) {
             "Snapshot Drive tidak valid atau terlalu besar"
         }
@@ -187,13 +185,11 @@ class BackupManager @Inject constructor(
                 val format = extracted.manifest.optInt("format", -1)
                 require(format == LEGACY_FORMAT || format == CURRENT_FORMAT) { "Versi format backup tidak didukung" }
                 verifyExtractedPackage(extracted, format)
-                Log.w("KRON_APPLY", "extracted format=$format")
                 val validationFile = context.getDatabasePath(VALIDATION_DATABASE_NAME)
                 deleteDatabaseFiles(validationFile)
                 try {
                     extracted.database.copyTo(validationFile, overwrite = true)
                     migrateAndValidateCandidate(validationFile)
-                    Log.w("KRON_APPLY", "migrated")
                     normalizeSyncState(
                         validationFile, extracted.manifest, preserveTargetAccount = true,
                         driveMetadata = DriveRestoreMetadata(
@@ -205,7 +201,6 @@ class BackupManager @Inject constructor(
                     databaseEncryption.prepareValidatedRestoreKey()
                     installReceiptPayloadsDirect(validationFile, extracted.attachments)
                     validateDatabase(validationFile)
-                    Log.w("KRON_APPLY", "validated, attaching")
                     val liveDb = database.openHelper.writableDatabase
                     liveDb.execSQL(
                         "ATTACH DATABASE ? AS restore_db KEY ''",
@@ -239,7 +234,6 @@ class BackupManager @Inject constructor(
                             )
                         }
                     }
-                    Log.w("KRON_APPLY", "triggers dropped")
                     val cursor = liveDb.query(
                         """SELECT name FROM restore_db.sqlite_master
                            WHERE type='table' AND name NOT LIKE 'room_%'
@@ -248,7 +242,6 @@ class BackupManager @Inject constructor(
                     val tables = mutableListOf<String>()
                     while (cursor.moveToNext()) tables.add(cursor.getString(0))
                     cursor.close()
-                    Log.w("KRON_APPLY", "copying ${tables.size} tables")
                     val dao = database.kronDao()
                     for (table in tables) {
                         dao.executeRaw(
@@ -260,7 +253,6 @@ class BackupManager @Inject constructor(
                             ),
                         )
                     }
-                    Log.w("KRON_APPLY", "copy done, triggering Room invalidation")
                     for (table in tables) {
                         try {
                             liveDb.execSQL(
@@ -270,12 +262,9 @@ class BackupManager @Inject constructor(
                         }
                     }
                     database.invalidationTracker.refreshAsync()
-                    Log.w("KRON_APPLY", "Room invalidation triggered")
                     recreateAppendOnlyTriggers(liveDb)
                     recreateSyncWriteGuardTriggers(liveDb)
-                    Log.w("KRON_APPLY", "triggers recreated")
                     liveDb.execSQL("DETACH DATABASE restore_db")
-                    Log.w("KRON_APPLY", "detached")
                 } finally {
                     deleteDatabaseFiles(validationFile)
                 }
@@ -450,9 +439,8 @@ class BackupManager @Inject constructor(
     }
 
     private fun collectAttachments(receipts: List<ReceiptEntity>): List<ExportAttachment> = receipts.mapNotNull { receipt ->
-        val source = runCatching { File(receipt.localPath) }.getOrNull()
+        val source = receipt.localPath?.let(::File)
         if (source == null || !source.exists() || !source.isFile) {
-            Log.w("KRON_BACKUP", "Lampiran ${receipt.storageId} tidak ditemukan, dilewati")
             return@mapNotNull null
         }
         require(isAppPrivate(source)) {
@@ -694,12 +682,11 @@ class BackupManager @Inject constructor(
                 sqlite.execSQL(
                     """
                         UPDATE receipts
-                        SET localPath = NULL, byteSize = NULL, sha256 = NULL, encryptionNonce = NULL, encryptionVersion = NULL
+                        SET localPath = NULL
                         WHERE localPath IS NOT NULL AND storageId NOT IN ($placeholders)
                     """.trimIndent(),
                     params,
                 )
-                Log.w("KRON_BACKUP", "${receiptCount - attachments.size} receipt tanpa lampiran telah dikosongkan")
             }
             attachments.values.forEach { attachment ->
                 val exists = sqlite.rawQuery(
@@ -745,7 +732,7 @@ class BackupManager @Inject constructor(
                 sqlite.execSQL(
                     """
                         UPDATE receipts
-                        SET localPath = NULL, byteSize = NULL, sha256 = NULL, encryptionNonce = NULL, encryptionVersion = NULL
+                        SET localPath = NULL
                         WHERE localPath IS NOT NULL AND storageId NOT IN ($placeholders)
                     """.trimIndent(),
                     params,
@@ -1206,9 +1193,6 @@ class BackupManager @Inject constructor(
                         restoreError.addSuppressed(rollbackError)
                         throw IllegalStateException("Restore gagal dan data lama tidak dapat dipulihkan", restoreError)
                     }
-            }
-            if (paths.committedMarker.exists()) {
-                finalizeCommittedRestore(paths)
             }
         }
 

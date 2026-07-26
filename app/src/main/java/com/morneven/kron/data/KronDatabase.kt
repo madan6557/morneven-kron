@@ -35,7 +35,7 @@ import com.morneven.kron.security.SqlCipherLibrary
         EvidenceKeyEntity::class,
         ActorProfileEntity::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = true,
 )
 abstract class KronDatabase : RoomDatabase() {
@@ -52,7 +52,7 @@ abstract class KronDatabase : RoomDatabase() {
                 val databaseFile = appContext.getDatabasePath(DATABASE_NAME)
                 val wasFreshInstall = !databaseFile.exists()
                 val dbPath = databaseFile.absolutePath
-                val preparation = encryption.preparePrimaryDatabase(databaseFile)
+                val preparation = encryption.preparePrimaryDatabase(databaseFile, SCHEMA_VERSION)
                 try {
                     val opened = Room.databaseBuilder(appContext, KronDatabase::class.java, DATABASE_NAME)
                         .openHelperFactory(encryption.openHelperFactory(dbPath, preparation.keyMode))
@@ -864,6 +864,65 @@ abstract class KronDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_13_14: Migration = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val before = receiptMigrationProof(db, "receipts")
+                db.execSQL(
+                    """
+                    CREATE TABLE receipts_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        eventId TEXT NOT NULL,
+                        localPath TEXT,
+                        storageId TEXT NOT NULL,
+                        displayName TEXT NOT NULL,
+                        mimeType TEXT NOT NULL,
+                        byteSize INTEGER NOT NULL,
+                        sha256 TEXT NOT NULL,
+                        encryptionNonce TEXT,
+                        encryptionVersion INTEGER NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        capturedAt INTEGER,
+                        latitude REAL,
+                        longitude REAL,
+                        origin TEXT NOT NULL,
+                        evidenceEventId TEXT,
+                        FOREIGN KEY(eventId) REFERENCES activity_events(id) ON UPDATE NO ACTION ON DELETE RESTRICT
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO receipts_new(
+                        id, eventId, localPath, storageId, displayName, mimeType, byteSize, sha256,
+                        encryptionNonce, encryptionVersion, createdAt, capturedAt, latitude, longitude,
+                        origin, evidenceEventId
+                    )
+                    SELECT id, eventId, localPath, storageId, displayName, mimeType, byteSize, sha256,
+                           encryptionNonce, encryptionVersion, createdAt, capturedAt, latitude, longitude,
+                           origin, evidenceEventId
+                    FROM receipts
+                    ORDER BY id
+                    """.trimIndent(),
+                )
+                check(before == receiptMigrationProof(db, "receipts_new")) {
+                    "Metadata bukti berubah selama migrasi"
+                }
+                db.execSQL("DROP TABLE receipts")
+                db.execSQL("ALTER TABLE receipts_new RENAME TO receipts")
+                db.execSQL("CREATE INDEX index_receipts_eventId ON receipts(eventId)")
+                db.execSQL("CREATE UNIQUE INDEX index_receipts_storageId ON receipts(storageId)")
+                db.execSQL("CREATE INDEX index_receipts_evidenceEventId ON receipts(evidenceEventId)")
+                createAppendOnlyTriggers(db)
+                createSyncGenerationTriggers(db)
+                check(db.query("PRAGMA foreign_key_check").use { !it.moveToFirst() }) {
+                    "Relasi bukti tidak valid setelah migrasi"
+                }
+                check(db.query("PRAGMA integrity_check").use { it.moveToFirst() && it.getString(0).equals("ok", true) }) {
+                    "Database tidak utuh setelah migrasi bukti"
+                }
+            }
+        }
+
         private val ALL_MIGRATIONS = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
@@ -877,7 +936,27 @@ abstract class KronDatabase : RoomDatabase() {
             MIGRATION_10_11,
             MIGRATION_11_12,
             MIGRATION_12_13,
+            MIGRATION_13_14,
         )
+
+        private fun receiptMigrationProof(db: SupportSQLiteDatabase, table: String): String {
+            require(table == "receipts" || table == "receipts_new")
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            db.query(
+                "SELECT id,eventId,localPath,storageId,displayName,mimeType,byteSize,sha256," +
+                    "encryptionNonce,encryptionVersion,createdAt,capturedAt,latitude,longitude,origin,evidenceEventId " +
+                    "FROM $table ORDER BY id",
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    for (column in 0 until cursor.columnCount) {
+                        digest.update((if (cursor.isNull(column)) 0 else 1).toByte())
+                        if (!cursor.isNull(column)) digest.update(cursor.getString(column).toByteArray(Charsets.UTF_8))
+                        digest.update(0x1f.toByte())
+                    }
+                }
+            }
+            return digest.digest().joinToString("") { "%02x".format(it) }
+        }
 
         private val DATABASE_TRIGGER_CALLBACK = object : Callback() {
             override fun onCreate(db: SupportSQLiteDatabase) {
@@ -903,7 +982,7 @@ abstract class KronDatabase : RoomDatabase() {
                 "recurring_rules",
                 "receipts",
             )
-            generationTables.forEach { table ->
+            generationTables.filter { db.hasTable(it) }.forEach { table ->
                 listOf("INSERT", "UPDATE", "DELETE").forEach { operation ->
                     val suffix = operation.lowercase()
                     db.execSQL("""
@@ -929,7 +1008,7 @@ abstract class KronDatabase : RoomDatabase() {
                 "journal_seals",
                 "evidence_keys",
             )
-            guardedTables.forEach { table ->
+            guardedTables.filter { db.hasTable(it) }.forEach { table ->
                 listOf("INSERT", "UPDATE", "DELETE").forEach { operation ->
                     val suffix = operation.lowercase()
                     db.execSQL("""
@@ -946,6 +1025,9 @@ abstract class KronDatabase : RoomDatabase() {
                 }
             }
         }
+
+        private fun SupportSQLiteDatabase.hasTable(table: String): Boolean =
+            query("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", arrayOf(table)).use { it.moveToFirst() }
 
         private fun createAppendOnlyTriggers(db: SupportSQLiteDatabase) {
             val immutableTables = listOf(

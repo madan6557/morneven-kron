@@ -51,6 +51,7 @@ import com.morneven.kron.ui.KronUiState
 import com.morneven.kron.ui.components.EmptyState
 import com.morneven.kron.ui.components.HudCard
 import com.morneven.kron.ui.components.displayMoney
+import com.morneven.kron.ui.components.eventTypeLabel
 import com.morneven.kron.ui.components.signedColor
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -326,27 +327,6 @@ private fun ActivityRow.primaryImpact(): Long = when {
     cashImpact != 0L -> cashImpact
     vaultImpact != 0L -> vaultImpact
     else -> budgetImpact
-}
-
-private fun eventTypeLabel(type: String): String = when (type) {
-    "INCOME" -> "Pemasukan"
-    "EXPENSE" -> "Pengeluaran"
-    "UNEXPECTED_EXPENSE" -> "Pengeluaran tak terduga"
-    "TRANSFER" -> "Transfer antar akun"
-    "CHANNEL_TRANSFER" -> "Transfer antar kanal"
-    "OPENING_BALANCE" -> "Saldo awal"
-    "PORTFOLIO_BOOKING" -> "Booking budget"
-    "REALLOCATION" -> "Realokasi budget"
-    "OVERBUDGET_COVERAGE" -> "Penutupan overbudget"
-    "RELEASE" -> "Pelepasan budget"
-    "ROLLOVER" -> "Rollover"
-    "AUTOMATION" -> "Transaksi otomatis"
-    "REVERSAL" -> "Reversal"
-    "ARCHIVE" -> "Arsip"
-    "RESTORE" -> "Pemulihan"
-    "RESTORE_REVERSAL" -> "Pemulihan reversal"
-    "CORRECTION" -> "Koreksi jurnal"
-    else -> type.replace('_', ' ').lowercase().replaceFirstChar { it.titlecase() }
 }
 
 private val fullDateFormat = DateTimeFormatter.ofPattern("EEEE, d MMMM yyyy", Locale.forLanguageTag("id-ID"))

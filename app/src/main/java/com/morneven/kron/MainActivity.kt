@@ -121,6 +121,11 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (DatabaseAccessGate.isReady()) viewModel.refreshForCurrentDate()
+    }
+
     private fun requestPreUpgradeBackup(password: String, confirmation: String) {
         if (password.length < 12) {
             backupUiState = BackupUiState.Error("Recovery passphrase minimal 12 karakter.")

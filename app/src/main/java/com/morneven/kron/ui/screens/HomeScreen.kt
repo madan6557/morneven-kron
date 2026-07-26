@@ -50,6 +50,7 @@ import com.morneven.kron.ui.components.HudCard
 import com.morneven.kron.ui.components.Metric
 import com.morneven.kron.ui.components.SectionHeader
 import com.morneven.kron.ui.components.displayMoney
+import com.morneven.kron.ui.components.eventTypeLabel
 import com.morneven.kron.ui.components.displayPrimaryHomeMoney
 import com.morneven.kron.ui.components.displaySecondaryHomeMoney
 import com.morneven.kron.ui.components.shouldCompactPrimaryHomeMoney
@@ -110,7 +111,7 @@ fun HomeScreen(
 
         item {
             HudCard(accent = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)) {
-                Text("POSISI KEUANGAN", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+                Text("SALDO AKUN AKTIF", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
                 Spacer(Modifier.height(8.dp))
                 Text(
                     displayPrimaryHomeMoney(state.totalAssets, visible),
@@ -119,7 +120,7 @@ fun HomeScreen(
                     fontWeight = FontWeight.Black,
                     maxLines = 1,
                 )
-                Text("Total aset nyata", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Total Cash dan eBudget pada akun aktif", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(18.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     Metric("Cash", displaySecondaryHomeMoney(cashAssets, visible), Modifier.weight(1f).clickable(enabled = visible && shouldCompactSecondaryHomeMoney(cashAssets)) { exactMoney = "Total Cash" to cashAssets }, KronGold)
@@ -197,11 +198,11 @@ fun HomeScreen(
             Column {
                 SectionHeader("Cash flow bulan ini")
                 HudCard {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Metric("Masuk", displayMoney(state.cashflow.income, visible), Modifier.weight(1f), KronGreen)
-                        Metric("Keluar", displayMoney(state.cashflow.expense, visible), Modifier.weight(1f), MaterialTheme.colorScheme.error)
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Metric("Masuk", displayMoney(state.cashflow.income, visible), Modifier.fillMaxWidth(), KronGreen)
+                        Metric("Keluar", displayMoney(state.cashflow.expense, visible), Modifier.fillMaxWidth(), MaterialTheme.colorScheme.error)
                         val net = state.cashflow.income - state.cashflow.expense
-                        Metric("Net", displayMoney(net, visible), Modifier.weight(1f), signedColor(net))
+                        Metric("Net", displayMoney(net, visible), Modifier.fillMaxWidth(), signedColor(net))
                     }
                 }
             }
@@ -279,7 +280,7 @@ fun HomeScreen(
                 Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(activity.title, style = MaterialTheme.typography.bodyLarge.copy(textDecoration = if (reversed) TextDecoration.LineThrough else null), maxLines = 1)
-                        Text(activity.type.replace('_', ' '), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(eventTypeLabel(activity.type), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     if (!reversed) {
                         Text(displayMoney(activity.cashImpact.takeIf { it != 0L } ?: activity.budgetImpact, visible), color = signedColor(activity.cashImpact), style = MaterialTheme.typography.labelLarge)
