@@ -18,6 +18,17 @@ class TeamAccessPolicyTest {
         TeamAccessPolicy.require(owner, TeamCapability.MANAGE_MEMBERS)
     }
 
+    @Test
+    fun teamTransferCannotCrossAccountBoundary() {
+        val team = AccountEntity(id = 1, name = "Team", sharingMode = AccountSharingMode.TEAM, teamId = "team")
+        val private = AccountEntity(id = 2, name = "Private")
+
+        assertTrue(runCatching { TeamAccessPolicy.requireIsolatedTransfer(team, private) }.isFailure)
+        assertTrue(runCatching { TeamAccessPolicy.requireIsolatedTransfer(private, team) }.isFailure)
+        TeamAccessPolicy.requireIsolatedTransfer(team, team)
+        TeamAccessPolicy.requireIsolatedTransfer(private, private)
+    }
+
     private fun workspace(role: String, canWrite: Boolean, canShare: Boolean) = TeamWorkspaceEntity(
         accountId = 1,
         teamId = "team",

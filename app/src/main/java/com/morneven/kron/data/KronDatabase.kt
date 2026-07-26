@@ -37,6 +37,7 @@ import com.morneven.kron.security.SqlCipherLibrary
         TeamWorkspaceEntity::class,
         TeamMemberEntity::class,
         TeamInvitationUseEntity::class,
+        TeamEventProofEntity::class,
     ],
     version = 15,
     exportSchema = true,
@@ -1005,6 +1006,31 @@ abstract class KronDatabase : RoomDatabase() {
                     """.trimIndent(),
                 )
                 db.execSQL("CREATE INDEX index_team_invitation_uses_teamId ON team_invitation_uses(teamId)")
+                db.execSQL(
+                    """
+                    CREATE TABLE team_event_proofs (
+                        eventId TEXT PRIMARY KEY NOT NULL,
+                        teamId TEXT NOT NULL,
+                        chainId TEXT NOT NULL,
+                        sequence INTEGER NOT NULL,
+                        previousChainHash TEXT NOT NULL,
+                        payloadHash TEXT NOT NULL,
+                        chainHash TEXT NOT NULL,
+                        signatureBase64 TEXT NOT NULL,
+                        recordedAtUtc INTEGER NOT NULL,
+                        deviceId TEXT NOT NULL,
+                        actor TEXT NOT NULL,
+                        appVersion TEXT NOT NULL,
+                        keyId TEXT NOT NULL,
+                        canonicalVersion INTEGER NOT NULL DEFAULT 1,
+                        FOREIGN KEY(eventId) REFERENCES activity_events(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                        FOREIGN KEY(keyId) REFERENCES evidence_keys(id) ON UPDATE NO ACTION ON DELETE RESTRICT
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX index_team_event_proofs_teamId ON team_event_proofs(teamId)")
+                db.execSQL("CREATE UNIQUE INDEX index_team_event_proofs_chainId_sequence ON team_event_proofs(chainId, sequence)")
+                db.execSQL("CREATE INDEX index_team_event_proofs_keyId ON team_event_proofs(keyId)")
 
                 check(before == schema14DataProof(db)) { "Data lama berubah selama migrasi Team Account" }
                 createAppendOnlyTriggers(db)
@@ -1165,6 +1191,7 @@ abstract class KronDatabase : RoomDatabase() {
                 "team_workspaces",
                 "team_members",
                 "team_invitation_uses",
+                "team_event_proofs",
             )
             guardedTables.filter { db.hasTable(it) }.forEach { table ->
                 listOf("INSERT", "UPDATE", "DELETE").forEach { operation ->
@@ -1198,6 +1225,7 @@ abstract class KronDatabase : RoomDatabase() {
                 "journal_seals",
                 "evidence_keys",
                 "team_invitation_uses",
+                "team_event_proofs",
             )
             immutableTables.filter { db.hasTable(it) }.forEach { table ->
                 listOf("UPDATE", "DELETE").forEach { operation ->

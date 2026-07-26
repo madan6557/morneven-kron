@@ -440,6 +440,7 @@ class KronRepository @Inject constructor(
         val toAccount = requireNotNull(dao.accountById(toAccountId))
         teamAccessGuard.require(fromAccountId, TeamCapability.WRITE)
         teamAccessGuard.require(toAccountId, TeamCapability.WRITE)
+        teamAccessGuard.requireTransfer(fromAccountId, toAccountId)
         require(fromAccount.isActive) { "Akun sumber harus menjadi akun aktif" }
         require(!toAccount.isArchived) { "Akun tujuan sudah diarsipkan" }
         require(fromChannel in setOf(FundingChannel.CASH, FundingChannel.EBUDGET) && toChannel in setOf(FundingChannel.CASH, FundingChannel.EBUDGET)) { "Kanal transfer tidak valid" }

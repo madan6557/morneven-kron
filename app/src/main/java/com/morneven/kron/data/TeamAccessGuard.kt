@@ -50,6 +50,13 @@ class TeamAccessGuard @Inject constructor(
         TeamAccessPolicy.require(workspace, capability)
     }
 
+    suspend fun requireTransfer(fromAccountId: Long, toAccountId: Long) {
+        val dao = database.kronDao()
+        val from = dao.accountById(fromAccountId) ?: throw TeamAccessDeniedException("Akun sumber tidak ditemukan")
+        val to = dao.accountById(toAccountId) ?: throw TeamAccessDeniedException("Akun tujuan tidak ditemukan")
+        TeamAccessPolicy.requireIsolatedTransfer(from, to)
+    }
+
     suspend fun allows(accountId: Long, capability: TeamCapability): Boolean = try {
         require(accountId, capability)
         true
@@ -59,6 +66,12 @@ class TeamAccessGuard @Inject constructor(
 }
 
 internal object TeamAccessPolicy {
+    fun requireIsolatedTransfer(from: AccountEntity, to: AccountEntity) {
+        if (from.id != to.id && (from.sharingMode == AccountSharingMode.TEAM || to.sharingMode == AccountSharingMode.TEAM)) {
+            throw TeamAccessDeniedException("Transfer antar Team Account dan akun lain belum didukung")
+        }
+    }
+
     fun require(workspace: TeamWorkspaceEntity, capability: TeamCapability) {
         if (workspace.localRole !in setOf(TeamRole.OWNER, TeamRole.EDITOR, TeamRole.VIEWER)) {
             throw TeamAccessDeniedException("Role Team Account tidak valid")

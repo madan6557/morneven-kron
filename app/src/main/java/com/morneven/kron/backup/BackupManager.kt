@@ -257,7 +257,7 @@ class BackupManager @Inject constructor(
                     val appendOnlyTables = listOf(
                         "activity_events", "cash_journal_lines", "budget_journal_lines",
                         "transaction_splits", "audit_snapshots", "ledger_lines",
-                        "journal_seals", "evidence_keys", "team_invitation_uses",
+                        "journal_seals", "evidence_keys", "team_invitation_uses", "team_event_proofs",
                     )
                     for (table in appendOnlyTables) {
                         liveDb.execSQL("DROP TRIGGER IF EXISTS append_only_${table}_delete")
@@ -274,7 +274,7 @@ class BackupManager @Inject constructor(
                         "transaction_splits", "recurring_occurrences",
                         "audit_snapshots", "ledger_accounts",
                         "ledger_lines", "journal_seals", "evidence_keys",
-                        "team_workspaces", "team_members", "team_invitation_uses",
+                        "team_workspaces", "team_members", "team_invitation_uses", "team_event_proofs",
                     )
                     for (table in guardedTables) {
                         for (op in listOf("INSERT", "UPDATE", "DELETE")) {
@@ -1070,7 +1070,7 @@ class BackupManager @Inject constructor(
         val immutableTables = listOf(
             "activity_events", "cash_journal_lines", "budget_journal_lines",
             "transaction_splits", "audit_snapshots", "ledger_lines",
-            "journal_seals", "evidence_keys", "team_invitation_uses",
+            "journal_seals", "evidence_keys", "team_invitation_uses", "team_event_proofs",
         )
         immutableTables.forEach { table ->
             listOf("update", "delete").forEach { operation ->
@@ -1118,7 +1118,7 @@ class BackupManager @Inject constructor(
             "transaction_splits", "recurring_occurrences",
             "audit_snapshots", "ledger_accounts",
             "ledger_lines", "journal_seals", "evidence_keys",
-            "team_workspaces", "team_members", "team_invitation_uses",
+            "team_workspaces", "team_members", "team_invitation_uses", "team_event_proofs",
         )
         guardedTables.forEach { table ->
             for (op in listOf("INSERT", "UPDATE", "DELETE")) {

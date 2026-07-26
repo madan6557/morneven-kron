@@ -447,6 +447,10 @@ class KronMigrationTest {
                 assertTrue(cursor.moveToFirst())
                 assertEquals(0, cursor.getInt(0))
             }
+            query("SELECT COUNT(*) FROM team_event_proofs").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
             query("PRAGMA foreign_key_check").use { cursor -> assertFalse(cursor.moveToFirst()) }
             query("PRAGMA integrity_check").use { cursor -> assertTrue(cursor.moveToFirst()); assertEquals("ok", cursor.getString(0)) }
             close()

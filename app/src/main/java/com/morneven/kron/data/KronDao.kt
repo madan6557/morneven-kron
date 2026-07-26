@@ -37,6 +37,7 @@ interface KronDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertTeamWorkspace(value: TeamWorkspaceEntity)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertTeamMembers(values: List<TeamMemberEntity>)
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertTeamInvitationUse(value: TeamInvitationUseEntity): Long
+    @Insert suspend fun insertTeamEventProof(value: TeamEventProofEntity)
     @RawQuery suspend fun executeRaw(query: SupportSQLiteQuery): Int
 
     @Update suspend fun updatePeriod(value: BudgetPeriodEntity)
@@ -240,6 +241,18 @@ interface KronDao {
     @Query("SELECT * FROM team_members WHERE accountId = :accountId ORDER BY role, displayName, email") suspend fun teamMembers(accountId: Long): List<TeamMemberEntity>
     @Query("DELETE FROM team_members WHERE accountId = :accountId") suspend fun clearTeamMembers(accountId: Long)
     @Query("SELECT EXISTS(SELECT 1 FROM team_invitation_uses WHERE inviteIdHash = :inviteIdHash)") suspend fun teamInvitationWasUsed(inviteIdHash: String): Boolean
+    @Query("SELECT * FROM team_event_proofs WHERE eventId = :eventId LIMIT 1") suspend fun teamEventProof(eventId: String): TeamEventProofEntity?
+    @Query("SELECT * FROM team_event_proofs WHERE chainId = :chainId ORDER BY sequence DESC LIMIT 1") suspend fun latestTeamEventProof(chainId: String): TeamEventProofEntity?
+    @Query("SELECT * FROM team_event_proofs ORDER BY chainId, sequence") suspend fun allTeamEventProofs(): List<TeamEventProofEntity>
+    @Query("""
+        SELECT e.* FROM activity_events e
+        JOIN accounts a ON a.id = e.accountId
+        JOIN team_workspaces w ON w.accountId = a.id AND w.teamId = a.teamId
+        WHERE a.sharingMode = 'TEAM'
+          AND NOT EXISTS(SELECT 1 FROM team_event_proofs p WHERE p.eventId = e.id)
+        ORDER BY e.createdAt, e.id
+    """)
+    suspend fun teamEventsWithoutProof(): List<ActivityEventEntity>
     @Query("SELECT * FROM accounts WHERE isActive = 1 AND isArchived = 0 LIMIT 1") suspend fun activeAccount(): AccountEntity?
     @Query("SELECT * FROM accounts WHERE isActive = 1 AND isArchived = 0 LIMIT 1") fun observeActiveAccount(): Flow<AccountEntity?>
     @Query("SELECT COUNT(*) FROM accounts WHERE isActive = 1 AND isArchived = 0") suspend fun activeAccountCount(): Int

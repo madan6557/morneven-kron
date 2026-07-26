@@ -13,6 +13,8 @@ import com.morneven.kron.data.LedgerAccountKind
 import com.morneven.kron.data.LedgerLineEntity
 import com.morneven.kron.data.LedgerSide
 import com.morneven.kron.data.LedgerType
+import com.morneven.kron.data.AccountSharingMode
+import com.morneven.kron.data.TeamEventProofEntity
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -58,10 +60,19 @@ class LedgerPostingEngine @Inject constructor(
             validateEvent(event.id)
             seal(event, key.id)
         }
+        dao.teamEventsWithoutProof().forEach { event -> sealTeamEvent(event, key.id) }
     }
 
     suspend fun finalizeEvent(eventId: String) = database.withTransaction {
-        if (dao.sealForEvent(eventId) != null) return@withTransaction
+        dao.sealForEvent(eventId)?.let {
+            val event = requireNotNull(dao.eventById(eventId)) { "Event jurnal tidak ditemukan" }
+            if (dao.teamEventProof(eventId) == null && dao.accountById(event.accountId)?.sharingMode == AccountSharingMode.TEAM) {
+                val key = signingKeys.publicRecord()
+                dao.insertEvidenceKey(key)
+                sealTeamEvent(event, key.id)
+            }
+            return@withTransaction
+        }
         dao.insertActorProfile(ActorProfileEntity())
         require(dao.allEvidenceKeys().isEmpty() || signingKeys.hasKey()) {
             "Kunci tanda tangan bukti tidak tersedia. Penulisan jurnal diblokir untuk melindungi rantai audit."
@@ -73,6 +84,9 @@ class LedgerPostingEngine @Inject constructor(
         ensureLedgerLines(event)
         validateEvent(event.id)
         seal(event, key.id)
+        if (dao.teamEventProof(event.id) == null && dao.accountById(event.accountId)?.sharingMode == AccountSharingMode.TEAM) {
+            sealTeamEvent(event, key.id)
+        }
     }
 
     suspend fun validateAll() {
@@ -99,6 +113,49 @@ class LedgerPostingEngine @Inject constructor(
             }
             previous = seal.chainHash
             expectedSequence++
+        }
+        verifyTeamProofChains()
+    }
+
+    private suspend fun verifyTeamProofChains() {
+        dao.allTeamEventProofs().groupBy { it.chainId }.values.forEach { chain ->
+            var previous = GENESIS_HASH
+            chain.forEachIndexed { index, proof ->
+                require(proof.canonicalVersion == TeamLedgerCanonicalizer.VERSION) {
+                    "Versi bukti event Team tidak didukung"
+                }
+                require(proof.sequence == index + 1L) { "Urutan bukti event Team tidak valid" }
+                require(proof.previousChainHash == previous) { "Rantai bukti event Team terputus" }
+                require(proof.chainId == TeamLedgerCanonicalizer.chainId(proof.teamId, proof.deviceId)) {
+                    "Identitas rantai bukti Team tidak valid"
+                }
+                val event = requireNotNull(dao.eventById(proof.eventId)) { "Event bukti Team tidak ditemukan" }
+                require(teamPayloadHash(event, proof.teamId) == proof.payloadHash) {
+                    "Payload event Team berubah setelah disegel"
+                }
+                val expected = TeamLedgerCanonicalizer.chainHash(
+                    teamId = proof.teamId,
+                    chainId = proof.chainId,
+                    previousChainHash = previous,
+                    payloadHash = proof.payloadHash,
+                    sequence = proof.sequence,
+                    recordedAtUtc = proof.recordedAtUtc,
+                    deviceId = proof.deviceId,
+                    actor = proof.actor,
+                    appVersion = proof.appVersion,
+                    keyId = proof.keyId,
+                )
+                require(expected == proof.chainHash) { "Hash rantai bukti Team tidak valid" }
+                val key = requireNotNull(dao.evidenceKeyById(proof.keyId)) { "Kunci bukti Team tidak ditemukan" }
+                require(
+                    signingKeys.verify(
+                        expected.toByteArray(StandardCharsets.UTF_8),
+                        proof.signatureBase64,
+                        key.certificateBase64,
+                    ),
+                ) { "Tanda tangan bukti Team tidak valid" }
+                previous = proof.chainHash
+            }
         }
     }
 
@@ -313,6 +370,68 @@ class LedgerPostingEngine @Inject constructor(
             ),
         )
     }
+
+    private suspend fun sealTeamEvent(event: ActivityEventEntity, keyId: String) {
+        if (dao.teamEventProof(event.id) != null) return
+        val account = requireNotNull(dao.accountById(event.accountId)) { "Akun event Team tidak ditemukan" }
+        require(account.sharingMode == AccountSharingMode.TEAM && !account.teamId.isNullOrBlank()) {
+            "Event bukan milik Team Account"
+        }
+        val workspace = requireNotNull(dao.teamWorkspace(event.accountId)) { "Workspace event Team tidak ditemukan" }
+        require(workspace.teamId == account.teamId) { "Workspace event Team tidak cocok" }
+        val deviceId = requireNotNull(dao.syncState()?.deviceId?.takeIf(String::isNotBlank)) {
+            "Identitas perangkat Team tidak tersedia"
+        }
+        val actor = dao.actorProfile()?.displayName ?: "Pengguna lokal"
+        val chainId = TeamLedgerCanonicalizer.chainId(workspace.teamId, deviceId)
+        val latest = dao.latestTeamEventProof(chainId)
+        val sequence = (latest?.sequence ?: 0L) + 1L
+        val previous = latest?.chainHash ?: GENESIS_HASH
+        val payloadHash = teamPayloadHash(event, workspace.teamId)
+        val chainHash = TeamLedgerCanonicalizer.chainHash(
+            teamId = workspace.teamId,
+            chainId = chainId,
+            previousChainHash = previous,
+            payloadHash = payloadHash,
+            sequence = sequence,
+            recordedAtUtc = event.createdAt,
+            deviceId = deviceId,
+            actor = actor,
+            appVersion = BuildConfig.VERSION_NAME,
+            keyId = keyId,
+        )
+        dao.insertTeamEventProof(
+            TeamEventProofEntity(
+                eventId = event.id,
+                teamId = workspace.teamId,
+                chainId = chainId,
+                sequence = sequence,
+                previousChainHash = previous,
+                payloadHash = payloadHash,
+                chainHash = chainHash,
+                signatureBase64 = signingKeys.sign(chainHash.toByteArray(StandardCharsets.UTF_8)),
+                recordedAtUtc = event.createdAt,
+                deviceId = deviceId,
+                actor = actor,
+                appVersion = BuildConfig.VERSION_NAME,
+                keyId = keyId,
+            ),
+        )
+    }
+
+    private suspend fun teamPayloadHash(event: ActivityEventEntity, teamId: String): String =
+        TeamLedgerCanonicalizer.payloadHash(
+            event = event,
+            teamId = teamId,
+            cash = dao.cashLinesForEvent(event.id),
+            budget = dao.budgetLinesForEvent(event.id),
+            splits = dao.splitsForEvent(event.id),
+            ledger = dao.ledgerLinesForEvent(event.id),
+            audits = dao.auditsForEvent(event.id),
+            receipts = dao.receiptsForEvent(event.id),
+            allocationSyncIds = dao.allAllocations().associate { it.id to it.syncId },
+            categorySyncIds = dao.allCategories().associate { it.id to it.syncId },
+        )
 
     private suspend fun payloadHash(event: ActivityEventEntity): String = sha256(
         LedgerCanonicalizer.eventPayload(

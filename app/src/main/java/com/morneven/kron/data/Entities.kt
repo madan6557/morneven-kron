@@ -384,6 +384,45 @@ data class JournalSealEntity(
     val legacyBackfill: Boolean = false,
 )
 
+@Entity(
+    tableName = "team_event_proofs",
+    foreignKeys = [
+        ForeignKey(
+            entity = ActivityEventEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["eventId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+        ForeignKey(
+            entity = EvidenceKeyEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["keyId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+    ],
+    indices = [
+        Index("teamId"),
+        Index(value = ["chainId", "sequence"], unique = true),
+        Index("keyId"),
+    ],
+)
+data class TeamEventProofEntity(
+    @PrimaryKey val eventId: String,
+    val teamId: String,
+    val chainId: String,
+    val sequence: Long,
+    val previousChainHash: String,
+    val payloadHash: String,
+    val chainHash: String,
+    val signatureBase64: String,
+    val recordedAtUtc: Long,
+    val deviceId: String,
+    val actor: String,
+    val appVersion: String,
+    val keyId: String,
+    @ColumnInfo(defaultValue = "1") val canonicalVersion: Int = 1,
+)
+
 @Entity(tableName = "actor_profiles")
 data class ActorProfileEntity(
     @PrimaryKey val id: Int = SINGLETON_ID,

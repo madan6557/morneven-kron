@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 15,
-    "identityHash": "e70c0d1c785110619d4ba3eb7943159b",
+    "identityHash": "ebea5018ef87e80230c80fe024945571",
     "entities": [
       {
         "tableName": "accounts",
@@ -2459,11 +2459,162 @@
             "createSql": "CREATE INDEX IF NOT EXISTS `index_team_invitation_uses_teamId` ON `${TABLE_NAME}` (`teamId`)"
           }
         ]
+      },
+      {
+        "tableName": "team_event_proofs",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`eventId` TEXT NOT NULL, `teamId` TEXT NOT NULL, `chainId` TEXT NOT NULL, `sequence` INTEGER NOT NULL, `previousChainHash` TEXT NOT NULL, `payloadHash` TEXT NOT NULL, `chainHash` TEXT NOT NULL, `signatureBase64` TEXT NOT NULL, `recordedAtUtc` INTEGER NOT NULL, `deviceId` TEXT NOT NULL, `actor` TEXT NOT NULL, `appVersion` TEXT NOT NULL, `keyId` TEXT NOT NULL, `canonicalVersion` INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(`eventId`), FOREIGN KEY(`eventId`) REFERENCES `activity_events`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT , FOREIGN KEY(`keyId`) REFERENCES `evidence_keys`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "fields": [
+          {
+            "fieldPath": "eventId",
+            "columnName": "eventId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "teamId",
+            "columnName": "teamId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "chainId",
+            "columnName": "chainId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sequence",
+            "columnName": "sequence",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "previousChainHash",
+            "columnName": "previousChainHash",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payloadHash",
+            "columnName": "payloadHash",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "chainHash",
+            "columnName": "chainHash",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "signatureBase64",
+            "columnName": "signatureBase64",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recordedAtUtc",
+            "columnName": "recordedAtUtc",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deviceId",
+            "columnName": "deviceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "actor",
+            "columnName": "actor",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "appVersion",
+            "columnName": "appVersion",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "keyId",
+            "columnName": "keyId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "canonicalVersion",
+            "columnName": "canonicalVersion",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "1"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "eventId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_team_event_proofs_teamId",
+            "unique": false,
+            "columnNames": [
+              "teamId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_team_event_proofs_teamId` ON `${TABLE_NAME}` (`teamId`)"
+          },
+          {
+            "name": "index_team_event_proofs_chainId_sequence",
+            "unique": true,
+            "columnNames": [
+              "chainId",
+              "sequence"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_team_event_proofs_chainId_sequence` ON `${TABLE_NAME}` (`chainId`, `sequence`)"
+          },
+          {
+            "name": "index_team_event_proofs_keyId",
+            "unique": false,
+            "columnNames": [
+              "keyId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_team_event_proofs_keyId` ON `${TABLE_NAME}` (`keyId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "activity_events",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "eventId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "evidence_keys",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "keyId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'e70c0d1c785110619d4ba3eb7943159b')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'ebea5018ef87e80230c80fe024945571')"
     ]
   }
 }
