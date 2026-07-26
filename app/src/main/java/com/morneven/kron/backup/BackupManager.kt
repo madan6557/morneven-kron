@@ -1217,13 +1217,13 @@ class BackupManager @Inject constructor(
             }
         }
         val mutableQueries = listOf(
-            "SELECT 'account',COALESCE(teamId,'private-account:'||id),name,revision,name||'|'||isArchived||'|'||sharingMode FROM accounts",
-            "SELECT 'category',syncId,name,revision,name||'|'||direction||'|'||color||'|'||icon||'|'||isArchived FROM categories WHERE syncId IS NOT NULL",
-            "SELECT 'portfolio',syncId,name,revision,name||'|'||cadence||'|'||intervalCount||'|'||plannedIncome||'|'||rolloverEnabled||'|'||fundingPriority||'|'||startEpochDay||'|'||endMode||'|'||COALESCE(endValue,'')||'|'||isPaused||'|'||isArchived FROM portfolios WHERE syncId IS NOT NULL",
-            "SELECT 'period',p.syncId,pf.name||' '||p.startEpochDay,p.revision,pf.syncId||'|'||p.startEpochDay||'|'||p.endEpochDay||'|'||p.status FROM budget_periods p JOIN portfolios pf ON pf.id=p.portfolioId WHERE p.syncId IS NOT NULL",
-            "SELECT 'allocation',a.syncId,c.name||' '||a.fundingChannel,a.revision,p.syncId||'|'||c.syncId||'|'||a.fundingChannel||'|'||a.plannedAmount FROM allocations a JOIN budget_periods p ON p.id=a.periodId JOIN categories c ON c.id=a.categoryId WHERE a.syncId IS NOT NULL",
-            "SELECT 'template',t.syncId,c.name,t.revision,p.syncId||'|'||c.syncId||'|'||t.plannedAmount||'|'||t.cashPercentage FROM portfolio_allocation_templates t JOIN portfolios p ON p.id=t.portfolioId JOIN categories c ON c.id=t.categoryId WHERE t.syncId IS NOT NULL",
-            "SELECT 'rule',r.syncId,r.title,r.revision,r.title||'|'||r.direction||'|'||r.amount||'|'||r.fundingChannel||'|'||COALESCE(c.syncId,'')||'|'||COALESCE(a.syncId,'')||'|'||r.cadence||'|'||r.intervalCount||'|'||r.anchorMonth||'|'||r.anchorDay||'|'||r.startEpochDay||'|'||r.nextEpochDay||'|'||COALESCE(r.endEpochDay,'')||'|'||COALESCE(r.remainingOccurrences,'')||'|'||r.isPaused FROM recurring_rules r LEFT JOIN categories c ON c.id=r.categoryId LEFT JOIN allocations a ON a.id=r.allocationId WHERE r.syncId IS NOT NULL",
+            "SELECT 'account',COALESCE(teamId,'private-account:'||id),name,revision,updatedAt,COALESCE(lastWriterId,''),name||'|'||isArchived||'|'||sharingMode FROM accounts",
+            "SELECT 'category',syncId,name,revision,updatedAt,COALESCE(lastWriterId,''),name||'|'||direction||'|'||color||'|'||icon||'|'||isArchived FROM categories WHERE syncId IS NOT NULL",
+            "SELECT 'portfolio',syncId,name,revision,updatedAt,COALESCE(lastWriterId,''),name||'|'||cadence||'|'||intervalCount||'|'||plannedIncome||'|'||rolloverEnabled||'|'||fundingPriority||'|'||startEpochDay||'|'||endMode||'|'||COALESCE(endValue,'')||'|'||isPaused||'|'||isArchived FROM portfolios WHERE syncId IS NOT NULL",
+            "SELECT 'period',p.syncId,pf.name||' '||p.startEpochDay,p.revision,p.updatedAt,COALESCE(p.lastWriterId,''),pf.syncId||'|'||p.startEpochDay||'|'||p.endEpochDay||'|'||p.status FROM budget_periods p JOIN portfolios pf ON pf.id=p.portfolioId WHERE p.syncId IS NOT NULL",
+            "SELECT 'allocation',a.syncId,c.name||' '||a.fundingChannel,a.revision,a.updatedAt,COALESCE(a.lastWriterId,''),p.syncId||'|'||c.syncId||'|'||a.fundingChannel||'|'||a.plannedAmount FROM allocations a JOIN budget_periods p ON p.id=a.periodId JOIN categories c ON c.id=a.categoryId WHERE a.syncId IS NOT NULL",
+            "SELECT 'template',t.syncId,c.name,t.revision,t.updatedAt,COALESCE(t.lastWriterId,''),p.syncId||'|'||c.syncId||'|'||t.plannedAmount||'|'||t.cashPercentage FROM portfolio_allocation_templates t JOIN portfolios p ON p.id=t.portfolioId JOIN categories c ON c.id=t.categoryId WHERE t.syncId IS NOT NULL",
+            "SELECT 'rule',r.syncId,r.title,r.revision,r.updatedAt,COALESCE(r.lastWriterId,''),r.title||'|'||r.direction||'|'||r.amount||'|'||r.fundingChannel||'|'||COALESCE(c.syncId,'')||'|'||COALESCE(a.syncId,'')||'|'||r.cadence||'|'||r.intervalCount||'|'||r.anchorMonth||'|'||r.anchorDay||'|'||r.startEpochDay||'|'||r.nextEpochDay||'|'||COALESCE(r.endEpochDay,'')||'|'||COALESCE(r.remainingOccurrences,'')||'|'||r.isPaused FROM recurring_rules r LEFT JOIN categories c ON c.id=r.categoryId LEFT JOIN allocations a ON a.id=r.allocationId WHERE r.syncId IS NOT NULL",
         )
         val mutable = buildList {
             mutableQueries.forEach { sql ->
@@ -1235,7 +1235,9 @@ class BackupManager @Inject constructor(
                                 syncId = cursor.getString(1),
                                 label = cursor.getString(2),
                                 revision = cursor.getLong(3),
-                                canonicalHash = sha256Text(cursor.getString(4)),
+                                canonicalHash = sha256Text(cursor.getString(6)),
+                                updatedAtEpochMillis = cursor.getLong(4),
+                                lastWriterId = cursor.getString(5),
                             ),
                         )
                     }

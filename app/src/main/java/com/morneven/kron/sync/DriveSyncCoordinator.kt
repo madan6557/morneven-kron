@@ -11,9 +11,63 @@ import kotlinx.coroutines.withTimeout
 internal sealed interface SyncDecision {
     data class Upload(val parentSnapshotId: String?) : SyncDecision
     data class Download(val remote: RemoteDriveSnapshot) : SyncDecision
-    data class Conflict(val reason: SyncConflictReason, val remote: RemoteDriveSnapshot?) : SyncDecision
+    data class Conflict(
+        val reason: SyncConflictReason,
+        val remote: RemoteDriveSnapshot?,
+        val remoteHeads: List<RemoteDriveSnapshot> = listOfNotNull(remote),
+    ) : SyncDecision
     data object NoChanges : SyncDecision
     data object NoData : SyncDecision
+}
+
+internal object SnapshotDag {
+    data class Inspection(
+        val heads: List<RemoteDriveSnapshot>,
+        val valid: Boolean,
+    )
+
+    fun inspect(snapshots: List<RemoteDriveSnapshot>, datasetId: String): Inspection {
+        val active = snapshots.filter {
+            it.manifest.kind == SnapshotKind.ACTIVE && it.manifest.datasetId == datasetId
+        }
+        if (active.isEmpty()) return Inspection(emptyList(), valid = true)
+        val duplicateIds = active.groupBy { it.manifest.snapshotId }.filterValues { it.size > 1 }.values.flatten()
+        val referenced = active.flatMapTo(mutableSetOf()) { it.manifest.parentSnapshotIds }
+        val heads = active.filter { it.manifest.snapshotId !in referenced }
+        val ids = active.mapTo(mutableSetOf()) { it.manifest.snapshotId }
+        val indegree = active.associate { snapshot ->
+            snapshot.manifest.snapshotId to snapshot.manifest.parentSnapshotIds.count(ids::contains)
+        }.toMutableMap()
+        val children = buildMap<String, MutableList<String>> {
+            active.forEach { snapshot ->
+                snapshot.manifest.parentSnapshotIds.filter(ids::contains).forEach { parent ->
+                    getOrPut(parent) { mutableListOf() }.add(snapshot.manifest.snapshotId)
+                }
+            }
+        }
+        val queue = ArrayDeque(indegree.filterValues { it == 0 }.keys)
+        var visited = 0
+        while (queue.isNotEmpty()) {
+            val parent = queue.removeFirst()
+            visited++
+            children[parent].orEmpty().forEach { child ->
+                val remaining = requireNotNull(indegree[child]) - 1
+                indegree[child] = remaining
+                if (remaining == 0) queue.addLast(child)
+            }
+        }
+        val valid = duplicateIds.isEmpty() && visited == ids.size
+        val visibleHeads = (if (valid) heads else active)
+            .distinctBy(RemoteDriveSnapshot::fileId)
+            .sortedWith(compareBy({ it.manifest.generation }, { it.createdAt }, { it.manifest.snapshotId }))
+        return Inspection(
+            heads = visibleHeads,
+            valid = valid,
+        )
+    }
+
+    fun heads(snapshots: List<RemoteDriveSnapshot>, datasetId: String): List<RemoteDriveSnapshot> =
+        inspect(snapshots, datasetId).heads
 }
 
 internal object DriveSyncDecisionEngine {
@@ -24,19 +78,35 @@ internal object DriveSyncDecisionEngine {
         remoteFiles: List<RemoteDriveSnapshot>,
     ): SyncDecision {
         val active = remoteFiles.filter { it.manifest.kind == SnapshotKind.ACTIVE }
-        val latestForLocal = active
-            .filter { it.manifest.datasetId == local.datasetId }
-            .maxWithOrNull(snapshotComparator)
         val datasets = active.groupBy { it.manifest.datasetId }
-        val latestAny = active.maxWithOrNull(snapshotComparator)
+        val onlyDatasetDag = datasets.keys.singleOrNull()?.let { SnapshotDag.inspect(active, it) }
+        if (onlyDatasetDag != null && (!onlyDatasetDag.valid || onlyDatasetDag.heads.size > 1)) {
+            return SyncDecision.Conflict(
+                SyncConflictReason.REMOTE_FORK_DETECTED,
+                onlyDatasetDag.heads.last(),
+                onlyDatasetDag.heads,
+            )
+        }
+        val latestAny = onlyDatasetDag?.heads?.singleOrNull() ?: active.maxWithOrNull(snapshotComparator)
+        val remoteHeads = datasets.keys.flatMap { SnapshotDag.inspect(active, it).heads }
+        val localDag = SnapshotDag.inspect(active, local.datasetId)
+        val localHeads = localDag.heads
+        if (!localDag.valid || localHeads.size > 1) {
+            return SyncDecision.Conflict(
+                SyncConflictReason.REMOTE_FORK_DETECTED,
+                localHeads.last(),
+                localHeads,
+            )
+        }
+        val latestForLocal = localHeads.singleOrNull()
 
         if (state.accountSubject != null && state.accountSubject != account.subjectId) {
             return if (local.hasFinancialData) {
-                SyncDecision.Conflict(SyncConflictReason.ACCOUNT_CHANGED, latestAny)
+                SyncDecision.Conflict(SyncConflictReason.ACCOUNT_CHANGED, latestAny, remoteHeads)
             } else if (datasets.size == 1) {
                 SyncDecision.Download(requireNotNull(latestAny))
             } else if (datasets.size > 1) {
-                SyncDecision.Conflict(SyncConflictReason.DATASET_MISMATCH, latestAny)
+                SyncDecision.Conflict(SyncConflictReason.DATASET_MISMATCH, latestAny, remoteHeads)
             } else {
                 SyncDecision.NoData
             }
@@ -56,6 +126,7 @@ internal object DriveSyncDecisionEngine {
                         SyncConflictReason.DATASET_MISMATCH
                     },
                     latestAny,
+                    remoteHeads,
                 )
             }
         }
@@ -98,18 +169,12 @@ internal object SnapshotRetention {
     ): List<RemoteDriveSnapshot> {
         require(keep >= 1)
         val datasetSnapshots = snapshots.filter { it.manifest.datasetId == datasetId }
-        val activeHead = datasetSnapshots
-            .filter { it.manifest.kind == SnapshotKind.ACTIVE }
-            .maxWithOrNull(
-                compareBy<RemoteDriveSnapshot> { it.manifest.generation }
-                    .thenBy { it.createdAt }
-                    .thenBy { it.manifest.snapshotId },
-            )
+        val activeHeads = SnapshotDag.heads(datasetSnapshots, datasetId)
         val requiredSnapshotIds = buildSet {
             addAll(protectedSnapshotIds)
-            activeHead?.let {
-                add(it.manifest.snapshotId)
-                it.manifest.parentSnapshotId?.let(::add)
+            activeHeads.forEach { head ->
+                add(head.manifest.snapshotId)
+                addAll(head.manifest.parentSnapshotIds)
             }
         }
         val ordered = datasetSnapshots.sortedWith(
@@ -272,6 +337,11 @@ class DriveSyncCoordinator(
     ): SyncRunResult = syncMutex.withLock { resolveConflictLocked(conflict, resolution) }
 
     suspend fun previewConflict(conflict: SyncConflict): ConflictPreviewResult = syncMutex.withLock {
+        if (conflict.remoteHeads.size > 1 || conflict.reason == SyncConflictReason.REMOTE_FORK_DETECTED) {
+            return@withLock ConflictPreviewResult.Error(
+                "Drive memiliki ${conflict.remoteHeads.size} kandidat snapshot aktif. Semua tindakan dikunci sampai diff multi-head tersedia.",
+            )
+        }
         val token = authorization.accessToken(interactive = false)
         if (token !is DriveAccessTokenResult.Granted) {
             return@withLock when (handleTokenFailure(token)) {
@@ -285,10 +355,10 @@ class DriveSyncCoordinator(
             val before = drive.listSnapshots(token.accessToken)
             val remote = before.firstOrNull { it.fileId == expected.fileId }
                 ?: return@withLock stalePreview(conflict)
-            val latestBefore = before
-                .filter { it.manifest.kind == SnapshotKind.ACTIVE && it.manifest.datasetId == remote.manifest.datasetId }
-                .maxWithOrNull(compareBy<RemoteDriveSnapshot>({ it.manifest.generation }, { it.createdAt }))
-            if (latestBefore?.fileId != remote.fileId) return@withLock stalePreview(conflict)
+            val dagBefore = SnapshotDag.inspect(before, remote.manifest.datasetId)
+            if (!dagBefore.valid || dagBefore.heads.singleOrNull()?.fileId != remote.fileId) {
+                return@withLock stalePreview(conflict)
+            }
 
             val passphrase = secretProvider.acquirePassphrase()
                 ?: return@withLock ConflictPreviewResult.PassphraseRequired
@@ -301,10 +371,10 @@ class DriveSyncCoordinator(
                 } finally {
                     decrypted.payload.fill(0)
                 }
-                val latestAfter = drive.listSnapshots(token.accessToken)
-                    .filter { it.manifest.kind == SnapshotKind.ACTIVE && it.manifest.datasetId == remote.manifest.datasetId }
-                    .maxWithOrNull(compareBy<RemoteDriveSnapshot>({ it.manifest.generation }, { it.createdAt }))
-                if (latestAfter?.fileId != remote.fileId) return@withLock stalePreview(conflict)
+                val dagAfter = SnapshotDag.inspect(drive.listSnapshots(token.accessToken), remote.manifest.datasetId)
+                if (!dagAfter.valid || dagAfter.heads.singleOrNull()?.fileId != remote.fileId) {
+                    return@withLock stalePreview(conflict)
+                }
                 ConflictPreviewResult.Ready(preview)
             } finally {
                 envelope.fill(0)
@@ -324,6 +394,9 @@ class DriveSyncCoordinator(
         conflict: SyncConflict,
         resolution: ConflictResolution,
     ): SyncRunResult {
+        if (conflict.remoteHeads.size > 1 || conflict.reason == SyncConflictReason.REMOTE_FORK_DETECTED) {
+            return SyncRunResult.Conflict(conflict)
+        }
         val state = stateStore.read()
         if (state.status == SyncStatus.RESTART_REQUIRED) {
             return SyncRunResult.RestartRequired(state.lastSnapshotId ?: "pending-restore")
@@ -339,13 +412,10 @@ class DriveSyncCoordinator(
                     ?: return staleConflict(conflict)
             }
             if (expectedRemote != null) {
-                val currentLatest = remoteFiles
-                    .filter {
-                        it.manifest.kind == SnapshotKind.ACTIVE &&
-                            it.manifest.datasetId == expectedRemote.manifest.datasetId
-                    }
-                    .maxWithOrNull(compareBy<RemoteDriveSnapshot>({ it.manifest.generation }, { it.createdAt }))
-                if (currentLatest?.fileId != expectedRemote.fileId) return staleConflict(conflict)
+                val currentDag = SnapshotDag.inspect(remoteFiles, expectedRemote.manifest.datasetId)
+                if (!currentDag.valid || currentDag.heads.singleOrNull()?.fileId != expectedRemote.fileId) {
+                    return staleConflict(conflict.copy(remoteHeads = currentDag.heads))
+                }
             }
 
             when (resolution) {
@@ -603,6 +673,7 @@ class DriveSyncCoordinator(
             local = localDescriptor,
             remote = decision.remote,
             expectedLastSnapshotId = state.lastSnapshotId,
+            remoteHeads = decision.remoteHeads,
         )
         stateStore.update {
             it.copy(

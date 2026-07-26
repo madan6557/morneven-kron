@@ -35,6 +35,8 @@ data class ConflictMutableRecord(
     val label: String,
     val revision: Long,
     val canonicalHash: String,
+    val updatedAtEpochMillis: Long = 0,
+    val lastWriterId: String = "",
 )
 
 data class ConflictDataset(
@@ -51,6 +53,8 @@ data class ConflictItem(
     val amount: Long? = null,
     val device: ConflictEventRecord? = null,
     val drive: ConflictEventRecord? = null,
+    val deviceMutable: ConflictMutableRecord? = null,
+    val driveMutable: ConflictMutableRecord? = null,
     val automaticChoice: ConflictChoice? = null,
 )
 
@@ -142,6 +146,8 @@ object ConflictPreviewBuilder {
                 entityType = representative.entityType,
                 status = status,
                 label = representative.label,
+                deviceMutable = local,
+                driveMutable = remote,
                 automaticChoice = automatic,
             )
         }

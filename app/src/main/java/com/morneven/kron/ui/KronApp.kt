@@ -128,6 +128,7 @@ import com.morneven.kron.ui.screens.ReportsScreen
 import com.morneven.kron.ui.screens.SettingsScreen
 import com.morneven.kron.ui.screens.CloudBackupUiState
 import com.morneven.kron.ui.components.displayMoney
+import com.morneven.kron.ui.components.eventTypeLabel
 import com.morneven.kron.ui.components.HudCard
 import com.morneven.kron.ui.screens.CloudSyncStatus
 import com.morneven.kron.sync.ConflictResolution
@@ -143,7 +144,11 @@ import com.morneven.kron.sync.SyncRunResult
 import com.morneven.kron.team.TeamDriveScopeProbe
 import com.morneven.kron.team.TeamScopeProbeResult
 import com.morneven.kron.ui.theme.KronTheme
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.launch
@@ -1223,6 +1228,7 @@ private fun MainScaffold(
             conflict = conflict,
             preview = cloudConflictPreview,
             previewError = cloudConflictPreviewError,
+            valuesVisible = state.valuesVisible,
             onDismiss = { cloudConflict = null },
             onKeepBoth = {
                 cloudConflict = null
@@ -1731,12 +1737,14 @@ private fun ConflictCenterDialog(
     conflict: SyncConflict,
     preview: ConflictPreview?,
     previewError: String?,
+    valuesVisible: Boolean,
     onDismiss: () -> Unit,
     onKeepBoth: () -> Unit,
     onUseDevice: () -> Unit,
     onUseDrive: () -> Unit,
 ) {
     var filter by rememberSaveable { mutableStateOf("ALL") }
+    var showAdvanced by rememberSaveable { mutableStateOf(false) }
     val filtered = preview?.items.orEmpty().filter { item ->
         filter == "ALL" || item.status.name == filter
     }
@@ -1808,6 +1816,7 @@ private fun ConflictCenterDialog(
                                 "ALL" to "Semua",
                                 ConflictItemStatus.DEVICE_ONLY.name to "Perangkat",
                                 ConflictItemStatus.DRIVE_ONLY.name to "Drive",
+                                ConflictItemStatus.IDENTICAL.name to "Identik",
                                 ConflictItemStatus.DIFFERENT.name to "Berbeda",
                                 ConflictItemStatus.INTEGRITY_PROBLEM.name to "Integritas",
                             ).forEach { (value, label) ->
@@ -1835,26 +1844,10 @@ private fun ConflictCenterDialog(
                                             MaterialTheme.colorScheme.tertiary
                                         },
                                     )
-                                    item.device?.let { event ->
-                                        Text(
-                                            "Perangkat: ${LocalDate.ofEpochDay(event.effectiveEpochDay)} | ${event.type} | " +
-                                                "${displayMoney(event.amount, true)} | ${event.accountName}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                        )
-                                        Text(
-                                            "${if (event.reversed) "Reversal" else "Aktif"} | ${event.receiptCount} bukti | " +
-                                                "actor ${event.actor.ifBlank { "tidak tersedia" }} | device ${event.deviceId.ifBlank { "tidak tersedia" }}",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                    item.drive?.let { event ->
-                                        Text(
-                                            "Drive: ${LocalDate.ofEpochDay(event.effectiveEpochDay)} | ${event.type} | " +
-                                                "${displayMoney(event.amount, true)} | ${event.accountName}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                        )
-                                    }
+                                    item.device?.let { ConflictEventDetails("Perangkat", it, valuesVisible) }
+                                    item.drive?.let { ConflictEventDetails("Drive", it, valuesVisible) }
+                                    item.deviceMutable?.let { ConflictMutableDetails("Perangkat", it) }
+                                    item.driveMutable?.let { ConflictMutableDetails("Drive", it) }
                                 }
                             }
                             if (filtered.isEmpty()) Text("Tidak ada item pada filter ini.")
@@ -1871,19 +1864,70 @@ private fun ConflictCenterDialog(
                             enabled = false,
                             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                         ) { Text("Gabungkan aman") }
-                        Row(
-                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            TextButton(onClick = onKeepBoth, modifier = Modifier.heightIn(min = 48.dp)) { Text("Amankan kedua versi") }
-                            TextButton(onClick = onUseDevice, modifier = Modifier.heightIn(min = 48.dp)) { Text("Gunakan perangkat ini") }
-                            TextButton(onClick = onUseDrive, modifier = Modifier.heightIn(min = 48.dp)) { Text("Gunakan Drive") }
+                        TextButton(
+                            onClick = { showAdvanced = !showAdvanced },
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) { Text(if (showAdvanced) "Sembunyikan tindakan lanjutan" else "Tampilkan tindakan snapshot lanjutan") }
+                        if (showAdvanced) {
+                            Text(
+                                "Tindakan ini mengganti seluruh snapshot dan bukan merge per transaksi.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                val enabled = preview.integrityProblemCount == 0
+                                TextButton(onClick = onKeepBoth, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp)) { Text("Amankan kedua versi") }
+                                TextButton(onClick = onUseDevice, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp)) { Text("Gunakan perangkat ini") }
+                                TextButton(onClick = onUseDrive, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp)) { Text("Gunakan Drive") }
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun ConflictEventDetails(
+    source: String,
+    event: com.morneven.kron.sync.ConflictEventRecord,
+    valuesVisible: Boolean,
+) {
+    Text(
+        "$source: ${LocalDate.ofEpochDay(event.effectiveEpochDay).format(conflictDateFormat)} | ${eventTypeLabel(event.type)} | " +
+            "${displayMoney(event.amount, valuesVisible)} | ${event.accountName}",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Text(
+        "${if (event.reversed) "Sudah dibalik" else "Aktif"} | ${event.receiptCount} bukti | " +
+            "actor ${event.actor.ifBlank { "tidak tersedia" }} | device ${event.deviceId.ifBlank { "tidak tersedia" }} | " +
+            "ubah ${formatConflictTimestamp(event.changedAtEpochMillis)}",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun ConflictMutableDetails(source: String, item: com.morneven.kron.sync.ConflictMutableRecord) {
+    Text(
+        "$source: revisi ${item.revision} | penulis ${item.lastWriterId.ifBlank { "tidak tersedia" }} | " +
+            "ubah ${formatConflictTimestamp(item.updatedAtEpochMillis)}",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+private val conflictDateFormat = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.forLanguageTag("id-ID"))
+private val conflictDateTimeFormat = DateTimeFormatter.ofPattern("d MMM yyyy, HH.mm", Locale.forLanguageTag("id-ID"))
+
+private fun formatConflictTimestamp(epochMillis: Long): String = if (epochMillis > 0) {
+    Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()).format(conflictDateTimeFormat)
+} else {
+    "tidak tersedia"
 }
 
 private fun conflictStatusLabel(status: ConflictItemStatus): String = when (status) {
@@ -1905,4 +1949,6 @@ private fun conflictDescription(conflict: SyncConflict): String = when (conflict
         "Dataset Drive tidak sama dengan dataset aktif pada perangkat."
     com.morneven.kron.sync.SyncConflictReason.REMOTE_CHANGED_DURING_RESOLUTION ->
         "Snapshot Drive berubah ketika konflik sedang diselesaikan. Muat ulang sebelum memilih tindakan."
+    com.morneven.kron.sync.SyncConflictReason.REMOTE_FORK_DETECTED ->
+        "Drive memiliki lebih dari satu cabang snapshot aktif. Tidak ada cabang yang dipilih otomatis."
 }

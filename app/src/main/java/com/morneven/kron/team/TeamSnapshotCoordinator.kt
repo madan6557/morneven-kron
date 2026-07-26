@@ -10,6 +10,7 @@ import com.morneven.kron.sync.AesGcmDriveSnapshotCryptor
 import com.morneven.kron.sync.DriveSnapshotManifest
 import com.morneven.kron.sync.RemoteDriveSnapshot
 import com.morneven.kron.sync.SnapshotKind
+import com.morneven.kron.sync.SnapshotDag
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -116,9 +117,17 @@ class TeamSnapshotCoordinator @Inject constructor(
 
 internal object TeamSnapshotHeadPolicy {
     fun matches(snapshots: List<RemoteDriveSnapshot>, expectedHead: String?): Boolean {
-        val active = snapshots.filter { it.manifest.kind == SnapshotKind.ACTIVE }
-        val referenced = active.flatMapTo(mutableSetOf()) { it.manifest.parentSnapshotIds }
-        val heads = active.filter { it.manifest.snapshotId !in referenced }
+        val datasetIds = snapshots.asSequence()
+            .filter { it.manifest.kind == SnapshotKind.ACTIVE }
+            .map { it.manifest.datasetId }
+            .distinct()
+            .toList()
+        if (datasetIds.size > 1) return false
+        val datasetId = datasetIds.singleOrNull()
+        val dag = datasetId?.let { SnapshotDag.inspect(snapshots, it) }
+            ?: SnapshotDag.Inspection(emptyList(), valid = true)
+        if (!dag.valid) return false
+        val heads = dag.heads
         return when {
             expectedHead == null -> heads.isEmpty()
             else -> heads.singleOrNull()?.manifest?.snapshotId == expectedHead

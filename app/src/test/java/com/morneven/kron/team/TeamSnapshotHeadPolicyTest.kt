@@ -17,13 +17,19 @@ class TeamSnapshotHeadPolicyTest {
         assertTrue(TeamSnapshotHeadPolicy.matches(listOf(root, head), "head"))
         assertFalse(TeamSnapshotHeadPolicy.matches(listOf(root, head), "root"))
         assertFalse(TeamSnapshotHeadPolicy.matches(listOf(root, head, remote("fork", listOf("root"))), "head"))
+        assertFalse(TeamSnapshotHeadPolicy.matches(listOf(head, remote("foreign", dataset = "team-2")), "head"))
+        assertFalse(TeamSnapshotHeadPolicy.matches(listOf(remote("cycle", listOf("cycle"))), "cycle"))
         assertFalse(TeamSnapshotHeadPolicy.matches(listOf(root), null))
     }
 
-    private fun remote(snapshotId: String, parents: List<String> = emptyList()): RemoteDriveSnapshot {
+    private fun remote(
+        snapshotId: String,
+        parents: List<String> = emptyList(),
+        dataset: String = "team-1",
+    ): RemoteDriveSnapshot {
         val manifest = DriveSnapshotManifest(
             protocolVersion = 2,
-            datasetId = "team-1",
+            datasetId = dataset,
             snapshotId = snapshotId,
             parentSnapshotId = parents.firstOrNull(),
             parentSnapshotIds = parents,

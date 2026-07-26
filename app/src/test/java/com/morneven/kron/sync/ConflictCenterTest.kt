@@ -30,6 +30,7 @@ class ConflictCenterTest {
             ConflictChoice.DRIVE,
             preview.items.single { it.key == "portfolio:p1" }.automaticChoice,
         )
+        assertEquals(2L, preview.items.single { it.key == "portfolio:p1" }.driveMutable?.revision)
         assertTrue(runCatching { ConflictPreviewBuilder.mergePlan(preview, emptyMap()) }.isFailure)
     }
 

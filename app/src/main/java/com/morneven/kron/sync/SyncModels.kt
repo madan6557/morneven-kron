@@ -166,6 +166,7 @@ enum class SyncConflictReason {
     ACCOUNT_CHANGED,
     DATASET_MISMATCH,
     REMOTE_CHANGED_DURING_RESOLUTION,
+    REMOTE_FORK_DETECTED,
 }
 
 data class SyncConflict(
@@ -173,6 +174,7 @@ data class SyncConflict(
     val local: LocalDatasetSnapshot,
     val remote: RemoteDriveSnapshot?,
     val expectedLastSnapshotId: String?,
+    val remoteHeads: List<RemoteDriveSnapshot> = listOfNotNull(remote),
 )
 
 enum class ConflictResolution {
