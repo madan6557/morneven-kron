@@ -360,6 +360,7 @@ private fun MainScaffold(
     var teamProbeMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var teamProbeBusy by remember { mutableStateOf(false) }
     var pendingTeamAuthorization by remember { mutableStateOf<DriveConnectResult.UserActionRequired?>(null) }
+    var pendingTeamPickerResolution by rememberSaveable { mutableStateOf<String?>(null) }
     var isAccountSwitching by remember { mutableStateOf(false) }
     var restartRequired by rememberSaveable { mutableStateOf(false) }
     var cloudWifiOnly by rememberSaveable(driveSyncRuntime) {
@@ -477,6 +478,7 @@ private fun MainScaffold(
             is TeamScopeProbeResult.Failed -> teamProbeMessage = result.message
             is TeamScopeProbeResult.UserActionRequired -> pendingTeamAuthorization =
                 DriveConnectResult.UserActionRequired(result.account, result.resolutionId)
+            is TeamScopeProbeResult.PickerActionRequired -> pendingTeamPickerResolution = result.resolutionId
         }
     }
 
@@ -624,6 +626,36 @@ private fun MainScaffold(
                 probe.cancelAuthorization(pending.resolutionId)
                 teamProbeBusy = false
                 teamProbeMessage = "Permintaan scope Team sudah tidak berlaku."
+            }
+    }
+    val teamPickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result ->
+        val resolutionId = pendingTeamPickerResolution
+        pendingTeamPickerResolution = null
+        if (resolutionId != null && teamDriveScopeProbe != null) {
+            teamProbeBusy = true
+            scope.launch {
+                handleTeamProbeResult(
+                    teamDriveScopeProbe.completeMemberWorkspacePicker(
+                        resolutionId = resolutionId,
+                        resultCode = result.resultCode,
+                        data = result.data,
+                    ),
+                )
+            }
+        }
+    }
+    LaunchedEffect(pendingTeamPickerResolution) {
+        val resolutionId = pendingTeamPickerResolution ?: return@LaunchedEffect
+        val probe = teamDriveScopeProbe ?: return@LaunchedEffect
+        runCatching { probe.authorizationRequest(resolutionId) }
+            .onSuccess(teamPickerLauncher::launch)
+            .onFailure {
+                pendingTeamPickerResolution = null
+                probe.cancelAuthorization(resolutionId)
+                teamProbeBusy = false
+                teamProbeMessage = "Permintaan Google Picker sudah tidak berlaku."
             }
     }
     val accountSwitchLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -888,7 +920,13 @@ private fun MainScaffold(
             onConnect = {
                 teamProbeBusy = true
                 teamProbeMessage = null
-                scope.launch { handleTeamConnectResult(teamDriveScopeProbe.connect()) }
+                scope.launch {
+                    if (teamDriveScopeProbe.hasProbe()) {
+                        handleTeamProbeResult(teamDriveScopeProbe.selectMemberAccount())
+                    } else {
+                        handleTeamConnectResult(teamDriveScopeProbe.connect())
+                    }
+                }
             },
             onCreate = { email, role ->
                 teamProbeBusy = true
@@ -898,12 +936,12 @@ private fun MainScaffold(
             onVerify = {
                 teamProbeBusy = true
                 teamProbeMessage = null
-                scope.launch { handleTeamProbeResult(teamDriveScopeProbe.verifyMemberAccess()) }
+                scope.launch { handleTeamProbeResult(teamDriveScopeProbe.openMemberWorkspacePicker()) }
             },
             onRemove = {
                 teamProbeBusy = true
                 teamProbeMessage = null
-                scope.launch { handleTeamProbeResult(teamDriveScopeProbe.removeProbe()) }
+                scope.launch { handleTeamProbeResult(teamDriveScopeProbe.selectOwnerAndRemoveProbe()) }
             },
         )
     }
@@ -1658,9 +1696,9 @@ private fun TeamScopeProbeDialog(
                     onClick = onVerify,
                     enabled = !busy && hasProbe,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                ) { Text("3. Verifikasi sebagai Member") }
+                ) { Text("3. Pilih folder sebagai Member") }
                 Text(
-                    "Sebelum langkah 3, gunakan tombol Pilih akun Google lalu pilih akun Member.",
+                    "Sebelum langkah 3, gunakan tombol Pilih akun Google lalu pilih akun Member. Picker hanya menerima folder dari workspace uji.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )

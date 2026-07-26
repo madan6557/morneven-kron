@@ -239,6 +239,17 @@ Spike dua akun nyata dijalankan pada device Android dengan build debug dan scope
 
 Hasil ini memblokir desain Team Account saat ini. Permission Drive pada folder tidak otomatis membuat folder tersebut tersedia dalam cakupan `drive.file` aplikasi di akun penerima. Implementasi conversion, join, snapshot Team, invitation redemption, dan collaborator produksi tidak boleh diteruskan sampai spike baru membuktikan salah satu alur non-sensitive yang sah, misalnya pemilihan folder eksplisit melalui Google Picker. Jangan mengganti desain dengan link publik atau scope Drive penuh.
 
+Spike lanjutan membuktikan alur Google Picker pada device yang sama:
+
+1. Member memilih akun melalui Credential Manager tanpa meminta scope tambahan;
+2. KRON membuka Google Picker dengan hanya scope `drive.file` dan pemilihan folder;
+3. Member memilih folder workspace yang dibagikan secara eksplisit;
+4. callback Picker mengembalikan tepat satu folder ID yang sama dengan kode Team;
+5. token hasil Picker dapat membaca folder dan melaporkan capability tulis untuk role Editor;
+6. Member tidak memiliki capability untuk mengelola collaborator.
+
+Dengan hasil tersebut, gate akses folder lintas dua akun dinyatakan lulus dengan syarat proses join selalu memakai Google Picker. Akses langsung berdasarkan folder ID tetap tidak didukung. Gate lain di bawah tetap memblokir aktivasi fitur pada build release.
+
 Dua kontrak lain juga harus diselesaikan sebelum implementasi dilanjutkan:
 
 - Viewer tidak dapat menulis marker redemption ke folder. Karena itu, undangan single-use lintas device tidak dapat ditegakkan secara atomik oleh Viewer tanpa Owner online atau coordinator tepercaya.
