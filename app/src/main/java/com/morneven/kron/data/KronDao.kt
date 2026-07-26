@@ -290,6 +290,8 @@ interface KronDao {
     @Query("SELECT EXISTS(SELECT 1 FROM recurring_occurrences WHERE ruleId = :ruleId AND dueEpochDay = :dueDay)") suspend fun occurrenceExists(ruleId: String, dueDay: Long): Boolean
     @Query("SELECT * FROM accounts ORDER BY createdAt") suspend fun allAccounts(): List<AccountEntity>
     @Query("SELECT * FROM receipts ORDER BY id") suspend fun allReceipts(): List<ReceiptEntity>
+    @Query("SELECT r.* FROM receipts r JOIN activity_events e ON e.id = r.eventId WHERE e.accountId = :accountId ORDER BY r.id")
+    suspend fun receiptsForAccount(accountId: Long): List<ReceiptEntity>
     @Query("SELECT r.* FROM receipts r JOIN activity_events e ON e.id = r.eventId WHERE r.localPath IS NOT NULL AND EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id AND rv.createdAt <= :maxCreatedAt)") suspend fun receiptsForReversedEvents(maxCreatedAt: Long): List<ReceiptEntity>
     @Query("UPDATE receipts SET localPath = NULL WHERE id = :id") suspend fun clearReceiptLocalPath(id: Long)
     @Query("SELECT * FROM receipts WHERE evidenceEventId = :eventId OR (evidenceEventId IS NULL AND eventId = :eventId) ORDER BY id") suspend fun receiptsForEvent(eventId: String): List<ReceiptEntity>

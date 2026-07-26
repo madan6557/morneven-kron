@@ -7,6 +7,7 @@ import android.net.Uri
 import android.system.Os
 import android.system.OsConstants
 import com.morneven.kron.data.FundingChannel
+import com.morneven.kron.data.AccountSharingMode
 import com.morneven.kron.data.KronDatabase
 import com.morneven.kron.data.ReceiptEntity
 import com.morneven.kron.security.DatabaseEncryptionManager
@@ -115,6 +116,16 @@ class BackupManager @Inject constructor(
             ByteArrayOutputStream().use { output ->
                 writePortableSnapshot(output)
                 require(output.size().toLong() <= MAX_SYNC_PAYLOAD_BYTES) { "Snapshot terlalu besar untuk sinkronisasi Drive" }
+                output.toByteArray()
+            }
+        }
+    }
+
+    suspend fun createTeamSnapshotPayload(accountId: Long): ByteArray = withContext(Dispatchers.IO) {
+        snapshotOperationLock.withLock {
+            ByteArrayOutputStream().use { output ->
+                writePortableSnapshot(output, accountId)
+                require(output.size().toLong() <= MAX_SYNC_PAYLOAD_BYTES) { "Snapshot Team terlalu besar" }
                 output.toByteArray()
             }
         }
@@ -342,17 +353,34 @@ class BackupManager @Inject constructor(
         }
     }
 
-    private suspend fun writePortableSnapshot(output: OutputStream) {
+    private suspend fun writePortableSnapshot(output: OutputStream, teamAccountId: Long? = null) {
         database.openHelper.writableDatabase.query("PRAGMA wal_checkpoint(FULL)").use { it.moveToFirst() }
         val databaseFile = context.getDatabasePath(KronDatabase.DATABASE_NAME)
         require(databaseFile.exists()) { "Database belum tersedia" }
         val portable = File(context.cacheDir, "backup-portable-${UUID.randomUUID()}.db")
         try {
+            val teamScope = teamAccountId?.let { accountId ->
+                val account = requireNotNull(database.kronDao().accountById(accountId)) { "Team Account tidak ditemukan" }
+                require(account.sharingMode == AccountSharingMode.TEAM && !account.teamId.isNullOrBlank()) {
+                    "Akun belum menjadi Team"
+                }
+                val workspace = requireNotNull(database.kronDao().teamWorkspace(accountId)) {
+                    "Workspace Team belum tersedia"
+                }
+                require(workspace.teamId == account.teamId) { "Workspace Team tidak cocok" }
+                TeamSnapshotScope(accountId, workspace.teamId, workspace.generation)
+            }
+            val receipts = teamScope?.let { database.kronDao().receiptsForAccount(it.accountId) }
+                ?: database.kronDao().allReceipts()
+            val attachments = collectAttachments(receipts)
             databaseEncryption.exportPlaintext(databaseFile, portable)
+            teamScope?.let {
+                TeamSnapshotPruner.prune(portable, it)
+                validateDatabase(portable)
+            }
             val databaseBytes = portable.length()
             require(databaseBytes in 1..MAX_DATABASE_BYTES) { "Ukuran database tidak valid" }
             val databaseSha = sha256(portable)
-            val attachments = collectAttachments(database.kronDao().allReceipts())
             val syncState = database.kronDao().syncState()
             val schemaVersion = database.openHelper.readableDatabase.query("PRAGMA user_version").use { cursor ->
                 require(cursor.moveToFirst())
@@ -366,8 +394,12 @@ class BackupManager @Inject constructor(
                 .put("databaseSha256", databaseSha)
                 .put("databaseBytes", databaseBytes)
                 .put("attachmentCount", attachments.size)
-                .put("datasetId", syncState?.datasetId ?: JSONObject.NULL)
-                .put("generation", syncState?.localGeneration ?: 0)
+                .put("datasetId", teamScope?.teamId ?: syncState?.datasetId ?: JSONObject.NULL)
+                .put("generation", teamScope?.generation ?: syncState?.localGeneration ?: 0)
+            teamScope?.let {
+                manifest.put("scope", "TEAM")
+                manifest.put("teamId", it.teamId)
+            }
             val checksumIndex = buildString {
                 append(DATABASE_ENTRY).append('\t').append(databaseSha).append('\t').append(databaseBytes).append('\n')
                 attachments.forEach { attachment ->
@@ -394,7 +426,7 @@ class BackupManager @Inject constructor(
                 }
             }
         } finally {
-            portable.delete()
+            deleteDatabaseFiles(portable)
         }
     }
 
