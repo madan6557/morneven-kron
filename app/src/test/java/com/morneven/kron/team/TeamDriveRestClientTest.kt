@@ -76,6 +76,47 @@ class TeamDriveRestClientTest {
         assertFalse(request.contains("\"parents\":\""))
     }
 
+    @Test
+    fun uploadInvitationStoresOnlyHashesAndVerifiesMetadata() = runBlocking {
+        val invitation = TeamInvitationCodec.create(
+            teamId = "team-1",
+            folderId = "folder-1",
+            targetEmail = "member@example.com",
+            role = com.morneven.kron.data.TeamRole.EDITOR,
+            ownerKeyFingerprint = "ab".repeat(32),
+            nowEpochMillis = 1,
+            inviteId = "invite-1",
+        )
+        val inviteHash = TeamInvitationCodec.sha256("invite-1".toByteArray())
+        val properties = mapOf(
+            "product" to "KRON",
+            "teamId" to "team-1",
+            "kind" to "invitation",
+            "invite" to inviteHash,
+            "target" to invitation.targetEmailHash,
+            "role" to invitation.role,
+            "expires" to invitation.expiresAtEpochMillis.toString(),
+            "owner" to invitation.ownerKeyFingerprint,
+        )
+        lateinit var connection: FakeHttpConnection
+        val client = TeamDriveRestClient(
+            endpoint = "https://drive.test",
+            connectionFactory = DriveHttpConnectionFactory { url ->
+                FakeHttpConnection(url, fileJson("file-1", "invitation", properties, 3).toByteArray()).also { connection = it }
+            },
+        )
+
+        val uploaded = client.uploadInvitation("token", "folder-1", invitation, byteArrayOf(1, 2, 3))
+        val request = connection.requestBytes.toString(Charsets.ISO_8859_1)
+
+        assertEquals("file-1", uploaded.fileId)
+        assertTrue(request.contains(inviteHash))
+        assertTrue(request.contains(invitation.targetEmailHash))
+        assertFalse(request.contains("invite-1"))
+        assertFalse(request.contains("member@example.com"))
+        invitation.clear()
+    }
+
     private fun manifest() = DriveSnapshotManifest(
         protocolVersion = 2,
         datasetId = "team-1",

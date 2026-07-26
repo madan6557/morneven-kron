@@ -219,6 +219,36 @@ class TeamDriveRestClient(
         return file.toRemoteSnapshot(manifest)
     }
 
+    suspend fun uploadInvitation(
+        accessToken: String,
+        folderId: String,
+        invitation: TeamInvitation,
+        encryptedEnvelope: ByteArray,
+    ): TeamDriveFile {
+        require(invitation.folderId == folderId) { "Folder undangan Team tidak cocok" }
+        val inviteHash = TeamInvitationCodec.sha256(invitation.inviteId.toByteArray(Charsets.UTF_8))
+        val properties = mapOf(
+            "invite" to inviteHash,
+            "target" to invitation.targetEmailHash,
+            "role" to invitation.role,
+            "expires" to invitation.expiresAtEpochMillis.toString(),
+            "owner" to invitation.ownerKeyFingerprint,
+        )
+        val file = uploadImmutable(
+            accessToken = accessToken,
+            folderId = folderId,
+            name = "invitation-$inviteHash.kronteam",
+            kind = "invitation",
+            teamId = invitation.teamId,
+            bytes = encryptedEnvelope,
+            extraProperties = properties,
+        )
+        require(file.sizeBytes == encryptedEnvelope.size.toLong() && properties.all { file.appProperties[it.key] == it.value }) {
+            "Metadata file undangan Team tidak cocok"
+        }
+        return file
+    }
+
     suspend fun listFiles(accessToken: String, folderId: String, teamId: String): List<TeamDriveFile> = withContext(Dispatchers.IO) {
         requireIdentifier(folderId, "Folder ID")
         requireIdentifier(teamId, "Team ID")

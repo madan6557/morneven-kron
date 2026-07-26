@@ -31,6 +31,8 @@ class TeamInvitation internal constructor(
 
     internal fun secretCopy(): ByteArray = secretBytes.copyOf()
 
+    internal fun clear() = secretBytes.fill(0)
+
     override fun toString(): String = "TeamInvitation(redacted)"
 }
 

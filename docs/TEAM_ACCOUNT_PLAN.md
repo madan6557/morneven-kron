@@ -265,6 +265,8 @@ Envelope snapshot Team memakai format `KRONTMS1` dengan AES-GCM dan Team key 256
 
 Publisher Team memverifikasi capability Drive dan head DAG sebelum serta sesudah upload. Metadata snapshot rusak, head tidak cocok, atau lebih dari satu head gagal tertutup ke status konflik. Aktivasi head lokal memakai compare-and-set terhadap account, team ID, generation, dan parent sehingga perubahan lokal yang terjadi selama export tidak dapat ditandai sebagai sudah tersinkron.
 
+Pembuatan undangan Owner memverifikasi subject akun Google terhadap owner hash dan capability share Drive. Envelope terenkripsi diunggah sebelum ACL diberikan. Jika pemberian ACL, verifikasi role, atau cache lokal gagal, KRON mencabut permission yang sempat dibuat dan menghapus file undangan dalam context non-cancellable. Drive hanya menerima hash invite dan email tujuan; kode akses serta secret tidak masuk nama file atau metadata.
+
 Jaminan single-use untuk Viewer tetap menjadi release blocker. ACL Google dan email hash mencegah akun lain memakai kode, tetapi device kedua dari akun Google yang sama memiliki otoritas Drive yang sama. Marker atau envelope Drive dapat disalin sebelum dihapus, sehingga bukan jaminan kriptografis. Fase produksi harus memilih Owner-mediated approval atau coordinator tepercaya. Sampai keputusan itu diterapkan dan diuji, join Viewer tidak boleh diaktifkan pada build release.
 
 Build release tetap memakai `TEAM_ACCOUNT_ENABLED=false`. Build debug hanya memuat harness probe yang tidak menulis database KRON.
