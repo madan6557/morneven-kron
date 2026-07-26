@@ -140,6 +140,8 @@ import com.morneven.kron.sync.GoogleAccountIdentity
 import com.morneven.kron.sync.SyncConflict
 import com.morneven.kron.sync.SyncConflictReason
 import com.morneven.kron.sync.SyncRunResult
+import com.morneven.kron.team.TeamDriveScopeProbe
+import com.morneven.kron.team.TeamScopeProbeResult
 import com.morneven.kron.ui.theme.KronTheme
 import java.time.LocalDate
 import kotlinx.coroutines.delay
@@ -166,6 +168,7 @@ fun KronApp(
     viewModel: MainViewModel,
     activity: FragmentActivity,
     driveSyncRuntime: DriveSyncRuntime?,
+    teamDriveScopeProbe: TeamDriveScopeProbe?,
 ) {
     val state by viewModel.uiState.collectAsState()
     KronTheme(state.theme) {
@@ -283,7 +286,7 @@ fun KronApp(
         if (locked) {
             LockScreen(lockError, state.authFailures, state.authLockedUntil, authenticate)
         } else {
-            MainScaffold(state, viewModel, activity, driveSyncRuntime)
+            MainScaffold(state, viewModel, activity, driveSyncRuntime, teamDriveScopeProbe)
         }
     }
 }
@@ -294,6 +297,7 @@ private fun MainScaffold(
     viewModel: MainViewModel,
     activity: FragmentActivity,
     driveSyncRuntime: DriveSyncRuntime?,
+    teamDriveScopeProbe: TeamDriveScopeProbe?,
 ) {
     val navController = rememberNavController()
     val backStack by navController.currentBackStackEntryAsState()
@@ -352,6 +356,10 @@ private fun MainScaffold(
     var cloudConflict by remember { mutableStateOf<SyncConflict?>(null) }
     var cloudConflictPreview by remember { mutableStateOf<ConflictPreview?>(null) }
     var cloudConflictPreviewError by remember { mutableStateOf<String?>(null) }
+    var showTeamScopeProbe by rememberSaveable { mutableStateOf(false) }
+    var teamProbeMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    var teamProbeBusy by remember { mutableStateOf(false) }
+    var pendingTeamAuthorization by remember { mutableStateOf<DriveConnectResult.UserActionRequired?>(null) }
     var isAccountSwitching by remember { mutableStateOf(false) }
     var restartRequired by rememberSaveable { mutableStateOf(false) }
     var cloudWifiOnly by rememberSaveable(driveSyncRuntime) {
@@ -449,6 +457,26 @@ private fun MainScaffold(
                 viewModel.setPendingDriveAuthorization(result.account, result.resolutionId)
             }
             is DriveConnectResult.Failed -> viewModel.showMessage(result.message)
+        }
+    }
+
+    fun handleTeamConnectResult(result: DriveConnectResult) {
+        teamProbeBusy = false
+        when (result) {
+            is DriveConnectResult.Connected -> teamProbeMessage =
+                "Akun Google terhubung untuk probe Team. Lanjutkan langkah berikutnya."
+            is DriveConnectResult.UserActionRequired -> pendingTeamAuthorization = result
+            is DriveConnectResult.Failed -> teamProbeMessage = result.message
+        }
+    }
+
+    fun handleTeamProbeResult(result: TeamScopeProbeResult) {
+        teamProbeBusy = false
+        when (result) {
+            is TeamScopeProbeResult.Ready -> teamProbeMessage = result.message
+            is TeamScopeProbeResult.Failed -> teamProbeMessage = result.message
+            is TeamScopeProbeResult.UserActionRequired -> pendingTeamAuthorization =
+                DriveConnectResult.UserActionRequired(result.account, result.resolutionId)
         }
     }
 
@@ -560,6 +588,42 @@ private fun MainScaffold(
                 launchedAuthorizationId = null
                 runtime.cancelAuthorization(pending.resolutionId)
                 viewModel.showMessage("Permintaan otorisasi Drive sudah tidak berlaku")
+            }
+    }
+    val teamAuthorizationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result ->
+        val pending = pendingTeamAuthorization
+        pendingTeamAuthorization = null
+        if (pending != null && teamDriveScopeProbe != null) {
+            teamProbeBusy = true
+            scope.launch {
+                runCatching {
+                    teamDriveScopeProbe.completeAuthorization(
+                        account = pending.account,
+                        resolutionId = pending.resolutionId,
+                        resultCode = result.resultCode,
+                        data = result.data,
+                    )
+                }.onSuccess(::handleTeamConnectResult)
+                    .onFailure {
+                        teamDriveScopeProbe.cancelAuthorization(pending.resolutionId)
+                        teamProbeBusy = false
+                        teamProbeMessage = "Persetujuan scope Team tidak dapat diselesaikan."
+                    }
+            }
+        }
+    }
+    LaunchedEffect(pendingTeamAuthorization?.resolutionId) {
+        val pending = pendingTeamAuthorization ?: return@LaunchedEffect
+        val probe = teamDriveScopeProbe ?: return@LaunchedEffect
+        runCatching { probe.authorizationRequest(pending.resolutionId) }
+            .onSuccess(teamAuthorizationLauncher::launch)
+            .onFailure {
+                pendingTeamAuthorization = null
+                probe.cancelAuthorization(pending.resolutionId)
+                teamProbeBusy = false
+                teamProbeMessage = "Permintaan scope Team sudah tidak berlaku."
             }
     }
     val accountSwitchLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -801,9 +865,47 @@ private fun MainScaffold(
                             viewModel.setScreenshotAllowed(false)
                         }
                     },
+                    onRunTeamScopeProbe = teamDriveScopeProbe?.let {
+                        {
+                            teamProbeMessage = if (it.hasProbe()) {
+                                "Workspace uji tersimpan. Lanjutkan dari langkah yang belum selesai."
+                            } else {
+                                "Mulai dengan menghubungkan akun Owner."
+                            }
+                            showTeamScopeProbe = true
+                        }
+                    },
                 )
             }
         }
+    }
+    if (showTeamScopeProbe && teamDriveScopeProbe != null) {
+        TeamScopeProbeDialog(
+            busy = teamProbeBusy,
+            hasProbe = teamDriveScopeProbe.hasProbe(),
+            message = teamProbeMessage,
+            onDismiss = { if (!teamProbeBusy) showTeamScopeProbe = false },
+            onConnect = {
+                teamProbeBusy = true
+                teamProbeMessage = null
+                scope.launch { handleTeamConnectResult(teamDriveScopeProbe.connect()) }
+            },
+            onCreate = { email, role ->
+                teamProbeBusy = true
+                teamProbeMessage = null
+                scope.launch { handleTeamProbeResult(teamDriveScopeProbe.createOwnerProbe(email, role)) }
+            },
+            onVerify = {
+                teamProbeBusy = true
+                teamProbeMessage = null
+                scope.launch { handleTeamProbeResult(teamDriveScopeProbe.verifyMemberAccess()) }
+            },
+            onRemove = {
+                teamProbeBusy = true
+                teamProbeMessage = null
+                scope.launch { handleTeamProbeResult(teamDriveScopeProbe.removeProbe()) }
+            },
+        )
     }
     editAccount?.let { account ->
         EditAccountDialog(account, { editAccount = null }) { name ->
@@ -1479,6 +1581,111 @@ private fun cloudBackupUiState(
         wifiOnly = wifiOnly,
         detail = syncState?.lastError,
     )
+}
+
+@Composable
+private fun TeamScopeProbeDialog(
+    busy: Boolean,
+    hasProbe: Boolean,
+    message: String?,
+    onDismiss: () -> Unit,
+    onConnect: () -> Unit,
+    onCreate: (String, String) -> Unit,
+    onVerify: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    var memberEmail by rememberSaveable { mutableStateOf("") }
+    var role by rememberSaveable { mutableStateOf(TeamRole.EDITOR) }
+    val emailValid = remember(memberEmail) {
+        memberEmail.trim().let { it.length in 3..320 && '@' in it && !it.any(Char::isWhitespace) }
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().padding(20.dp).widthIn(max = 560.dp),
+            shape = RoundedCornerShape(24.dp),
+            tonalElevation = 8.dp,
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("Probe akses Drive Team", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    "Probe ini hanya membuat folder Drive sementara dan permission collaborator. Data KRON tidak disentuh.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Button(
+                    onClick = onConnect,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                ) { Text(if (hasProbe) "Pilih akun Google" else "1. Hubungkan Owner") }
+                OutlinedTextField(
+                    value = memberEmail,
+                    onValueChange = { memberEmail = it },
+                    label = { Text("Email Google Member") },
+                    supportingText = {
+                        Text(if (emailValid || memberEmail.isBlank()) "Permission hanya diberikan ke email ini." else "Masukkan email Google yang valid.")
+                    },
+                    isError = memberEmail.isNotBlank() && !emailValid,
+                    enabled = !busy && !hasProbe,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = role == TeamRole.EDITOR,
+                        onClick = { role = TeamRole.EDITOR },
+                        enabled = !busy && !hasProbe,
+                        label = { Text("Editor") },
+                    )
+                    FilterChip(
+                        selected = role == TeamRole.VIEWER,
+                        onClick = { role = TeamRole.VIEWER },
+                        enabled = !busy && !hasProbe,
+                        label = { Text("Viewer") },
+                    )
+                }
+                Button(
+                    onClick = { onCreate(memberEmail.trim(), role) },
+                    enabled = !busy && !hasProbe && emailValid,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                ) { Text("2. Buat workspace dan permission") }
+                Button(
+                    onClick = onVerify,
+                    enabled = !busy && hasProbe,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                ) { Text("3. Verifikasi sebagai Member") }
+                Text(
+                    "Sebelum langkah 3, gunakan tombol Pilih akun Google lalu pilih akun Member.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                TextButton(
+                    onClick = onRemove,
+                    enabled = !busy && hasProbe,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                ) { Text("Hapus workspace uji sebagai Owner") }
+                if (busy) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        Text("Menunggu Google Drive")
+                    }
+                }
+                message?.let {
+                    Text(it, color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodyMedium)
+                }
+                TextButton(
+                    onClick = onDismiss,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                ) { Text("Tutup") }
+            }
+        }
+    }
 }
 
 @Composable

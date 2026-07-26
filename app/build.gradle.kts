@@ -57,6 +57,7 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            buildConfigField("boolean", "TEAM_ACCOUNT_ENABLED", "true")
         }
         release {
             isMinifyEnabled = true

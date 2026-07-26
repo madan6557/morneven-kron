@@ -46,6 +46,8 @@ import com.morneven.kron.security.DatabaseKeyUnavailableException
 import com.morneven.kron.security.DatabaseRecoveryRequiredException
 import com.morneven.kron.sync.DriveSyncRuntime
 import com.morneven.kron.sync.DriveSyncRuntimeFactory
+import com.morneven.kron.team.TeamDriveScopeProbe
+import com.morneven.kron.team.TeamDriveScopeProbeFactory
 import com.morneven.kron.ui.KronApp
 import com.morneven.kron.ui.MainViewModel
 import com.morneven.kron.ui.theme.KronTheme
@@ -60,8 +62,10 @@ import kotlinx.coroutines.withContext
 class MainActivity : FragmentActivity() {
     private val viewModel: MainViewModel by viewModels()
     @Inject lateinit var driveSyncRuntimeFactory: Lazy<DriveSyncRuntimeFactory>
+    @Inject lateinit var teamDriveScopeProbeFactory: Lazy<TeamDriveScopeProbeFactory>
 
     private var driveSyncRuntime: DriveSyncRuntime? = null
+    private var teamDriveScopeProbe: TeamDriveScopeProbe? = null
     private lateinit var bootstrapManager: DatabaseBootstrapManager
     private lateinit var preUpgradeBackupManager: PreUpgradeBackupManager
     private var pendingBackupPassword: CharArray? = null
@@ -168,11 +172,17 @@ class MainActivity : FragmentActivity() {
                 } else {
                     null
                 }
+                teamDriveScopeProbe = if (BuildConfig.DRIVE_SYNC_CONFIGURED && BuildConfig.TEAM_ACCOUNT_ENABLED) {
+                    runCatching { teamDriveScopeProbeFactory.get().create(this@MainActivity) }.getOrNull()
+                } else {
+                    null
+                }
                 setContent {
                     KronApp(
                         viewModel = viewModel,
                         activity = this@MainActivity,
                         driveSyncRuntime = driveSyncRuntime,
+                        teamDriveScopeProbe = teamDriveScopeProbe,
                     )
                 }
             }

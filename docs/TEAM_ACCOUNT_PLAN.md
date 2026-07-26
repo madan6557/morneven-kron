@@ -224,3 +224,24 @@ Pengujian minimum:
 - UI test Owner, Editor, Viewer, Pusat Konflik, rotasi, font scale, dan accessibility.
 
 Fitur tetap di balik build-time feature flag sampai spike `drive.file`, migration, conversion rollback, account isolation, safe merge, dan dua akun Drive lulus. Kegagalan salah satu gate memblokir rilis Team Account dan tidak boleh menurunkan keamanan dengan scope atau permission yang lebih luas.
+
+## Status spike 26 Juli 2026
+
+Spike dua akun nyata dijalankan pada device Android dengan build debug dan scope tepat `drive.file`:
+
+1. akun Owner berhasil membuat folder Drive privat dengan `writersCanShare=false`;
+2. Owner berhasil menambahkan akun Member sebagai `writer`;
+3. Member berhasil memberi otorisasi `drive.file` kepada KRON;
+4. permintaan metadata folder melalui folder ID gagal dari sesi Member;
+5. verifikasi diulang setelah permission tersedia dan tetap gagal;
+6. folder uji berhasil dihapus kembali oleh Owner;
+7. tidak ada data finansial atau passphrase yang dipakai oleh spike.
+
+Hasil ini memblokir desain Team Account saat ini. Permission Drive pada folder tidak otomatis membuat folder tersebut tersedia dalam cakupan `drive.file` aplikasi di akun penerima. Implementasi conversion, join, snapshot Team, invitation redemption, dan collaborator produksi tidak boleh diteruskan sampai spike baru membuktikan salah satu alur non-sensitive yang sah, misalnya pemilihan folder eksplisit melalui Google Picker. Jangan mengganti desain dengan link publik atau scope Drive penuh.
+
+Dua kontrak lain juga harus diselesaikan sebelum implementasi dilanjutkan:
+
+- Viewer tidak dapat menulis marker redemption ke folder. Karena itu, undangan single-use lintas device tidak dapat ditegakkan secara atomik oleh Viewer tanpa Owner online atau coordinator tepercaya.
+- `journal_seals.sequence` dan canonical payload saat ini memakai urutan serta ID lokal seluruh database. Snapshot satu akun tidak dapat menyalin seal ke database Member tanpa konflik sequence atau perubahan ID. Protokol Team harus mempertahankan bukti asal dan memakai canonical reference yang stabil sebelum safe merge boleh diaktifkan.
+
+Build release tetap memakai `TEAM_ACCOUNT_ENABLED=false`. Build debug hanya memuat harness probe yang tidak menulis database KRON.

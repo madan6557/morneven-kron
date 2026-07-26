@@ -4,8 +4,11 @@ import android.content.Context
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-class PreferencesSelectedGoogleAccountStore(context: Context) : SelectedGoogleAccountStore {
-    private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+class PreferencesSelectedGoogleAccountStore(
+    context: Context,
+    preferencesName: String = PREFERENCES_NAME,
+) : SelectedGoogleAccountStore {
+    private val preferences = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
     private val mutex = Mutex()
 
     override suspend fun read(): GoogleAccountIdentity? = mutex.withLock {

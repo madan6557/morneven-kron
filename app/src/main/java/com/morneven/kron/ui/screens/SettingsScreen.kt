@@ -130,6 +130,7 @@ fun SettingsScreen(
     onCreateTeamInvite: (() -> Unit)? = null,
     onLeaveTeam: (() -> Unit)? = null,
     onConvertToPrivate: (() -> Unit)? = null,
+    onRunTeamScopeProbe: (() -> Unit)? = null,
 ) {
     var showArchive by rememberSaveable { mutableStateOf(false) }
     var showGlossary by rememberSaveable { mutableStateOf(false) }
@@ -286,6 +287,17 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.tertiary,
                     )
+                } else if (account?.sharingMode != AccountSharingMode.TEAM && onConvertToTeam == null) {
+                    Text(
+                        "Build pengujian hanya memverifikasi akses drive.file lintas akun. Data keuangan tidak akan diubah.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                    Button(
+                        onClick = { onRunTeamScopeProbe?.invoke() },
+                        enabled = onRunTeamScopeProbe != null,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) { Text("Uji akses Drive Team") }
                 } else if (account?.sharingMode != AccountSharingMode.TEAM) {
                     Button(
                         onClick = { onConvertToTeam?.invoke() },
