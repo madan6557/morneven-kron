@@ -28,6 +28,10 @@ import com.morneven.kron.data.ScheduleCalculator
 import com.morneven.kron.data.SyncStateEntity
 import com.morneven.kron.data.TransactionDirection
 import com.morneven.kron.data.TransactionSplitEntity
+import com.morneven.kron.data.TeamAccessGuard
+import com.morneven.kron.data.TeamCapability
+import com.morneven.kron.data.TeamMemberEntity
+import com.morneven.kron.data.TeamWorkspaceEntity
 import com.morneven.kron.preferences.PrivacyPreferences
 import com.morneven.kron.report.CsvExporter
 import com.morneven.kron.security.ImageCompressor
@@ -72,6 +76,8 @@ data class KronUiState(
     val eventChannels: Map<String, Set<String>> = emptyMap(),
     val receipts: List<ReceiptEntity> = emptyList(),
     val syncState: SyncStateEntity? = null,
+    val teamWorkspace: TeamWorkspaceEntity? = null,
+    val teamMembers: List<TeamMemberEntity> = emptyList(),
     val splits: List<TransactionSplitEntity> = emptyList(),
     val rules: List<RecurringRuleEntity> = emptyList(),
     val cashflow: CashflowRow = CashflowRow(0, 0),
@@ -124,6 +130,8 @@ private data class MetadataSlice(
     val archivedPortfolios: List<PortfolioEntity> = emptyList(),
     val periods: List<BudgetPeriodEntity>,
     val unallocated: Map<String, Long>,
+    val teamWorkspace: TeamWorkspaceEntity? = null,
+    val teamMembers: List<TeamMemberEntity> = emptyList(),
 )
 
 private data class PreferenceSlice(
@@ -151,6 +159,7 @@ class MainViewModel @Inject constructor(
     private val receiptManager: ReceiptManager,
     private val imageCompressor: ImageCompressor,
     private val evidencePackageManager: EvidencePackageManager,
+    private val teamAccessGuard: TeamAccessGuard,
 ) : ViewModel() {
     private val message = MutableStateFlow<String?>(null)
     private val sessionVisibility = MutableStateFlow<Boolean?>(null)
@@ -219,6 +228,10 @@ class MainViewModel @Inject constructor(
             metadata.copy(archivedAccounts = archivedAccounts)
         }.combine(repository.archivedPortfolios) { metadata, archivedPortfolios ->
             metadata.copy(archivedPortfolios = archivedPortfolios)
+        }.combine(repository.teamWorkspace) { metadata, workspace ->
+            metadata.copy(teamWorkspace = workspace)
+        }.combine(repository.teamMembers) { metadata, members ->
+            metadata.copy(teamMembers = members)
         }
     }
 
@@ -266,6 +279,8 @@ class MainViewModel @Inject constructor(
             eventChannels = ledger.eventChannels,
             receipts = ledger.receipts,
             syncState = ledger.syncState,
+            teamWorkspace = metadata.teamWorkspace,
+            teamMembers = metadata.teamMembers,
             splits = ledger.splits,
             rules = ledger.rules,
             cashflow = cashflow,
@@ -360,11 +375,15 @@ class MainViewModel @Inject constructor(
     }
 
     fun exportBackup(uri: Uri, password: CharArray) = runAction("Backup terenkripsi berhasil dibuat") {
+        teamAccessGuard.requireNoTeamAccounts()
         backupManager.export(uri, password)
     }
 
     fun stageRestore(uri: Uri, password: CharArray) = viewModelScope.launch {
-        runCatching { backupManager.stageRestore(uri, password) }
+        runCatching {
+            teamAccessGuard.requireNoTeamAccounts()
+            backupManager.stageRestore(uri, password)
+        }
             .onSuccess {
                 manualRestoreReady.value = true
                 message.value = "Backup tervalidasi. Tutup lalu buka kembali KRON untuk menerapkan restore"
@@ -373,6 +392,7 @@ class MainViewModel @Inject constructor(
     }
 
     fun exportCsv(uri: Uri) = runAction("Laporan CSV berhasil dibuat") {
+        teamAccessGuard.requireActive(TeamCapability.REPORT_EXPORT)
         val current = uiState.value
         csvExporter.export(uri, current.activities, current.allocations)
     }
@@ -383,17 +403,20 @@ class MainViewModel @Inject constructor(
 
     fun exportEvidencePackage(uri: Uri, startDay: Long, endDay: Long, passphrase: CharArray) =
         runAction("Paket bukti terenkripsi berhasil dibuat") {
+            teamAccessGuard.requireNoTeamAccounts()
             evidencePackageManager.exportPackage(uri, startDay, endDay, passphrase)
             evidenceHealthState.value = evidencePackageManager.health()
         }
 
     fun exportEventEvidencePackage(uri: Uri, eventId: String, passphrase: CharArray) =
         runAction("Paket bukti transaksi berhasil dibuat") {
+            teamAccessGuard.requireActive(TeamCapability.REPORT_EXPORT)
             evidencePackageManager.exportEventPackage(uri, eventId, passphrase)
             evidenceHealthState.value = evidencePackageManager.health()
         }
 
     fun exportEvidencePdf(uri: Uri, startDay: Long, endDay: Long) = runAction("PDF pertanggungjawaban berhasil dibuat") {
+        teamAccessGuard.requireNoTeamAccounts()
         evidencePackageManager.exportPdf(uri, startDay, endDay)
     }
 

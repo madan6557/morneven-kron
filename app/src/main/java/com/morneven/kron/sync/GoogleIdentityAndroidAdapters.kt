@@ -6,7 +6,6 @@ import android.app.Activity
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -56,7 +55,6 @@ class AndroidCredentialManagerAccountSelector(
         return try {
             selectViaCredentialManager(retryTimeout = initialTimeout)
         } catch (error: TimeoutCancellationException) {
-            Log.w(TAG, "Credential Manager timed out, trying AccountManager fallback and one retry")
             // Try AccountManager quick fallback first
             getAccountFromAccountManager()?.let { return it }
             // One retry with a longer timeout
@@ -65,20 +63,16 @@ class AndroidCredentialManagerAccountSelector(
                 val secondAttemptTimeout = if (isSlowCredentialDevice) 60_000L else 30_000L
                 selectViaCredentialManager(retryTimeout = secondAttemptTimeout)
             } catch (second: TimeoutCancellationException) {
-                Log.w(TAG, "Credential Manager second attempt timed out, falling back to account picker")
                 selectViaAccountPicker()
             }
         } catch (error: NoCredentialException) {
-            Log.w(TAG, "No Google credential is available")
             throw IllegalStateException(
                 "Tidak ada akun Google yang tersedia. Tambahkan akun Google di perangkat lalu coba lagi.",
                 error,
             )
         } catch (error: GetCredentialCancellationException) {
-            Log.w(TAG, "Credential selection was cancelled")
             throw IllegalStateException("Pemilihan akun Google dibatalkan", error)
         } catch (error: GetCredentialException) {
-            Log.w(TAG, "Credential Manager failed, trying AccountManager fallback")
             getAccountFromAccountManager()?.let { return it }
             throw IllegalStateException(
                 "Pemilih akun Google tidak tersedia (${error.type}). Perbarui Google Play Services atau periksa koneksi internet.",
@@ -120,8 +114,7 @@ class AndroidCredentialManagerAccountSelector(
             val account = accounts.first()
             val email = account.name
             GoogleAccountIdentity(email, email, null)
-        } catch (e: Exception) {
-            Log.w(TAG, "AccountManager fallback failed")
+        } catch (_: Exception) {
             null
         }
     }
@@ -165,9 +158,6 @@ class AndroidCredentialManagerAccountSelector(
         }
     }
 
-    companion object {
-        private const val TAG = "KronAccountSelector"
-    }
 }
 
 /**
@@ -186,7 +176,9 @@ class PlayServicesAuthorizationClientBridge(
         requestedScopes: Set<String>,
         interactive: Boolean,
     ): AuthorizationClientResult {
-        require(requestedScopes == setOf(DRIVE_APPDATA_SCOPE)) { "KRON hanya mengizinkan scope appDataFolder" }
+        require(requestedScopes == setOf(DRIVE_APPDATA_SCOPE) || requestedScopes == setOf(DRIVE_FILE_SCOPE)) {
+            "Scope Google Drive tidak didukung"
+        }
         val builder = AuthorizationRequest.builder()
             .setRequestedScopes(requestedScopes.map(::Scope))
         if (account != null) {
@@ -235,9 +227,16 @@ class PlayServicesAuthorizationClientBridge(
     }
 
     override suspend fun revokeAccess(account: GoogleAccountIdentity) {
+        revokeAccess(account, setOf(DRIVE_APPDATA_SCOPE))
+    }
+
+    override suspend fun revokeAccess(account: GoogleAccountIdentity, scopes: Set<String>) {
+        require(scopes == setOf(DRIVE_APPDATA_SCOPE) || scopes == setOf(DRIVE_FILE_SCOPE)) {
+            "Scope Google Drive tidak didukung"
+        }
         RevokeAccessRequest.builder()
             .setAccount(Account(account.email, GOOGLE_ACCOUNT_TYPE))
-            .setScopes(listOf(Scope(DRIVE_APPDATA_SCOPE)))
+            .setScopes(scopes.map(::Scope))
             .build()
             .let(client::revokeAccess)
             .awaitTask()

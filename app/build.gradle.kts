@@ -39,6 +39,7 @@ android {
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${googleWebClientId.replace("\"", "\\\"")}\"")
         buildConfigField("String", "PRIVACY_POLICY_URL", "\"${privacyPolicyUrl.replace("\"", "\\\"")}\"")
         buildConfigField("boolean", "DRIVE_SYNC_CONFIGURED", (googleWebClientId.isNotBlank() && privacyPolicyUrl.isNotBlank()).toString())
+        buildConfigField("boolean", "TEAM_ACCOUNT_ENABLED", "false")
     }
 
     if (signingFile.exists()) {

@@ -884,6 +884,7 @@ fun AuditDialog(
     onCorrect: (String, String, String, String) -> Unit,
     onRestoreReversal: ((String) -> Unit)? = null,
     reversalRestored: Boolean = false,
+    readOnly: Boolean = false,
 ) {
     var reason by rememberSaveable(event.id) { mutableStateOf("") }
     var correctionMode by rememberSaveable(event.id) { mutableStateOf(false) }
@@ -899,7 +900,7 @@ fun AuditDialog(
     } else {
         state.receipts.filter { it.eventId == event.id }
     }
-    val actionEnabled = !lifecycleEvent && event.reversedByEventId == null && event.type != "REVERSAL" &&
+    val actionEnabled = !readOnly && !lifecycleEvent && event.reversedByEventId == null && event.type != "REVERSAL" &&
         reason.isNotBlank() && (!correctionMode || correctedTitle.isNotBlank())
     FormDialog(
         "Detail audit",
@@ -964,7 +965,7 @@ fun AuditDialog(
             }
             if (receipts.size > 10) Text("${receipts.size - 10} bukti lain tersedia di Pusat Bukti.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        if (event.type in setOf("INCOME", "EXPENSE", "UNEXPECTED_EXPENSE")) {
+        if (!readOnly && event.type in setOf("INCOME", "EXPENSE", "UNEXPECTED_EXPENSE")) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { onCameraCapture(event.id) }, modifier = Modifier.weight(1f)) {
                     Icon(Icons.Outlined.CameraAlt, contentDescription = null)
@@ -977,10 +978,13 @@ fun AuditDialog(
             }
             Text("Foto disalin ke penyimpanan privat dan dienkripsi.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        OutlinedButton(onClick = { onExportEvidence(event.id) }, modifier = Modifier.fillMaxWidth()) {
-            Text("Ekspor paket bukti transaksi")
+        if (!readOnly) {
+            OutlinedButton(onClick = { onExportEvidence(event.id) }, modifier = Modifier.fillMaxWidth()) {
+                Text("Ekspor paket bukti transaksi")
+            }
         }
-        if (lifecycleEvent) Text("Event lifecycle bersifat read-only. Gunakan tab Arsip untuk memulihkan atau mengarsipkan kembali.", color = MaterialTheme.colorScheme.tertiary)
+        if (readOnly) Text("Role Viewer hanya dapat membaca audit transaksi.", color = MaterialTheme.colorScheme.tertiary)
+        else if (lifecycleEvent) Text("Event lifecycle bersifat read-only. Gunakan tab Arsip untuk memulihkan atau mengarsipkan kembali.", color = MaterialTheme.colorScheme.tertiary)
         else if (event.reversedByEventId != null) Text("Event sudah dibatalkan dengan reversal", color = MaterialTheme.colorScheme.error)
         else if (event.type == "REVERSAL" && onRestoreReversal != null && event.relatedEventId != null) {
             if (reversalRestored) {
@@ -1033,6 +1037,7 @@ fun EvidenceCenterDialog(
     onExportPdf: (Long, Long) -> Unit,
     onExportPackage: (Long, Long) -> Unit,
     onVerifyPackage: () -> Unit,
+    readOnly: Boolean = false,
 ) {
     var startDate by rememberDate(LocalDate.now().minusDays(29))
     var endDate by rememberDate(LocalDate.now())
@@ -1056,16 +1061,20 @@ fun EvidenceCenterDialog(
         DateField("Tanggal mulai", startDate, { it?.let { selected -> startDate = selected } })
         DateField("Tanggal akhir", endDate, { it?.let { selected -> endDate = selected } })
         if (endDate.isBefore(startDate)) Text("Tanggal akhir tidak boleh sebelum tanggal mulai.", color = MaterialTheme.colorScheme.error)
-        Button(
-            onClick = { onExportPdf(startDate.toEpochDay(), endDate.toEpochDay()) },
-            enabled = !endDate.isBefore(startDate),
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("Ekspor PDF ringkasan") }
-        Button(
-            onClick = { onExportPackage(startDate.toEpochDay(), endDate.toEpochDay()) },
-            enabled = health?.valid == true && !endDate.isBefore(startDate),
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("Ekspor .kronevidence") }
+        if (readOnly) {
+            Text("Ekspor dinonaktifkan untuk role Viewer.", color = MaterialTheme.colorScheme.tertiary)
+        } else {
+            Button(
+                onClick = { onExportPdf(startDate.toEpochDay(), endDate.toEpochDay()) },
+                enabled = !endDate.isBefore(startDate),
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Ekspor PDF ringkasan") }
+            Button(
+                onClick = { onExportPackage(startDate.toEpochDay(), endDate.toEpochDay()) },
+                enabled = health?.valid == true && !endDate.isBefore(startDate),
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Ekspor .kronevidence") }
+        }
         OutlinedButton(onClick = onVerifyPackage, modifier = Modifier.fillMaxWidth()) { Text("Verifikasi paket bukti") }
         if (verification != null) {
             HudCard(accent = if (verification.valid) KronGreen else MaterialTheme.colorScheme.error) {

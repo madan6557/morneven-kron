@@ -34,23 +34,35 @@ interface KronDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertEvidenceKey(value: EvidenceKeyEntity)
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertActorProfile(value: ActorProfileEntity)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertSyncState(value: SyncStateEntity)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertTeamWorkspace(value: TeamWorkspaceEntity)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertTeamMembers(values: List<TeamMemberEntity>)
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertTeamInvitationUse(value: TeamInvitationUseEntity): Long
     @RawQuery suspend fun executeRaw(query: SupportSQLiteQuery): Int
 
     @Update suspend fun updatePeriod(value: BudgetPeriodEntity)
     @Update suspend fun updateAllocation(value: AllocationEntity)
     @Update suspend fun updateRule(value: RecurringRuleEntity)
     @Update suspend fun updateSyncState(value: SyncStateEntity)
+    @Update suspend fun updateCategory(value: CategoryEntity)
+    @Update suspend fun updateAllocationTemplate(value: PortfolioAllocationTemplateEntity)
 
     @Query("SELECT COUNT(*) FROM accounts") suspend fun accountCount(): Int
+    @Query("SELECT COUNT(*) FROM accounts WHERE sharingMode = 'TEAM'") suspend fun teamAccountCount(): Int
     @Query("SELECT * FROM accounts WHERE isArchived = 0 ORDER BY createdAt") fun observeAccounts(): Flow<List<AccountEntity>>
     @Query("SELECT * FROM accounts WHERE isArchived = 1 ORDER BY archivedAt DESC, createdAt") fun observeArchivedAccounts(): Flow<List<AccountEntity>>
     @Query("SELECT * FROM categories WHERE isArchived = 0 ORDER BY direction, name") fun observeCategories(): Flow<List<CategoryEntity>>
+    @Query("SELECT * FROM categories WHERE isArchived = 0 AND (accountId IS NULL OR accountId = :accountId) ORDER BY direction, name")
+    fun observeCategoriesForAccount(accountId: Long): Flow<List<CategoryEntity>>
     @Query("SELECT * FROM portfolios WHERE isArchived = 0 ORDER BY fundingPriority, createdAt") fun observePortfolios(): Flow<List<PortfolioEntity>>
     @Query("SELECT * FROM portfolios WHERE isArchived = 1 ORDER BY archivedAt DESC, createdAt") fun observeArchivedPortfolios(): Flow<List<PortfolioEntity>>
     @Query("SELECT * FROM budget_periods ORDER BY startEpochDay DESC") fun observePeriods(): Flow<List<BudgetPeriodEntity>>
     @Query("SELECT * FROM recurring_rules ORDER BY nextEpochDay, createdAt") fun observeRules(): Flow<List<RecurringRuleEntity>>
     @Query("SELECT * FROM receipts ORDER BY createdAt, id") fun observeReceipts(): Flow<List<ReceiptEntity>>
     @Query("SELECT * FROM sync_state WHERE id = 1") fun observeSyncState(): Flow<SyncStateEntity?>
+    @Query("SELECT * FROM team_workspaces WHERE accountId = :accountId LIMIT 1")
+    fun observeTeamWorkspace(accountId: Long): Flow<TeamWorkspaceEntity?>
+    @Query("SELECT * FROM team_members WHERE accountId = :accountId ORDER BY role, displayName, email")
+    fun observeTeamMembers(accountId: Long): Flow<List<TeamMemberEntity>>
 
     @Query("SELECT * FROM portfolios WHERE isArchived = 0 AND accountId = :accountId ORDER BY fundingPriority, createdAt")
     fun observePortfoliosForAccount(accountId: Long): Flow<List<PortfolioEntity>>
@@ -223,6 +235,11 @@ interface KronDao {
     @Query("SELECT pf.* FROM allocations al JOIN budget_periods p ON p.id = al.periodId JOIN portfolios pf ON pf.id = p.portfolioId WHERE al.id = :allocationId") suspend fun portfolioForAllocation(allocationId: Long): PortfolioEntity?
     @Query("SELECT * FROM allocations WHERE periodId = :periodId AND categoryId = :categoryId AND fundingChannel = :channel LIMIT 1") suspend fun allocationFor(periodId: Long, categoryId: Long, channel: String): AllocationEntity?
     @Query("SELECT * FROM accounts WHERE id = :id") suspend fun accountById(id: Long): AccountEntity?
+    @Query("SELECT * FROM team_workspaces WHERE accountId = :accountId LIMIT 1") suspend fun teamWorkspace(accountId: Long): TeamWorkspaceEntity?
+    @Query("SELECT * FROM team_workspaces WHERE teamId = :teamId LIMIT 1") suspend fun teamWorkspaceByTeamId(teamId: String): TeamWorkspaceEntity?
+    @Query("SELECT * FROM team_members WHERE accountId = :accountId ORDER BY role, displayName, email") suspend fun teamMembers(accountId: Long): List<TeamMemberEntity>
+    @Query("DELETE FROM team_members WHERE accountId = :accountId") suspend fun clearTeamMembers(accountId: Long)
+    @Query("SELECT EXISTS(SELECT 1 FROM team_invitation_uses WHERE inviteIdHash = :inviteIdHash)") suspend fun teamInvitationWasUsed(inviteIdHash: String): Boolean
     @Query("SELECT * FROM accounts WHERE isActive = 1 AND isArchived = 0 LIMIT 1") suspend fun activeAccount(): AccountEntity?
     @Query("SELECT * FROM accounts WHERE isActive = 1 AND isArchived = 0 LIMIT 1") fun observeActiveAccount(): Flow<AccountEntity?>
     @Query("SELECT COUNT(*) FROM accounts WHERE isActive = 1 AND isArchived = 0") suspend fun activeAccountCount(): Int
@@ -265,6 +282,8 @@ interface KronDao {
     @Query("SELECT * FROM receipts WHERE evidenceEventId = :eventId OR (evidenceEventId IS NULL AND eventId = :eventId) ORDER BY id") suspend fun receiptsForEvent(eventId: String): List<ReceiptEntity>
     @Query("SELECT * FROM sync_state WHERE id = 1") suspend fun syncState(): SyncStateEntity?
     @Query("SELECT * FROM categories ORDER BY id") suspend fun allCategories(): List<CategoryEntity>
+    @Query("SELECT * FROM categories WHERE accountId IS NULL OR accountId = :accountId ORDER BY id") suspend fun categoriesForAccount(accountId: Long): List<CategoryEntity>
+    @Query("SELECT * FROM categories WHERE id = :id LIMIT 1") suspend fun categoryById(id: Long): CategoryEntity?
     @Query("SELECT * FROM portfolios ORDER BY id") suspend fun allPortfolios(): List<PortfolioEntity>
     @Query("SELECT * FROM budget_periods ORDER BY id") suspend fun allPeriods(): List<BudgetPeriodEntity>
     @Query("SELECT * FROM allocations ORDER BY id") suspend fun allAllocations(): List<AllocationEntity>

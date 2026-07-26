@@ -6,9 +6,11 @@ import androidx.work.WorkerParameters
 import com.morneven.kron.data.KronDatabase
 import com.morneven.kron.data.KronRepository
 import com.morneven.kron.data.TransactionDirection
+import com.morneven.kron.data.TeamAccessDeniedException
 import com.morneven.kron.audit.EvidenceSigningKeyManager
 import com.morneven.kron.audit.LedgerPostingEngine
 import com.morneven.kron.security.DatabaseAccessGate
+import kotlinx.coroutines.CancellationException
 
 class AutomationWorker(
     appContext: Context,
@@ -24,7 +26,16 @@ class AutomationWorker(
             reconcilePortfolios()
             processDueRules(direction = TransactionDirection.EXPENSE)
         }
-    }.fold(onSuccess = { Result.success() }, onFailure = { Result.retry() })
+    }.fold(
+        onSuccess = { Result.success() },
+        onFailure = {
+            when (it) {
+                is CancellationException -> throw it
+                is TeamAccessDeniedException -> Result.success()
+                else -> Result.retry()
+            }
+        },
+    )
 
     companion object {
         const val UNIQUE_WORK_NAME = "kron_daily_reconciliation"

@@ -73,6 +73,7 @@ fun HomeScreen(
     onResolve: () -> Unit,
     onAllActivities: () -> Unit,
     onPauseRule: (String) -> Unit,
+    readOnly: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val visible = state.valuesVisible
@@ -151,14 +152,27 @@ fun HomeScreen(
             }
         }
 
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                SectionHeader("Tindakan cepat")
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    QuickAction(Icons.Outlined.AddCard, "Pemasukan", KronGreen, onIncome)
-                    QuickAction(Icons.Outlined.Payments, "Pengeluaran", MaterialTheme.colorScheme.primary, onExpense)
-                    QuickAction(Icons.Outlined.SwapHoriz, "Transfer", KronBlue, onTransfer)
-                    QuickAction(Icons.Outlined.ArrowOutward, "Resolusi", KronGold, onResolve)
+        if (readOnly) {
+            item {
+                HudCard {
+                    Text("Akses hanya lihat", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Owner memberikan role Viewer. Transaksi, automation, restore, dan export dinonaktifkan.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        } else {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SectionHeader("Tindakan cepat")
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        QuickAction(Icons.Outlined.AddCard, "Pemasukan", KronGreen, onIncome)
+                        QuickAction(Icons.Outlined.Payments, "Pengeluaran", MaterialTheme.colorScheme.primary, onExpense)
+                        QuickAction(Icons.Outlined.SwapHoriz, "Transfer", KronBlue, onTransfer)
+                        QuickAction(Icons.Outlined.ArrowOutward, "Resolusi", KronGold, onResolve)
+                    }
                 }
             }
         }
@@ -263,7 +277,7 @@ fun HomeScreen(
                         }
                         Text(displayMoney(rule.amount, visible), style = MaterialTheme.typography.labelLarge)
                     }
-                    androidx.compose.material3.TextButton(onClick = { onPauseRule(rule.id) }) { Text("Hentikan jadwal") }
+                    if (!readOnly) androidx.compose.material3.TextButton(onClick = { onPauseRule(rule.id) }) { Text("Hentikan jadwal") }
                 }
             }
         }

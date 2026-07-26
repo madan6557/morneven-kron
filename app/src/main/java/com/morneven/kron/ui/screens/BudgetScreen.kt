@@ -65,6 +65,7 @@ fun BudgetScreen(
     onResume: (Long) -> Unit,
     onArchive: (Long) -> Unit,
     onRestore: (Long, Boolean) -> Unit,
+    readOnly: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var showArchive by remember { mutableStateOf(false) }
@@ -87,11 +88,19 @@ fun BudgetScreen(
                     Text("Portfolio bulanan dan tahunan", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("Akun aktif: ${state.activeAccount?.name ?: "Belum ada"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
                 }
-                if (!showArchive) {
+                if (!showArchive && !readOnly) {
                     Button(onClick = onCreate) {
                         Icon(Icons.Outlined.Add, contentDescription = null)
                         Text("Buat")
                     }
+                }
+            }
+        }
+        item {
+            if (readOnly) {
+                HudCard(accent = MaterialTheme.colorScheme.tertiary) {
+                    Text("Akses hanya lihat", style = MaterialTheme.typography.titleMedium)
+                    Text("Anda dapat membaca budget Team, tetapi perubahan hanya tersedia untuk Owner dan Editor.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -111,7 +120,7 @@ fun BudgetScreen(
                         ChannelAmount(FundingChannel.CASH, state.bookedCash, state.valuesVisible, Modifier.weight(1f))
                         ChannelAmount(FundingChannel.EBUDGET, state.bookedEBudget, state.valuesVisible, Modifier.weight(1f))
                     }
-                    if (state.rolloverCash > 0 || state.rolloverEBudget > 0) {
+                    if (!readOnly && (state.rolloverCash > 0 || state.rolloverEBudget > 0)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (state.rolloverCash > 0) Button(onClick = { onReleaseRollover(FundingChannel.CASH) }) { Text("Cash ke Vault") }
                             if (state.rolloverEBudget > 0) Button(onClick = { onReleaseRollover(FundingChannel.EBUDGET) }) { Text("eBudget ke Vault") }
@@ -124,15 +133,17 @@ fun BudgetScreen(
                         ChannelAmount(FundingChannel.EBUDGET, state.rolloverEBudget, state.valuesVisible, Modifier.weight(1f))
                     }
                     Spacer(Modifier.height(12.dp))
-                    Row(
-                        Modifier.fillMaxWidth().clickable(onClick = onChannelTransfer).padding(vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Outlined.SwapHoriz, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
-                        Column {
-                            Text("Pindahkan Cash dan eBudget", style = MaterialTheme.typography.labelLarge)
-                            Text("Konversi dana kategori beserta akun nyata", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (!readOnly) {
+                        Row(
+                            Modifier.fillMaxWidth().clickable(onClick = onChannelTransfer).padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Outlined.SwapHoriz, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
+                            Column {
+                                Text("Pindahkan Cash dan eBudget", style = MaterialTheme.typography.labelLarge)
+                                Text("Konversi dana kategori beserta akun nyata", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }
@@ -149,13 +160,14 @@ fun BudgetScreen(
                     paused = portfolio.isPaused,
                     hasPortfolioDeficit = state.allocations.any { it.portfolioId == first.portfolioId && it.availableAmount < 0 },
                     visible = state.valuesVisible,
-                    onDetail = { onDetail(first.periodId, false) },
+                    onDetail = { onDetail(first.periodId, readOnly) },
                     onHistory = { onHistory(first.portfolioId) },
                     onPause = { onPause(first.portfolioId) },
                     onResume = { onResume(first.portfolioId) },
                     onArchive = { onArchive(first.portfolioId) },
                     onResolve = onResolve,
                     onFund = { onFund(first.periodId) },
+                    readOnly = readOnly,
                 )
             }
         } else {
@@ -186,14 +198,16 @@ fun BudgetScreen(
                         TextButton(onClick = { latestRows.firstOrNull()?.let { onDetail(it.periodId, true) } }, enabled = latestRows.isNotEmpty()) { Text("Lihat detail read-only") }
                         TextButton(onClick = { onHistory(portfolio.id) }) { Text("Riwayat") }
                     }
-                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { onRestore(portfolio.id, false) }, modifier = Modifier.fillMaxWidth()) {
-                            Icon(Icons.Outlined.Restore, contentDescription = null)
-                            Text("Pulihkan")
-                        }
-                        Button(onClick = { onRestore(portfolio.id, true) }, modifier = Modifier.fillMaxWidth()) {
-                            Icon(Icons.Outlined.PlayCircle, contentDescription = null)
-                            Text("Pulihkan & Aktifkan")
+                    if (!readOnly) {
+                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { onRestore(portfolio.id, false) }, modifier = Modifier.fillMaxWidth()) {
+                                Icon(Icons.Outlined.Restore, contentDescription = null)
+                                Text("Pulihkan")
+                            }
+                            Button(onClick = { onRestore(portfolio.id, true) }, modifier = Modifier.fillMaxWidth()) {
+                                Icon(Icons.Outlined.PlayCircle, contentDescription = null)
+                                Text("Pulihkan & Aktifkan")
+                            }
                         }
                     }
                 }
@@ -216,6 +230,7 @@ private fun ActiveBudgetCard(
     onArchive: () -> Unit,
     onResolve: () -> Unit,
     onFund: () -> Unit,
+    readOnly: Boolean,
 ) {
     val first = rows.first()
     val available = rows.sumOf { it.availableAmount }
@@ -248,23 +263,25 @@ private fun ActiveBudgetCard(
             Button(onClick = onDetail, modifier = Modifier.weight(1f)) { Text("Detail budget") }
             OutlinedButton(onClick = onHistory, modifier = Modifier.weight(1f)) { Text("Riwayat") }
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = if (paused) onResume else onPause, modifier = Modifier.weight(1f)) {
-                Icon(if (paused) Icons.Outlined.PlayCircle else Icons.Outlined.PauseCircle, contentDescription = null)
-                Text(if (paused) "Lanjutkan" else "Jeda")
+        if (!readOnly) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = if (paused) onResume else onPause, modifier = Modifier.weight(1f)) {
+                    Icon(if (paused) Icons.Outlined.PlayCircle else Icons.Outlined.PauseCircle, contentDescription = null)
+                    Text(if (paused) "Lanjutkan" else "Jeda")
+                }
+                OutlinedButton(onClick = onArchive, enabled = !hasPortfolioDeficit, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Outlined.Archive, contentDescription = null)
+                    Text("Arsipkan")
+                }
             }
-            OutlinedButton(onClick = onArchive, enabled = !hasPortfolioDeficit, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Outlined.Archive, contentDescription = null)
-                Text("Arsipkan")
+            if (hasPortfolioDeficit) {
+                Button(onClick = onResolve, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
+                    Icon(Icons.Outlined.ErrorOutline, contentDescription = null)
+                    Text("Selesaikan budget minus")
+                }
+            } else if (first.periodStatus == PeriodStatus.UNDERFUNDED || first.periodStatus == PeriodStatus.DRAFT) {
+                Button(onClick = onFund, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) { Text("Booking dari Main Vault") }
             }
-        }
-        if (hasPortfolioDeficit) {
-            Button(onClick = onResolve, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
-                Icon(Icons.Outlined.ErrorOutline, contentDescription = null)
-                Text("Selesaikan budget minus")
-            }
-        } else if (first.periodStatus == PeriodStatus.UNDERFUNDED || first.periodStatus == PeriodStatus.DRAFT) {
-            Button(onClick = onFund, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) { Text("Booking dari Main Vault") }
         }
     }
 }

@@ -45,4 +45,20 @@ class DriveSnapshotCryptoTest {
             cryptor.decrypt(envelope, "passphrase-aman".toCharArray())
         }
     }
+
+    @Test
+    fun protocolTwoPreservesMergeParentsAndProtocolOneRemainsReadable() {
+        val merged = manifest.copy(
+            protocolVersion = 2,
+            parentSnapshotId = "snapshot-left",
+            parentSnapshotIds = listOf("snapshot-left", "snapshot-right"),
+        )
+
+        assertEquals(merged, SnapshotManifestCodec.decode(SnapshotManifestCodec.encode(merged)))
+        assertEquals(merged, DriveSnapshotManifest.fromAppProperties(merged.toAppProperties()))
+
+        val legacyJson = SnapshotManifestCodec.encode(manifest)
+            .replace("\"parentSnapshotIds\":\"\",", "")
+        assertEquals(emptyList<String>(), SnapshotManifestCodec.decode(legacyJson).parentSnapshotIds)
+    }
 }

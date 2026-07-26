@@ -7,6 +7,7 @@ internal object SnapshotManifestCodec {
         field("datasetId", value.datasetId)
         field("snapshotId", value.snapshotId)
         nullableField("parentSnapshotId", value.parentSnapshotId)
+        field("parentSnapshotIds", value.parentSnapshotIds.joinToString(","))
         field("generation", value.generation)
         field("sourceDeviceId", value.sourceDeviceId)
         field("schemaVersion", value.schemaVersion)
@@ -18,20 +19,30 @@ internal object SnapshotManifestCodec {
         append('}')
     }
 
-    fun decode(json: String): DriveSnapshotManifest = DriveSnapshotManifest(
-        protocolVersion = number(json, "protocolVersion").toInt(),
-        datasetId = string(json, "datasetId"),
-        snapshotId = string(json, "snapshotId"),
-        parentSnapshotId = nullableString(json, "parentSnapshotId"),
-        generation = number(json, "generation"),
-        sourceDeviceId = string(json, "sourceDeviceId"),
-        schemaVersion = number(json, "schemaVersion").toInt(),
-        minimumAppVersionCode = number(json, "minimumAppVersionCode").toInt(),
-        createdAtEpochMillis = number(json, "createdAtEpochMillis"),
-        payloadSha256 = string(json, "payloadSha256"),
-        kdfIterations = number(json, "kdfIterations").toInt(),
-        kind = SnapshotKind.valueOf(string(json, "kind")),
-    )
+    fun decode(json: String): DriveSnapshotManifest {
+        val protocol = number(json, "protocolVersion").toInt()
+        val parent = nullableString(json, "parentSnapshotId")
+        val parents = if (protocol >= 2) {
+            optionalString(json, "parentSnapshotIds").orEmpty().split(',').filter(String::isNotBlank)
+        } else {
+            listOfNotNull(parent)
+        }
+        return DriveSnapshotManifest(
+            protocolVersion = protocol,
+            datasetId = string(json, "datasetId"),
+            snapshotId = string(json, "snapshotId"),
+            parentSnapshotId = parents.firstOrNull(),
+            parentSnapshotIds = parents,
+            generation = number(json, "generation"),
+            sourceDeviceId = string(json, "sourceDeviceId"),
+            schemaVersion = number(json, "schemaVersion").toInt(),
+            minimumAppVersionCode = number(json, "minimumAppVersionCode").toInt(),
+            createdAtEpochMillis = number(json, "createdAtEpochMillis"),
+            payloadSha256 = string(json, "payloadSha256"),
+            kdfIterations = number(json, "kdfIterations").toInt(),
+            kind = SnapshotKind.valueOf(string(json, "kind")),
+        )
+    }
 
     private fun StringBuilder.field(name: String, value: String, last: Boolean = false) {
         append('"').append(name).append("\":\"").append(escape(value)).append('"')
@@ -84,6 +95,8 @@ internal object SnapshotManifestCodec {
         }
         error("String JSON tidak lengkap")
     }
+
+    private fun optionalString(json: String, key: String): String? = runCatching { nullableString(json, key) }.getOrNull()
 
     private fun number(json: String, key: String): Long {
         val start = valueStart(json, key)

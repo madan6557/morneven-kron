@@ -386,4 +386,70 @@ class KronMigrationTest {
             close()
         }
     }
+
+    @Test
+    fun migrationFourteenToFifteenAddsDormantTeamMetadataWithoutChangingFinancialData() {
+        val name = "kron-production-14-to-15.db"
+        migrationHelper.createDatabase(name, 14).apply {
+            execSQL("INSERT INTO accounts(id,name,isActive,isArchived,archivedAt,createdAt) VALUES(1,'Utama',1,0,NULL,10)")
+            execSQL("INSERT INTO categories(id,name,direction,color,icon,isArchived) VALUES(1,'Belanja','EXPENSE',1,'category',0)")
+            execSQL("INSERT INTO portfolios(id,name,cadence,intervalCount,plannedIncome,rolloverEnabled,fundingPriority,startEpochDay,endMode,endValue,isPaused,isArchived,archivedAt,createdAt,accountId) VALUES(1,'Bulanan','MONTHLY',1,100000,0,100,1,'CONTINUOUS',NULL,0,0,NULL,11,1)")
+            execSQL("INSERT INTO budget_periods(id,portfolioId,startEpochDay,endEpochDay,status,createdAt) VALUES(1,1,1,31,'ACTIVE',12)")
+            execSQL("INSERT INTO allocations(id,periodId,categoryId,fundingChannel,plannedAmount) VALUES(1,1,1,'CASH',50000)")
+            execSQL("INSERT INTO portfolio_allocation_templates(id,portfolioId,categoryId,plannedAmount,cashPercentage) VALUES(1,1,1,50000,100)")
+            execSQL("INSERT INTO activity_events(id,type,title,note,source,effectiveEpochDay,createdAt,relatedEventId,reversedByEventId,targetAllocationId,accountId) VALUES('event-14','INCOME','Pemasukan','','USER',1,13,NULL,NULL,NULL,1)")
+            execSQL("INSERT INTO cash_journal_lines(id,eventId,accountId,fundingChannel,amount) VALUES(1,'event-14',1,'CASH',125000)")
+            execSQL("INSERT INTO budget_journal_lines(id,eventId,allocationId,bucket,fundingChannel,amount,accountId) VALUES(1,'event-14',NULL,'VAULT','CASH',125000,1)")
+            execSQL("INSERT INTO budget_journal_lines(id,eventId,allocationId,bucket,fundingChannel,amount,accountId) VALUES(2,'event-14',NULL,'EXTERNAL','CASH',-125000,1)")
+            execSQL("INSERT INTO recurring_rules(id,title,direction,amount,accountId,fundingChannel,categoryId,allocationId,cadence,intervalCount,anchorMonth,anchorDay,startEpochDay,nextEpochDay,endEpochDay,remainingOccurrences,isPaused,pausedByArchive,createdAt) VALUES('rule-14','Rutin','EXPENSE',1000,1,'CASH',1,1,'MONTHLY',1,1,1,1,2,NULL,NULL,0,0,14)")
+            execSQL("INSERT INTO receipts(id,eventId,localPath,storageId,displayName,mimeType,byteSize,sha256,encryptionNonce,encryptionVersion,createdAt,capturedAt,latitude,longitude,origin,evidenceEventId) VALUES(1,'event-14',NULL,'storage-14','Nota.jpg','image/jpeg',321,'abc123','nonce',1,20,21,-6.2,106.8,'CAMERA','event-14')")
+            close()
+        }
+
+        migrationHelper.runMigrationsAndValidate(name, 15, true, KronDatabase.MIGRATION_14_15).apply {
+            query("SELECT name,sharingMode,teamId,revision FROM accounts WHERE id=1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("Utama", cursor.getString(0))
+                assertEquals(AccountSharingMode.PRIVATE, cursor.getString(1))
+                assertTrue(cursor.isNull(2))
+                assertEquals(0L, cursor.getLong(3))
+            }
+            query("SELECT name,accountId,syncId,revision FROM categories WHERE id=1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("Belanja", cursor.getString(0))
+                assertTrue(cursor.isNull(1))
+                assertEquals("legacy:categories:1", cursor.getString(2))
+                assertEquals(0L, cursor.getLong(3))
+            }
+            query("SELECT syncId FROM portfolios WHERE id=1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("legacy:portfolios:1", cursor.getString(0))
+            }
+            query("SELECT syncId FROM recurring_rules WHERE id='rule-14'").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("legacy:recurring_rules:rule-14", cursor.getString(0))
+            }
+            query("SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(125000L, cursor.getLong(0))
+            }
+            query("SELECT COALESCE(SUM(amount),0) FROM budget_journal_lines").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0L, cursor.getLong(0))
+            }
+            query("SELECT byteSize,sha256,localPath FROM receipts WHERE id=1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(321L, cursor.getLong(0))
+                assertEquals("abc123", cursor.getString(1))
+                assertTrue(cursor.isNull(2))
+            }
+            query("SELECT COUNT(*) FROM team_workspaces").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
+            query("PRAGMA foreign_key_check").use { cursor -> assertFalse(cursor.moveToFirst()) }
+            query("PRAGMA integrity_check").use { cursor -> assertTrue(cursor.moveToFirst()); assertEquals("ok", cursor.getString(0)) }
+            close()
+        }
+    }
 }

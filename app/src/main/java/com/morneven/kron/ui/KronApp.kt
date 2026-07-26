@@ -21,6 +21,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
@@ -32,6 +33,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -50,6 +52,9 @@ import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -103,6 +108,8 @@ import com.morneven.kron.automation.AutomationWorker
 import com.morneven.kron.ui.dialogs.AccountDialog
 import com.morneven.kron.ui.dialogs.EditAccountDialog
 import com.morneven.kron.data.AccountEntity
+import com.morneven.kron.data.AccountSharingMode
+import com.morneven.kron.data.TeamRole
 import com.morneven.kron.ui.dialogs.AuditDialog
 import com.morneven.kron.ui.dialogs.BudgetDetailDialog
 import com.morneven.kron.ui.dialogs.BudgetHistoryDialog
@@ -121,8 +128,12 @@ import com.morneven.kron.ui.screens.ReportsScreen
 import com.morneven.kron.ui.screens.SettingsScreen
 import com.morneven.kron.ui.screens.CloudBackupUiState
 import com.morneven.kron.ui.components.displayMoney
+import com.morneven.kron.ui.components.HudCard
 import com.morneven.kron.ui.screens.CloudSyncStatus
 import com.morneven.kron.sync.ConflictResolution
+import com.morneven.kron.sync.ConflictItemStatus
+import com.morneven.kron.sync.ConflictPreview
+import com.morneven.kron.sync.ConflictPreviewResult
 import com.morneven.kron.sync.DriveConnectResult
 import com.morneven.kron.sync.DriveSyncRuntime
 import com.morneven.kron.sync.GoogleAccountIdentity
@@ -287,6 +298,8 @@ private fun MainScaffold(
     val navController = rememberNavController()
     val backStack by navController.currentBackStackEntryAsState()
     val current = backStack?.destination?.route ?: "home"
+    val teamReadOnly = state.activeAccount?.sharingMode == AccountSharingMode.TEAM &&
+        state.teamWorkspace?.localRole == TeamRole.VIEWER
     val snackbar = remember { SnackbarHostState() }
     var dialog by remember { mutableStateOf<ActionDialog?>(null) }
     var auditId by remember { mutableStateOf<String?>(null) }
@@ -337,13 +350,18 @@ private fun MainScaffold(
     }
     var launchedAuthorizationId by rememberSaveable { mutableStateOf<String?>(null) }
     var cloudConflict by remember { mutableStateOf<SyncConflict?>(null) }
+    var cloudConflictPreview by remember { mutableStateOf<ConflictPreview?>(null) }
+    var cloudConflictPreviewError by remember { mutableStateOf<String?>(null) }
     var isAccountSwitching by remember { mutableStateOf(false) }
     var restartRequired by rememberSaveable { mutableStateOf(false) }
     var cloudWifiOnly by rememberSaveable(driveSyncRuntime) {
         mutableStateOf(driveSyncRuntime?.isWifiOnly() ?: false)
     }
     val scope = rememberCoroutineScope()
-    val screenshotProtected = !state.screenshotAllowed && (state.valuesVisible || dialog != null || auditId != null || showEvidenceCenter || passwordMode != null)
+    val screenshotProtected = !state.screenshotAllowed && (
+        state.valuesVisible || dialog != null || auditId != null || showEvidenceCenter ||
+            passwordMode != null || cloudConflict != null
+        )
     DisposableEffect(activity, screenshotProtected) {
         if (screenshotProtected) activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -384,7 +402,30 @@ private fun MainScaffold(
             SyncRunResult.FreeOnlyBlocked -> viewModel.showMessage(
                 "Sinkronisasi Drive dihentikan karena layanan meminta billing. Backup manual tetap tersedia.",
             )
-            is SyncRunResult.Conflict -> cloudConflict = result.value
+            is SyncRunResult.Conflict -> {
+                cloudConflict = result.value
+                cloudConflictPreview = null
+                cloudConflictPreviewError = null
+                driveSyncRuntime?.let { runtime ->
+                    scope.launch {
+                        when (val previewResult = runtime.previewConflict(result.value)) {
+                            is ConflictPreviewResult.Ready -> cloudConflictPreview = previewResult.preview
+                            ConflictPreviewResult.AuthorizationRequired -> cloudConflictPreviewError = "Otorisasi Drive perlu diperbarui"
+                            ConflictPreviewResult.PassphraseRequired -> {
+                                cloudConflictPreviewError = "Masukkan passphrase Drive untuk membuka preview"
+                                passwordMode = "DRIVE_UNLOCK"
+                            }
+                            is ConflictPreviewResult.Stale -> {
+                                cloudConflict = previewResult.conflict
+                                cloudConflictPreviewError = "Snapshot Drive berubah. Jalankan sinkronisasi lalu tinjau kembali."
+                            }
+                            is ConflictPreviewResult.Error -> cloudConflictPreviewError = previewResult.message
+                        }
+                    }
+                } ?: run {
+                    cloudConflictPreviewError = "Sinkronisasi Drive tidak tersedia"
+                }
+            }
             is SyncRunResult.Error -> viewModel.showMessage(result.message)
         }
     }
@@ -605,6 +646,7 @@ private fun MainScaffold(
                     { dialog = ActionDialog.RESOLVE },
                     { navController.navigate("activity") },
                     { ruleId -> criticalAction = CriticalAction("Hentikan jadwal otomatis", "Occurrence berikutnya tidak akan dibuat. Riwayat lama tetap tersimpan.") { viewModel.pauseRecurringRule(ruleId, it) }; criticalReason = "" },
+                    readOnly = teamReadOnly,
                 )
             }
             composable("budget") {
@@ -651,6 +693,7 @@ private fun MainScaffold(
                         criticalAction = CriticalAction(if (activate) "Pulihkan dan aktifkan" else "Pulihkan portfolio", summary) { viewModel.restorePortfolio(portfolioId, activate, it) }
                         criticalReason = ""
                     },
+                    readOnly = teamReadOnly,
                 )
             }
             composable("activity") { ActivityScreen(state, { auditId = it }) }
@@ -659,6 +702,7 @@ private fun MainScaffold(
                     state = state,
                     onExport = { reportLauncher.launch("KRON-laporan-${LocalDate.now()}.csv") },
                     eventChannels = state.eventChannels,
+                    readOnly = teamReadOnly,
                 )
             }
             composable("settings") {
@@ -885,6 +929,7 @@ private fun MainScaffold(
                         viewModel.restoreReversedEvent(eventId)
                     }
                 },
+                readOnly = teamReadOnly,
             )
         }
     }
@@ -894,7 +939,7 @@ private fun MainScaffold(
             state = state,
             portfolioId = portfolioId,
             onDismiss = { historyPortfolioId = null },
-            onDetail = { periodId -> historyPortfolioId = null; detailPeriod = periodId to false },
+            onDetail = { periodId -> historyPortfolioId = null; detailPeriod = periodId to teamReadOnly },
         )
     }
     passwordMode?.let { mode ->
@@ -1030,57 +1075,45 @@ private fun MainScaffold(
                 passwordMode = "EVIDENCE_EXPORT"
             },
             onVerifyPackage = { passwordMode = "EVIDENCE_VERIFY" },
+            readOnly = teamReadOnly,
         )
     }
     cloudConflict?.let { conflict ->
-        AlertDialog(
-            onDismissRequest = { cloudConflict = null },
-            title = { Text("Pusat Konflik Drive") },
-            text = {
-                Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)) {
-                    Text(conflictDescription(conflict))
-                    Text(
-                        "Simpan keduanya adalah pilihan paling aman. KRON menyimpan data perangkat sebagai snapshot pemulihan sebelum menerapkan data Drive.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+        ConflictCenterDialog(
+            conflict = conflict,
+            preview = cloudConflictPreview,
+            previewError = cloudConflictPreviewError,
+            onDismiss = { cloudConflict = null },
+            onKeepBoth = {
+                cloudConflict = null
+                driveSyncRuntime?.let { runtime ->
+                    scope.launch { handleSyncResult(runtime.resolveConflict(conflict, ConflictResolution.KEEP_BOTH)) }
                 }
             },
-            confirmButton = {
-                Column(horizontalAlignment = Alignment.End) {
-                    Button(onClick = {
-                        cloudConflict = null
-                        driveSyncRuntime?.let { runtime ->
-                            scope.launch { handleSyncResult(runtime.resolveConflict(conflict, ConflictResolution.KEEP_BOTH)) }
-                        }
-                    }) { Text("Simpan keduanya") }
-                    TextButton(onClick = {
-                        cloudConflict = null
-                        criticalAction = CriticalAction(
-                            "Gunakan perangkat ini",
-                            "Snapshot aktif Drive akan diganti oleh data perangkat ini. Snapshot pemulihan lama tetap mengikuti kebijakan retensi.",
-                        ) {
-                            driveSyncRuntime?.let { runtime ->
-                                scope.launch { handleSyncResult(runtime.resolveConflict(conflict, ConflictResolution.USE_THIS_DEVICE)) }
-                            }
-                        }
-                        criticalReason = ""
-                    }) { Text("Gunakan perangkat ini") }
-                    TextButton(onClick = {
-                        cloudConflict = null
-                        criticalAction = CriticalAction(
-                            "Pulihkan dari Drive",
-                            "Data lokal saat ini diamankan sebagai snapshot pemulihan, lalu data Drive disiapkan untuk restore setelah KRON dibuka ulang.",
-                        ) {
-                            driveSyncRuntime?.let { runtime ->
-                                scope.launch { handleSyncResult(runtime.resolveConflict(conflict, ConflictResolution.USE_DRIVE)) }
-                            }
-                        }
-                        criticalReason = ""
-                    }) { Text("Pulihkan dari Drive") }
+            onUseDevice = {
+                cloudConflict = null
+                criticalAction = CriticalAction(
+                    "Gunakan perangkat ini",
+                    "Snapshot aktif Drive akan diganti oleh data perangkat ini. Snapshot pemulihan lama tetap mengikuti kebijakan retensi.",
+                ) {
+                    driveSyncRuntime?.let { runtime ->
+                        scope.launch { handleSyncResult(runtime.resolveConflict(conflict, ConflictResolution.USE_THIS_DEVICE)) }
+                    }
                 }
+                criticalReason = ""
             },
-            dismissButton = { TextButton(onClick = { cloudConflict = null }) { Text("Nanti") } },
+            onUseDrive = {
+                cloudConflict = null
+                criticalAction = CriticalAction(
+                    "Gunakan Drive",
+                    "Data lokal diamankan sebagai snapshot pemulihan sebelum data Drive diterapkan.",
+                ) {
+                    driveSyncRuntime?.let { runtime ->
+                        scope.launch { handleSyncResult(runtime.resolveConflict(conflict, ConflictResolution.USE_DRIVE)) }
+                    }
+                }
+                criticalReason = ""
+            },
         )
     }
     if (restartRequired) {
@@ -1446,6 +1479,174 @@ private fun cloudBackupUiState(
         wifiOnly = wifiOnly,
         detail = syncState?.lastError,
     )
+}
+
+@Composable
+private fun ConflictCenterDialog(
+    conflict: SyncConflict,
+    preview: ConflictPreview?,
+    previewError: String?,
+    onDismiss: () -> Unit,
+    onKeepBoth: () -> Unit,
+    onUseDevice: () -> Unit,
+    onUseDrive: () -> Unit,
+) {
+    var filter by rememberSaveable { mutableStateOf("ALL") }
+    val filtered = preview?.items.orEmpty().filter { item ->
+        filter == "ALL" || item.status.name == filter
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize().systemBarsPadding(),
+            color = MaterialTheme.colorScheme.background,
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Pusat Konflik Drive", style = MaterialTheme.typography.headlineSmall)
+                        Text(
+                            conflictDescription(conflict),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) { Text("Tutup") }
+                }
+
+                when {
+                    preview == null && previewError == null -> Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        Text("Mendekripsi dan memvalidasi snapshot di staging read-only...")
+                    }
+                    previewError != null -> HudCard {
+                        Text("Preview belum tersedia", style = MaterialTheme.typography.titleMedium)
+                        Text(previewError, color = MaterialTheme.colorScheme.error)
+                        Text(
+                            "Opsi snapshot tetap dikunci sampai preview berhasil.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    preview != null -> {
+                        HudCard {
+                            Text(
+                                "${preview.deviceOnlyCount} hanya perangkat, ${preview.driveOnlyCount} hanya Drive, " +
+                                    "${preview.identicalCount} identik, ${preview.differentCount} berbeda",
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            if (preview.integrityProblemCount > 0) {
+                                Text(
+                                    "${preview.integrityProblemCount} masalah integritas. Merge dan overwrite diblokir.",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            listOf(
+                                "ALL" to "Semua",
+                                ConflictItemStatus.DEVICE_ONLY.name to "Perangkat",
+                                ConflictItemStatus.DRIVE_ONLY.name to "Drive",
+                                ConflictItemStatus.DIFFERENT.name to "Berbeda",
+                                ConflictItemStatus.INTEGRITY_PROBLEM.name to "Integritas",
+                            ).forEach { (value, label) ->
+                                FilterChip(
+                                    selected = filter == value,
+                                    onClick = { filter = value },
+                                    label = { Text(label) },
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                )
+                            }
+                        }
+                        Column(
+                            modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            filtered.forEach { item ->
+                                HudCard {
+                                    Text(item.label, style = MaterialTheme.typography.titleMedium)
+                                    Text(
+                                        conflictStatusLabel(item.status),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (item.status == ConflictItemStatus.INTEGRITY_PROBLEM) {
+                                            MaterialTheme.colorScheme.error
+                                        } else {
+                                            MaterialTheme.colorScheme.tertiary
+                                        },
+                                    )
+                                    item.device?.let { event ->
+                                        Text(
+                                            "Perangkat: ${LocalDate.ofEpochDay(event.effectiveEpochDay)} | ${event.type} | " +
+                                                "${displayMoney(event.amount, true)} | ${event.accountName}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                        Text(
+                                            "${if (event.reversed) "Reversal" else "Aktif"} | ${event.receiptCount} bukti | " +
+                                                "actor ${event.actor.ifBlank { "tidak tersedia" }} | device ${event.deviceId.ifBlank { "tidak tersedia" }}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    item.drive?.let { event ->
+                                        Text(
+                                            "Drive: ${LocalDate.ofEpochDay(event.effectiveEpochDay)} | ${event.type} | " +
+                                                "${displayMoney(event.amount, true)} | ${event.accountName}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                    }
+                                }
+                            }
+                            if (filtered.isEmpty()) Text("Tidak ada item pada filter ini.")
+                        }
+                        HorizontalDivider()
+                        Text(
+                            "Gabungkan aman belum diaktifkan sampai executor merge staging dan rollback lulus pengujian. " +
+                                "Pilihan seluruh snapshot tersedia sebagai tindakan lanjutan.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Button(
+                            onClick = {},
+                            enabled = false,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) { Text("Gabungkan aman") }
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            TextButton(onClick = onKeepBoth, modifier = Modifier.heightIn(min = 48.dp)) { Text("Amankan kedua versi") }
+                            TextButton(onClick = onUseDevice, modifier = Modifier.heightIn(min = 48.dp)) { Text("Gunakan perangkat ini") }
+                            TextButton(onClick = onUseDrive, modifier = Modifier.heightIn(min = 48.dp)) { Text("Gunakan Drive") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun conflictStatusLabel(status: ConflictItemStatus): String = when (status) {
+    ConflictItemStatus.DEVICE_ONLY -> "Hanya di perangkat"
+    ConflictItemStatus.DRIVE_ONLY -> "Hanya di Drive"
+    ConflictItemStatus.IDENTICAL -> "Identik"
+    ConflictItemStatus.DIFFERENT -> "Berbeda"
+    ConflictItemStatus.INTEGRITY_PROBLEM -> "Masalah integritas"
 }
 
 private fun conflictDescription(conflict: SyncConflict): String = when (conflict.reason) {

@@ -3,6 +3,7 @@ package com.morneven.kron.sync
 import java.time.Instant
 
 const val DRIVE_APPDATA_SCOPE = "https://www.googleapis.com/auth/drive.appdata"
+const val DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 
 data class GoogleAccountIdentity(
     val subjectId: String,
@@ -63,6 +64,7 @@ data class DriveSnapshotManifest(
     val datasetId: String,
     val snapshotId: String,
     val parentSnapshotId: String?,
+    val parentSnapshotIds: List<String> = listOfNotNull(parentSnapshotId),
     val generation: Long,
     val sourceDeviceId: String,
     val schemaVersion: Int,
@@ -73,11 +75,20 @@ data class DriveSnapshotManifest(
     val kind: SnapshotKind = SnapshotKind.ACTIVE,
 ) {
     init {
-        require(protocolVersion == 1) { "Versi protokol snapshot tidak didukung" }
+        require(protocolVersion in 1..2) { "Versi protokol snapshot tidak didukung" }
         require(datasetId.isNotBlank() && snapshotId.isNotBlank() && sourceDeviceId.isNotBlank())
         require(generation >= 0 && schemaVersion > 0 && minimumAppVersionCode > 0)
         require(payloadSha256.matches(Regex("[0-9a-f]{64}"))) { "Checksum snapshot tidak valid" }
         require(kdfIterations in 210_000..2_000_000) { "Parameter derivasi kunci tidak valid" }
+        require(parentSnapshotIds.size <= 8 && parentSnapshotIds.none { it.isBlank() || ',' in it } && parentSnapshotIds.distinct().size == parentSnapshotIds.size) {
+            "Parent snapshot tidak valid"
+        }
+        if (protocolVersion == 1) require(parentSnapshotIds == listOfNotNull(parentSnapshotId)) {
+            "Snapshot v1 hanya mendukung satu parent"
+        }
+        if (protocolVersion == 2) require(parentSnapshotId == parentSnapshotIds.firstOrNull()) {
+            "Parent utama snapshot v2 tidak konsisten"
+        }
     }
 
     fun toAppProperties(): Map<String, String> = mapOf(
@@ -85,6 +96,7 @@ data class DriveSnapshotManifest(
         "dataset" to datasetId,
         "snapshot" to snapshotId,
         "parent" to parentSnapshotId.orEmpty(),
+        "parents" to parentSnapshotIds.joinToString(","),
         "generation" to generation.toString(),
         "device" to sourceDeviceId,
         "schema" to schemaVersion.toString(),
@@ -99,11 +111,19 @@ data class DriveSnapshotManifest(
     companion object {
         fun fromAppProperties(properties: Map<String, String>): DriveSnapshotManifest? = runCatching {
             if (properties["product"] != "KRON") return null
+            val protocol = properties.getValue("protocol").toInt()
+            val parent = properties["parent"]?.takeIf(String::isNotBlank)
+            val parents = if (protocol >= 2) {
+                properties["parents"].orEmpty().split(',').filter(String::isNotBlank)
+            } else {
+                listOfNotNull(parent)
+            }
             DriveSnapshotManifest(
-                protocolVersion = properties.getValue("protocol").toInt(),
+                protocolVersion = protocol,
                 datasetId = properties.getValue("dataset"),
                 snapshotId = properties.getValue("snapshot"),
-                parentSnapshotId = properties["parent"]?.takeIf(String::isNotBlank),
+                parentSnapshotId = parents.firstOrNull(),
+                parentSnapshotIds = parents,
                 generation = properties.getValue("generation").toLong(),
                 sourceDeviceId = properties.getValue("device"),
                 schemaVersion = properties.getValue("schema").toInt(),
@@ -174,6 +194,14 @@ sealed interface SyncRunResult {
     data class Error(val message: String, val retryable: Boolean) : SyncRunResult
 }
 
+sealed interface ConflictPreviewResult {
+    data class Ready(val preview: ConflictPreview) : ConflictPreviewResult
+    data object AuthorizationRequired : ConflictPreviewResult
+    data object PassphraseRequired : ConflictPreviewResult
+    data class Stale(val conflict: SyncConflict) : ConflictPreviewResult
+    data class Error(val message: String) : ConflictPreviewResult
+}
+
 interface SyncStateStore {
     suspend fun read(): SyncState
     suspend fun update(transform: (SyncState) -> SyncState): SyncState
@@ -182,6 +210,9 @@ interface SyncStateStore {
 interface LocalSnapshotSource {
     suspend fun describe(): LocalDatasetSnapshot
     suspend fun exportSnapshotPayload(): ByteArray
+
+    suspend fun previewRemotePayload(payload: ByteArray, manifest: DriveSnapshotManifest): ConflictPreview =
+        throw UnsupportedOperationException("Preview konflik belum tersedia")
 
     /** Must validate and replace local data atomically. */
     suspend fun applyRemoteAtomically(

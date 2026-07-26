@@ -1,9 +1,11 @@
 package com.morneven.kron.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import java.util.UUID
 
 object LedgerType {
     const val OPENING_BALANCE = "OPENING_BALANCE"
@@ -74,7 +76,26 @@ object TransactionDirection {
     const val EXPENSE = "EXPENSE"
 }
 
-@Entity(tableName = "accounts")
+object AccountSharingMode {
+    const val PRIVATE = "PRIVATE"
+    const val TEAM = "TEAM"
+}
+
+object TeamRole {
+    const val OWNER = "OWNER"
+    const val EDITOR = "EDITOR"
+    const val VIEWER = "VIEWER"
+}
+
+object TeamWorkspaceStatus {
+    const val LOCAL_ONLY = "LOCAL_ONLY"
+    const val SYNCED = "SYNCED"
+    const val CONFLICT = "CONFLICT"
+    const val REVOKED = "REVOKED"
+    const val ARCHIVED = "ARCHIVED"
+}
+
+@Entity(tableName = "accounts", indices = [Index(value = ["teamId"], unique = true)])
 data class AccountEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
@@ -82,9 +103,17 @@ data class AccountEntity(
     val isArchived: Boolean = false,
     val archivedAt: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "'PRIVATE'") val sharingMode: String = AccountSharingMode.PRIVATE,
+    val teamId: String? = null,
+    @ColumnInfo(defaultValue = "0") val revision: Long = 0,
+    @ColumnInfo(defaultValue = "0") val updatedAt: Long = System.currentTimeMillis(),
+    val lastWriterId: String? = null,
 )
 
-@Entity(tableName = "categories")
+@Entity(
+    tableName = "categories",
+    indices = [Index("accountId"), Index(value = ["syncId"], unique = true)],
+)
 data class CategoryEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
@@ -92,9 +121,17 @@ data class CategoryEntity(
     val color: Long,
     val icon: String,
     val isArchived: Boolean = false,
+    val accountId: Long? = null,
+    @ColumnInfo(defaultValue = "''") val syncId: String = UUID.randomUUID().toString(),
+    @ColumnInfo(defaultValue = "0") val revision: Long = 0,
+    @ColumnInfo(defaultValue = "0") val updatedAt: Long = System.currentTimeMillis(),
+    val lastWriterId: String? = null,
 )
 
-@Entity(tableName = "portfolios", indices = [Index("accountId")])
+@Entity(
+    tableName = "portfolios",
+    indices = [Index("accountId"), Index(value = ["syncId"], unique = true)],
+)
 data class PortfolioEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
@@ -111,6 +148,10 @@ data class PortfolioEntity(
     val archivedAt: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val accountId: Long,
+    @ColumnInfo(defaultValue = "''") val syncId: String = UUID.randomUUID().toString(),
+    @ColumnInfo(defaultValue = "0") val revision: Long = 0,
+    @ColumnInfo(defaultValue = "0") val updatedAt: Long = System.currentTimeMillis(),
+    val lastWriterId: String? = null,
 )
 
 @Entity(
@@ -121,7 +162,11 @@ data class PortfolioEntity(
         childColumns = ["portfolioId"],
         onDelete = ForeignKey.RESTRICT,
     )],
-    indices = [Index("portfolioId"), Index(value = ["portfolioId", "startEpochDay"], unique = true)],
+    indices = [
+        Index("portfolioId"),
+        Index(value = ["portfolioId", "startEpochDay"], unique = true),
+        Index(value = ["syncId"], unique = true),
+    ],
 )
 data class BudgetPeriodEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -130,6 +175,10 @@ data class BudgetPeriodEntity(
     val endEpochDay: Long,
     val status: String,
     val createdAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "''") val syncId: String = UUID.randomUUID().toString(),
+    @ColumnInfo(defaultValue = "0") val revision: Long = 0,
+    @ColumnInfo(defaultValue = "0") val updatedAt: Long = System.currentTimeMillis(),
+    val lastWriterId: String? = null,
 )
 
 @Entity(
@@ -148,7 +197,12 @@ data class BudgetPeriodEntity(
             onDelete = ForeignKey.RESTRICT,
         ),
     ],
-    indices = [Index("periodId"), Index("categoryId"), Index(value = ["periodId", "categoryId", "fundingChannel"], unique = true)],
+    indices = [
+        Index("periodId"),
+        Index("categoryId"),
+        Index(value = ["periodId", "categoryId", "fundingChannel"], unique = true),
+        Index(value = ["syncId"], unique = true),
+    ],
 )
 data class AllocationEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -156,6 +210,10 @@ data class AllocationEntity(
     val categoryId: Long,
     val fundingChannel: String,
     val plannedAmount: Long,
+    @ColumnInfo(defaultValue = "''") val syncId: String = UUID.randomUUID().toString(),
+    @ColumnInfo(defaultValue = "0") val revision: Long = 0,
+    @ColumnInfo(defaultValue = "0") val updatedAt: Long = System.currentTimeMillis(),
+    val lastWriterId: String? = null,
 )
 
 @Entity(
@@ -174,7 +232,12 @@ data class AllocationEntity(
             onDelete = ForeignKey.RESTRICT,
         ),
     ],
-    indices = [Index("portfolioId"), Index("categoryId"), Index(value = ["portfolioId", "categoryId"], unique = true)],
+    indices = [
+        Index("portfolioId"),
+        Index("categoryId"),
+        Index(value = ["portfolioId", "categoryId"], unique = true),
+        Index(value = ["syncId"], unique = true),
+    ],
 )
 data class PortfolioAllocationTemplateEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -182,6 +245,10 @@ data class PortfolioAllocationTemplateEntity(
     val categoryId: Long,
     val plannedAmount: Long,
     val cashPercentage: Int,
+    @ColumnInfo(defaultValue = "''") val syncId: String = UUID.randomUUID().toString(),
+    @ColumnInfo(defaultValue = "0") val revision: Long = 0,
+    @ColumnInfo(defaultValue = "0") val updatedAt: Long = System.currentTimeMillis(),
+    val lastWriterId: String? = null,
 )
 
 @Entity(
@@ -436,7 +503,12 @@ data class TransactionSplitEntity(
             onDelete = ForeignKey.RESTRICT,
         ),
     ],
-    indices = [Index("accountId"), Index("categoryId"), Index("allocationId")],
+    indices = [
+        Index("accountId"),
+        Index("categoryId"),
+        Index("allocationId"),
+        Index(value = ["syncId"], unique = true),
+    ],
 )
 data class RecurringRuleEntity(
     @PrimaryKey val id: String,
@@ -458,6 +530,64 @@ data class RecurringRuleEntity(
     val isPaused: Boolean = false,
     val pausedByArchive: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "''") val syncId: String = id,
+    @ColumnInfo(defaultValue = "0") val revision: Long = 0,
+    @ColumnInfo(defaultValue = "0") val updatedAt: Long = System.currentTimeMillis(),
+    val lastWriterId: String? = null,
+)
+
+@Entity(
+    tableName = "team_workspaces",
+    foreignKeys = [ForeignKey(
+        entity = AccountEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["accountId"],
+        onDelete = ForeignKey.RESTRICT,
+    )],
+    indices = [Index(value = ["teamId"], unique = true), Index(value = ["folderId"], unique = true)],
+)
+data class TeamWorkspaceEntity(
+    @PrimaryKey val accountId: Long,
+    val teamId: String,
+    val folderId: String,
+    val localRole: String,
+    val ownerSubjectHash: String,
+    val headSnapshotId: String? = null,
+    @ColumnInfo(defaultValue = "0") val generation: Long = 0,
+    @ColumnInfo(defaultValue = "'LOCAL_ONLY'") val status: String = TeamWorkspaceStatus.LOCAL_ONLY,
+    @ColumnInfo(defaultValue = "0") val canRead: Boolean = true,
+    @ColumnInfo(defaultValue = "0") val canWrite: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val canShare: Boolean = false,
+    val capabilitiesVerifiedAt: Long? = null,
+    val archivedAt: Long? = null,
+    @ColumnInfo(defaultValue = "0") val updatedAt: Long = System.currentTimeMillis(),
+)
+
+@Entity(
+    tableName = "team_members",
+    foreignKeys = [ForeignKey(
+        entity = AccountEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["accountId"],
+        onDelete = ForeignKey.CASCADE,
+    )],
+    indices = [Index("accountId")],
+)
+data class TeamMemberEntity(
+    @PrimaryKey val permissionId: String,
+    val accountId: Long,
+    val email: String,
+    val displayName: String? = null,
+    val role: String,
+    val status: String,
+    val refreshedAt: Long = System.currentTimeMillis(),
+)
+
+@Entity(tableName = "team_invitation_uses", indices = [Index("teamId")])
+data class TeamInvitationUseEntity(
+    @PrimaryKey val inviteIdHash: String,
+    val teamId: String,
+    val usedAt: Long = System.currentTimeMillis(),
 )
 
 @Entity(

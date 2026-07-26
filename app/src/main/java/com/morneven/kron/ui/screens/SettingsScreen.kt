@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -22,6 +23,8 @@ import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.LightMode
+import androidx.compose.material.icons.outlined.Group
+import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Lock
@@ -56,7 +59,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.morneven.kron.BuildConfig
 import com.morneven.kron.data.AccountEntity
+import com.morneven.kron.data.AccountSharingMode
 import com.morneven.kron.data.RecurringRuleEntity
+import com.morneven.kron.data.TeamRole
 import com.morneven.kron.ui.KronUiState
 import com.morneven.kron.ui.components.ChannelBadge
 import com.morneven.kron.ui.components.HudCard
@@ -119,10 +124,18 @@ fun SettingsScreen(
     onBudgetAlertsChanged: ((Boolean) -> Unit)? = null,
     onNotificationSettings: (() -> Unit)? = null,
     onScreenshotAllowed: ((Boolean) -> Unit)? = null,
+    onConvertToTeam: (() -> Unit)? = null,
+    onJoinTeam: (() -> Unit)? = null,
+    onManageCollaborators: (() -> Unit)? = null,
+    onCreateTeamInvite: (() -> Unit)? = null,
+    onLeaveTeam: (() -> Unit)? = null,
+    onConvertToPrivate: (() -> Unit)? = null,
 ) {
     var showArchive by rememberSaveable { mutableStateOf(false) }
     var showGlossary by rememberSaveable { mutableStateOf(false) }
     val activeAccounts = state.accountBalances
+    val activeReadOnly = state.activeAccount?.sharingMode == AccountSharingMode.TEAM &&
+        state.teamWorkspace?.localRole == TeamRole.VIEWER
     val uriHandler = LocalUriHandler.current
 
     LazyColumn(
@@ -151,6 +164,8 @@ fun SettingsScreen(
         if (!showArchive) {
             items(activeAccounts, key = { it.id }) { account ->
                 val entity = state.accounts.firstOrNull { it.id == account.id }
+                val workspace = state.teamWorkspace?.takeIf { it.accountId == account.id }
+                val readOnly = entity?.sharingMode == AccountSharingMode.TEAM && workspace?.localRole == TeamRole.VIEWER
                 HudCard(accent = if (account.isActive) KronGreen.copy(alpha = 0.62f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)) {
                     Row(
                         Modifier.fillMaxWidth(),
@@ -164,13 +179,22 @@ fun SettingsScreen(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (account.isActive) KronGreen else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            Text(
+                                if (entity?.sharingMode == AccountSharingMode.TEAM) {
+                                    "TEAM ${workspace?.localRole ?: "BELUM TERVERIFIKASI"}"
+                                } else {
+                                    "PRIVAT"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
-                        IconButton(onClick = { entity?.let(onEditAccount) }, enabled = entity != null) {
+                        IconButton(onClick = { entity?.let(onEditAccount) }, enabled = entity != null && !readOnly) {
                             Icon(Icons.Outlined.Edit, contentDescription = "Edit akun ${account.name}")
                         }
                         IconButton(
                             onClick = { entity?.let(onArchiveAccount) },
-                            enabled = entity != null && !account.isActive && account.cashBalance == 0L && account.eBudgetBalance == 0L,
+                            enabled = entity != null && !readOnly && !account.isActive && account.cashBalance == 0L && account.eBudgetBalance == 0L,
                         ) {
                             Icon(Icons.Outlined.Archive, contentDescription = "Arsipkan akun ${account.name}")
                         }
@@ -227,14 +251,89 @@ fun SettingsScreen(
             }
         }
 
+        item {
+            SectionHeader("Team Account")
+            HudCard {
+                val account = state.activeAccount
+                val workspace = state.teamWorkspace
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Icon(Icons.Outlined.Group, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (account?.sharingMode == AccountSharingMode.TEAM) "Akun Team" else "Akun Privat",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            if (workspace == null) {
+                                "Data akun ini hanya tersedia pada ruang privat KRON."
+                            } else {
+                                "Role ${workspace.localRole.lowercase().replaceFirstChar(Char::uppercase)}. " +
+                                    "${state.teamMembers.size} collaborator tersimpan dalam cache Drive."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                if (!BuildConfig.TEAM_ACCOUNT_ENABLED) {
+                    Text(
+                        "Fondasi Team Account terpasang, tetapi aktivasi dikunci sampai uji dua akun Google Drive dan rollback lulus.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                } else if (account?.sharingMode != AccountSharingMode.TEAM) {
+                    Button(
+                        onClick = { onConvertToTeam?.invoke() },
+                        enabled = onConvertToTeam != null,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) { Text("Ubah menjadi Team") }
+                    TextButton(
+                        onClick = { onJoinTeam?.invoke() },
+                        enabled = onJoinTeam != null,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) {
+                        Icon(Icons.Outlined.Key, contentDescription = null)
+                        Text("Masukkan kode akses")
+                    }
+                } else if (workspace?.localRole == TeamRole.OWNER) {
+                    Button(
+                        onClick = { onManageCollaborators?.invoke() },
+                        enabled = onManageCollaborators != null && workspace.canShare,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) { Text("Kelola collaborator") }
+                    TextButton(
+                        onClick = { onCreateTeamInvite?.invoke() },
+                        enabled = onCreateTeamInvite != null && workspace.canShare,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) { Text("Buat kode akses") }
+                    TextButton(
+                        onClick = { onConvertToPrivate?.invoke() },
+                        enabled = onConvertToPrivate != null,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) { Text("Kembalikan menjadi privat") }
+                } else {
+                    TextButton(
+                        onClick = { onLeaveTeam?.invoke() },
+                        enabled = onLeaveTeam != null,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) { Text("Tinggalkan Team") }
+                }
+            }
+        }
+
         if (state.rules.isNotEmpty()) {
             item { SectionHeader("Jadwal otomatis") }
             items(state.rules, key = { "rule-${it.id}" }) { rule ->
                 RecurringRuleCard(
                     rule = rule,
                     valuesVisible = state.valuesVisible,
-                    onPause = onPauseRule,
-                    onResume = onResumeRule,
+                    onPause = onPauseRule.takeUnless { activeReadOnly },
+                    onResume = onResumeRule.takeUnless { activeReadOnly },
                 )
             }
         }
@@ -280,8 +379,8 @@ fun SettingsScreen(
         }
         item {
             HudCard {
-                SettingRow(Icons.Outlined.Backup, "Buat .kronbackup", "Backup terenkripsi untuk pemulihan atau pindah perangkat", onClick = onBackup)
-                SettingRow(Icons.Outlined.Restore, "Pulihkan .kronbackup", "Data diverifikasi sebelum mengganti database aktif", onClick = onRestore)
+                SettingRow(Icons.Outlined.Backup, "Buat .kronbackup", if (activeReadOnly) "Tidak tersedia untuk Viewer" else "Backup terenkripsi untuk pemulihan atau pindah perangkat", onClick = onBackup.takeUnless { activeReadOnly })
+                SettingRow(Icons.Outlined.Restore, "Pulihkan .kronbackup", if (activeReadOnly) "Tidak tersedia untuk Viewer" else "Data diverifikasi sebelum mengganti database aktif", onClick = onRestore.takeUnless { activeReadOnly })
                 SettingRow(Icons.Outlined.VerifiedUser, "Pusat Bukti", "Periksa ledger, ekspor PDF, dan verifikasi paket bukti", onClick = onEvidenceCenter)
             }
         }

@@ -123,6 +123,7 @@ fun ReportsScreen(
     onExport: () -> Unit,
     modifier: Modifier = Modifier,
     eventChannels: ReportEventChannels = emptyMap(),
+    readOnly: Boolean = false,
 ) {
     val visible = state.valuesVisible
     var range by rememberSaveable { mutableStateOf(ReportRange.THIRTY_DAYS) }
@@ -223,9 +224,9 @@ fun ReportsScreen(
                     Text("Ringkasan yang direkonstruksi dari jurnal", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("Akun aktif: ${state.activeAccount?.name ?: "Belum ada"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
                 }
-                Button(onClick = onExport) {
+                Button(onClick = onExport, enabled = !readOnly) {
                     Icon(Icons.Outlined.FileDownload, contentDescription = null)
-                    Text("CSV")
+                    Text(if (readOnly) "Viewer" else "CSV")
                 }
             }
         }

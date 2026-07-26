@@ -1,6 +1,7 @@
 package com.morneven.kron.backup
 
 import android.content.Context
+import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
 import android.system.Os
@@ -12,6 +13,11 @@ import com.morneven.kron.security.DatabaseEncryptionManager
 import com.morneven.kron.security.EncryptedAttachmentStore
 import com.morneven.kron.security.SnapshotOperationLock
 import com.morneven.kron.security.SqlCipherLibrary
+import com.morneven.kron.sync.ConflictDataset
+import com.morneven.kron.sync.ConflictEventRecord
+import com.morneven.kron.sync.ConflictMutableRecord
+import com.morneven.kron.sync.ConflictPreview
+import com.morneven.kron.sync.ConflictPreviewBuilder
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -114,6 +120,48 @@ class BackupManager @Inject constructor(
         }
     }
 
+    suspend fun previewPortableSnapshotPayload(
+        payload: ByteArray,
+        localSnapshotId: String?,
+        remoteSnapshotId: String,
+    ): ConflictPreview = withContext(Dispatchers.IO) {
+        require(payload.isNotEmpty() && payload.size.toLong() <= MAX_SYNC_PAYLOAD_BYTES) {
+            "Snapshot Drive tidak valid atau terlalu besar"
+        }
+        snapshotOperationLock.withLock {
+            val workspace = File(context.cacheDir, "conflict-preview-${UUID.randomUUID()}")
+            check(workspace.mkdirs()) { "Staging Pusat Konflik tidak dapat dibuat" }
+            val validationFile = context.getDatabasePath(VALIDATION_DATABASE_NAME)
+            try {
+                val packageFile = File(workspace, "package.zip")
+                packageFile.outputStream().use { it.write(payload) }
+                val extracted = extractPackage(packageFile, workspace)
+                val format = extracted.manifest.optInt("format", -1)
+                require(format == LEGACY_FORMAT || format == CURRENT_FORMAT) { "Versi format backup tidak didukung" }
+                verifyExtractedPackage(extracted, format)
+                deleteDatabaseFiles(validationFile)
+                extracted.database.copyTo(validationFile, overwrite = true)
+                migrateAndValidateCandidate(validationFile)
+                validateDatabase(validationFile)
+
+                val local = readConflictDataset(localSnapshotId) { sql ->
+                    database.openHelper.readableDatabase.query(sql)
+                }
+                val remote = SQLiteDatabase.openDatabase(
+                    validationFile.absolutePath,
+                    null,
+                    SQLiteDatabase.OPEN_READONLY,
+                ).use { candidate ->
+                    readConflictDataset(remoteSnapshotId) { sql -> candidate.rawQuery(sql, null) }
+                }
+                ConflictPreviewBuilder.build(local, remote)
+            } finally {
+                deleteDatabaseFiles(validationFile)
+                deleteScopedDirectory(workspace, context.cacheDir)
+            }
+        }
+    }
+
     suspend fun applyPortableSnapshotPayloadAtomically(
         payload: ByteArray,
         datasetId: String,
@@ -209,7 +257,7 @@ class BackupManager @Inject constructor(
                     val appendOnlyTables = listOf(
                         "activity_events", "cash_journal_lines", "budget_journal_lines",
                         "transaction_splits", "audit_snapshots", "ledger_lines",
-                        "journal_seals", "evidence_keys",
+                        "journal_seals", "evidence_keys", "team_invitation_uses",
                     )
                     for (table in appendOnlyTables) {
                         liveDb.execSQL("DROP TRIGGER IF EXISTS append_only_${table}_delete")
@@ -226,6 +274,7 @@ class BackupManager @Inject constructor(
                         "transaction_splits", "recurring_occurrences",
                         "audit_snapshots", "ledger_accounts",
                         "ledger_lines", "journal_seals", "evidence_keys",
+                        "team_workspaces", "team_members", "team_invitation_uses",
                     )
                     for (table in guardedTables) {
                         for (op in listOf("INSERT", "UPDATE", "DELETE")) {
@@ -1021,7 +1070,7 @@ class BackupManager @Inject constructor(
         val immutableTables = listOf(
             "activity_events", "cash_journal_lines", "budget_journal_lines",
             "transaction_splits", "audit_snapshots", "ledger_lines",
-            "journal_seals", "evidence_keys",
+            "journal_seals", "evidence_keys", "team_invitation_uses",
         )
         immutableTables.forEach { table ->
             listOf("update", "delete").forEach { operation ->
@@ -1069,6 +1118,7 @@ class BackupManager @Inject constructor(
             "transaction_splits", "recurring_occurrences",
             "audit_snapshots", "ledger_accounts",
             "ledger_lines", "journal_seals", "evidence_keys",
+            "team_workspaces", "team_members", "team_invitation_uses",
         )
         guardedTables.forEach { table ->
             for (op in listOf("INSERT", "UPDATE", "DELETE")) {
@@ -1086,6 +1136,86 @@ class BackupManager @Inject constructor(
             }
         }
     }
+
+    private fun readConflictDataset(
+        snapshotId: String?,
+        query: (String) -> Cursor,
+    ): ConflictDataset {
+        val events = query(
+            """
+            SELECT e.id,e.type,e.title,e.note,e.source,e.effectiveEpochDay,e.createdAt,
+                   COALESCE((SELECT name FROM accounts WHERE id=e.accountId),'Akun'),
+                   EXISTS(SELECT 1 FROM activity_events r WHERE r.type='REVERSAL' AND r.relatedEventId=e.id),
+                   (SELECT COUNT(*) FROM receipts x WHERE x.eventId=e.id OR x.evidenceEventId=e.id),
+                   COALESCE(s.actor,''),COALESCE(s.deviceId,''),COALESCE(s.recordedAtUtc,e.createdAt),
+                   COALESCE(s.payloadHash,''),COALESCE(s.signatureBase64,''),
+                   COALESCE((SELECT SUM(amount) FROM cash_journal_lines c WHERE c.eventId=e.id AND c.accountId=e.accountId),0),
+                   COALESCE((SELECT SUM(amount) FROM budget_journal_lines b WHERE b.eventId=e.id AND b.accountId=e.accountId),0)
+            FROM activity_events e
+            LEFT JOIN journal_seals s ON s.eventId=e.id
+            ORDER BY e.effectiveEpochDay,e.createdAt,e.id
+            """.trimIndent(),
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    val fallback = buildString {
+                        for (index in 0..12) append(cursor.getString(index)).append('\u001f')
+                        append(cursor.getLong(15)).append('\u001f').append(cursor.getLong(16))
+                    }
+                    val payloadHash = cursor.getString(13).takeIf(String::isNotBlank) ?: sha256Text(fallback)
+                    val signature = cursor.getString(14)
+                    add(
+                        ConflictEventRecord(
+                            eventId = cursor.getString(0),
+                            type = cursor.getString(1),
+                            title = cursor.getString(2),
+                            amount = cursor.getLong(15),
+                            effectiveEpochDay = cursor.getLong(5),
+                            accountName = cursor.getString(7),
+                            reversed = cursor.getInt(8) != 0,
+                            receiptCount = cursor.getInt(9),
+                            actor = cursor.getString(10),
+                            deviceId = cursor.getString(11),
+                            changedAtEpochMillis = cursor.getLong(12),
+                            canonicalHash = payloadHash,
+                            signatureHash = signature.takeIf(String::isNotBlank)?.let(::sha256Text) ?: "missing",
+                        ),
+                    )
+                }
+            }
+        }
+        val mutableQueries = listOf(
+            "SELECT 'account',COALESCE(teamId,'private-account:'||id),name,revision,name||'|'||isArchived||'|'||sharingMode FROM accounts",
+            "SELECT 'category',syncId,name,revision,name||'|'||direction||'|'||color||'|'||icon||'|'||isArchived FROM categories WHERE syncId IS NOT NULL",
+            "SELECT 'portfolio',syncId,name,revision,name||'|'||cadence||'|'||intervalCount||'|'||plannedIncome||'|'||rolloverEnabled||'|'||fundingPriority||'|'||startEpochDay||'|'||endMode||'|'||COALESCE(endValue,'')||'|'||isPaused||'|'||isArchived FROM portfolios WHERE syncId IS NOT NULL",
+            "SELECT 'period',p.syncId,pf.name||' '||p.startEpochDay,p.revision,pf.syncId||'|'||p.startEpochDay||'|'||p.endEpochDay||'|'||p.status FROM budget_periods p JOIN portfolios pf ON pf.id=p.portfolioId WHERE p.syncId IS NOT NULL",
+            "SELECT 'allocation',a.syncId,c.name||' '||a.fundingChannel,a.revision,p.syncId||'|'||c.syncId||'|'||a.fundingChannel||'|'||a.plannedAmount FROM allocations a JOIN budget_periods p ON p.id=a.periodId JOIN categories c ON c.id=a.categoryId WHERE a.syncId IS NOT NULL",
+            "SELECT 'template',t.syncId,c.name,t.revision,p.syncId||'|'||c.syncId||'|'||t.plannedAmount||'|'||t.cashPercentage FROM portfolio_allocation_templates t JOIN portfolios p ON p.id=t.portfolioId JOIN categories c ON c.id=t.categoryId WHERE t.syncId IS NOT NULL",
+            "SELECT 'rule',r.syncId,r.title,r.revision,r.title||'|'||r.direction||'|'||r.amount||'|'||r.fundingChannel||'|'||COALESCE(c.syncId,'')||'|'||COALESCE(a.syncId,'')||'|'||r.cadence||'|'||r.intervalCount||'|'||r.anchorMonth||'|'||r.anchorDay||'|'||r.startEpochDay||'|'||r.nextEpochDay||'|'||COALESCE(r.endEpochDay,'')||'|'||COALESCE(r.remainingOccurrences,'')||'|'||r.isPaused FROM recurring_rules r LEFT JOIN categories c ON c.id=r.categoryId LEFT JOIN allocations a ON a.id=r.allocationId WHERE r.syncId IS NOT NULL",
+        )
+        val mutable = buildList {
+            mutableQueries.forEach { sql ->
+                query(sql).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        add(
+                            ConflictMutableRecord(
+                                entityType = cursor.getString(0),
+                                syncId = cursor.getString(1),
+                                label = cursor.getString(2),
+                                revision = cursor.getLong(3),
+                                canonicalHash = sha256Text(cursor.getString(4)),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+        return ConflictDataset(snapshotId, events, mutable)
+    }
+
+    private fun sha256Text(value: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(value.toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it) }
 
     companion object {
         private const val CURRENT_FORMAT = 2

@@ -7,6 +7,8 @@ import com.morneven.kron.data.EvidenceOrigin
 import com.morneven.kron.data.KronDatabase
 import com.morneven.kron.data.LedgerType
 import com.morneven.kron.data.ReceiptEntity
+import com.morneven.kron.data.TeamAccessGuard
+import com.morneven.kron.data.TeamCapability
 import androidx.room.withTransaction
 import java.io.InputStream
 import java.time.LocalDate
@@ -23,6 +25,7 @@ class ReceiptManager @Inject constructor(
     private val attachmentStore: EncryptedAttachmentStore,
     private val snapshotOperationLock: SnapshotOperationLock,
     private val ledgerPostingEngine: LedgerPostingEngine,
+    private val teamAccessGuard: TeamAccessGuard = TeamAccessGuard(database),
 ) {
     suspend fun importReceipt(
         eventId: String,
@@ -50,6 +53,7 @@ class ReceiptManager @Inject constructor(
         longitude: Double?,
     ): ReceiptEntity {
         val targetEvent = requireNotNull(database.kronDao().eventById(eventId)) { "Transaksi untuk bukti tidak ditemukan" }
+        teamAccessGuard.require(targetEvent.accountId, TeamCapability.WRITE)
         require(origin in setOf(EvidenceOrigin.CAMERA, EvidenceOrigin.GALLERY)) { "Asal bukti tidak valid" }
         val safeName = displayName.trim().take(MAX_DISPLAY_NAME).ifBlank { "Bukti transaksi" }
         val safeMime = mimeType.trim().take(MAX_MIME_TYPE).ifBlank { "application/octet-stream" }

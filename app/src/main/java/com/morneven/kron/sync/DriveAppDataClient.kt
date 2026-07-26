@@ -268,7 +268,7 @@ internal object DriveErrorClassifier {
     }
 }
 
-private fun InputStream.readLimited(maxBytes: Int): ByteArray {
+internal fun InputStream.readLimited(maxBytes: Int): ByteArray {
     val output = ByteArrayOutputStream(minOf(maxBytes, DEFAULT_BUFFER_SIZE))
     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
     var total = 0
@@ -282,7 +282,7 @@ private fun InputStream.readLimited(maxBytes: Int): ByteArray {
     return output.toByteArray()
 }
 
-private object DriveJson {
+internal object DriveJson {
     fun arrayObjects(json: String, key: String): List<String> {
         val start = valueStart(json, key)
         require(json.getOrNull(start) == '[') { "Field $key bukan array" }

@@ -34,8 +34,11 @@ import com.morneven.kron.security.SqlCipherLibrary
         JournalSealEntity::class,
         EvidenceKeyEntity::class,
         ActorProfileEntity::class,
+        TeamWorkspaceEntity::class,
+        TeamMemberEntity::class,
+        TeamInvitationUseEntity::class,
     ],
-    version = 14,
+    version = 15,
     exportSchema = true,
 )
 abstract class KronDatabase : RoomDatabase() {
@@ -923,6 +926,98 @@ abstract class KronDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_14_15: Migration = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val before = schema14DataProof(db)
+
+                db.execSQL("ALTER TABLE accounts ADD COLUMN sharingMode TEXT NOT NULL DEFAULT 'PRIVATE'")
+                db.execSQL("ALTER TABLE accounts ADD COLUMN teamId TEXT")
+                db.execSQL("ALTER TABLE accounts ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE accounts ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE accounts ADD COLUMN lastWriterId TEXT")
+                db.execSQL("CREATE UNIQUE INDEX index_accounts_teamId ON accounts(teamId)")
+
+                addTeamSyncColumns(db, "categories", includeAccountId = true)
+                addTeamSyncColumns(db, "portfolios")
+                addTeamSyncColumns(db, "budget_periods")
+                addTeamSyncColumns(db, "allocations")
+                addTeamSyncColumns(db, "portfolio_allocation_templates")
+                addTeamSyncColumns(db, "recurring_rules")
+
+                db.execSQL("CREATE INDEX index_categories_accountId ON categories(accountId)")
+                listOf(
+                    "categories",
+                    "portfolios",
+                    "budget_periods",
+                    "allocations",
+                    "portfolio_allocation_templates",
+                    "recurring_rules",
+                ).forEach { table ->
+                    db.execSQL("UPDATE $table SET syncId = 'legacy:$table:' || id WHERE syncId = ''")
+                    db.execSQL("CREATE UNIQUE INDEX index_${table}_syncId ON $table(syncId)")
+                }
+
+                db.execSQL(
+                    """
+                    CREATE TABLE team_workspaces (
+                        accountId INTEGER PRIMARY KEY NOT NULL,
+                        teamId TEXT NOT NULL,
+                        folderId TEXT NOT NULL,
+                        localRole TEXT NOT NULL,
+                        ownerSubjectHash TEXT NOT NULL,
+                        headSnapshotId TEXT,
+                        generation INTEGER NOT NULL DEFAULT 0,
+                        status TEXT NOT NULL DEFAULT 'LOCAL_ONLY',
+                        canRead INTEGER NOT NULL DEFAULT 0,
+                        canWrite INTEGER NOT NULL DEFAULT 0,
+                        canShare INTEGER NOT NULL DEFAULT 0,
+                        capabilitiesVerifiedAt INTEGER,
+                        archivedAt INTEGER,
+                        updatedAt INTEGER NOT NULL DEFAULT 0,
+                        FOREIGN KEY(accountId) REFERENCES accounts(id) ON UPDATE NO ACTION ON DELETE RESTRICT
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE UNIQUE INDEX index_team_workspaces_teamId ON team_workspaces(teamId)")
+                db.execSQL("CREATE UNIQUE INDEX index_team_workspaces_folderId ON team_workspaces(folderId)")
+                db.execSQL(
+                    """
+                    CREATE TABLE team_members (
+                        permissionId TEXT PRIMARY KEY NOT NULL,
+                        accountId INTEGER NOT NULL,
+                        email TEXT NOT NULL,
+                        displayName TEXT,
+                        role TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        refreshedAt INTEGER NOT NULL,
+                        FOREIGN KEY(accountId) REFERENCES accounts(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX index_team_members_accountId ON team_members(accountId)")
+                db.execSQL(
+                    """
+                    CREATE TABLE team_invitation_uses (
+                        inviteIdHash TEXT PRIMARY KEY NOT NULL,
+                        teamId TEXT NOT NULL,
+                        usedAt INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX index_team_invitation_uses_teamId ON team_invitation_uses(teamId)")
+
+                check(before == schema14DataProof(db)) { "Data lama berubah selama migrasi Team Account" }
+                createAppendOnlyTriggers(db)
+                createSyncGenerationTriggers(db)
+                check(db.query("PRAGMA foreign_key_check").use { !it.moveToFirst() }) {
+                    "Relasi database tidak valid setelah migrasi Team Account"
+                }
+                check(db.query("PRAGMA integrity_check").use { it.moveToFirst() && it.getString(0).equals("ok", true) }) {
+                    "Database tidak utuh setelah migrasi Team Account"
+                }
+            }
+        }
+
         private val ALL_MIGRATIONS = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
@@ -937,7 +1032,67 @@ abstract class KronDatabase : RoomDatabase() {
             MIGRATION_11_12,
             MIGRATION_12_13,
             MIGRATION_13_14,
+            MIGRATION_14_15,
         )
+
+        private fun addTeamSyncColumns(
+            db: SupportSQLiteDatabase,
+            table: String,
+            includeAccountId: Boolean = false,
+        ) {
+            require(table in setOf(
+                "categories",
+                "portfolios",
+                "budget_periods",
+                "allocations",
+                "portfolio_allocation_templates",
+                "recurring_rules",
+            ))
+            if (includeAccountId) db.execSQL("ALTER TABLE $table ADD COLUMN accountId INTEGER")
+            db.execSQL("ALTER TABLE $table ADD COLUMN syncId TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE $table ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE $table ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE $table ADD COLUMN lastWriterId TEXT")
+        }
+
+        private fun schema14DataProof(db: SupportSQLiteDatabase): String {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            val queries = listOf(
+                "SELECT id,name,isActive,isArchived,archivedAt,createdAt FROM accounts ORDER BY id",
+                "SELECT id,name,direction,color,icon,isArchived FROM categories ORDER BY id",
+                "SELECT id,name,cadence,intervalCount,plannedIncome,rolloverEnabled,fundingPriority,startEpochDay,endMode,endValue,isPaused,isArchived,archivedAt,createdAt,accountId FROM portfolios ORDER BY id",
+                "SELECT id,portfolioId,startEpochDay,endEpochDay,status,createdAt FROM budget_periods ORDER BY id",
+                "SELECT id,periodId,categoryId,fundingChannel,plannedAmount FROM allocations ORDER BY id",
+                "SELECT id,portfolioId,categoryId,plannedAmount,cashPercentage FROM portfolio_allocation_templates ORDER BY id",
+                "SELECT id,title,direction,amount,accountId,fundingChannel,categoryId,allocationId,cadence,intervalCount,anchorMonth,anchorDay,startEpochDay,nextEpochDay,endEpochDay,remainingOccurrences,isPaused,pausedByArchive,createdAt FROM recurring_rules ORDER BY id",
+                "SELECT * FROM activity_events ORDER BY id",
+                "SELECT * FROM cash_journal_lines ORDER BY id",
+                "SELECT * FROM budget_journal_lines ORDER BY id",
+                "SELECT * FROM transaction_splits ORDER BY id",
+                "SELECT * FROM recurring_occurrences ORDER BY id",
+                "SELECT * FROM audit_snapshots ORDER BY id",
+                "SELECT * FROM receipts ORDER BY id",
+                "SELECT * FROM sync_state ORDER BY id",
+                "SELECT * FROM ledger_accounts ORDER BY id",
+                "SELECT * FROM ledger_lines ORDER BY id",
+                "SELECT * FROM journal_seals ORDER BY id",
+                "SELECT * FROM evidence_keys ORDER BY id",
+                "SELECT * FROM actor_profiles ORDER BY id",
+            )
+            queries.forEach { sql ->
+                digest.update(sql.toByteArray(Charsets.UTF_8))
+                db.query(sql).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        for (column in 0 until cursor.columnCount) {
+                            digest.update((if (cursor.isNull(column)) 0 else 1).toByte())
+                            if (!cursor.isNull(column)) digest.update(cursor.getString(column).toByteArray(Charsets.UTF_8))
+                            digest.update(0x1f.toByte())
+                        }
+                    }
+                }
+            }
+            return digest.digest().joinToString("") { "%02x".format(it) }
+        }
 
         private fun receiptMigrationProof(db: SupportSQLiteDatabase, table: String): String {
             require(table == "receipts" || table == "receipts_new")
@@ -1007,6 +1162,9 @@ abstract class KronDatabase : RoomDatabase() {
                 "ledger_lines",
                 "journal_seals",
                 "evidence_keys",
+                "team_workspaces",
+                "team_members",
+                "team_invitation_uses",
             )
             guardedTables.filter { db.hasTable(it) }.forEach { table ->
                 listOf("INSERT", "UPDATE", "DELETE").forEach { operation ->
@@ -1039,8 +1197,9 @@ abstract class KronDatabase : RoomDatabase() {
                 "ledger_lines",
                 "journal_seals",
                 "evidence_keys",
+                "team_invitation_uses",
             )
-            immutableTables.forEach { table ->
+            immutableTables.filter { db.hasTable(it) }.forEach { table ->
                 listOf("UPDATE", "DELETE").forEach { operation ->
                     db.execSQL(
                         """
@@ -1092,6 +1251,19 @@ abstract class KronDatabase : RoomDatabase() {
             require(integrityOk) { "Integritas database KRON tidak valid" }
             val hasForeignKeyViolation = db.query("PRAGMA foreign_key_check").use { it.moveToFirst() }
             require(!hasForeignKeyViolation) { "Relasi database KRON tidak valid" }
+            require(scalar(db, "SELECT COUNT(*) FROM accounts WHERE sharingMode NOT IN ('PRIVATE','TEAM')") == 0L) {
+                "Mode berbagi akun tidak valid"
+            }
+            require(scalar(db, "SELECT COUNT(*) FROM accounts WHERE (sharingMode='PRIVATE' AND teamId IS NOT NULL) OR (sharingMode='TEAM' AND teamId IS NULL)") == 0L) {
+                "Identitas Team Account tidak konsisten"
+            }
+            require(
+                scalar(
+                    db,
+                    "SELECT COUNT(*) FROM team_workspaces w JOIN accounts a ON a.id=w.accountId " +
+                        "WHERE a.sharingMode!='TEAM' OR a.teamId!=w.teamId OR w.localRole NOT IN ('OWNER','EDITOR','VIEWER')",
+                ) == 0L,
+            ) { "Workspace Team Account tidak konsisten" }
 
             val unbalancedLedger = scalar(
                 db,
@@ -1177,6 +1349,6 @@ abstract class KronDatabase : RoomDatabase() {
         }
 
         const val DATABASE_NAME = "kron-v4.db"
-        const val SCHEMA_VERSION = 13
+        const val SCHEMA_VERSION = 15
     }
 }

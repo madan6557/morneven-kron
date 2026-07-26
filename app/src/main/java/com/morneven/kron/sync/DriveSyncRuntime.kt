@@ -278,6 +278,17 @@ class DriveSyncRuntime internal constructor(
         finalizeStagedPassphrase(coordinator.resolveConflict(conflict, resolution))
     }
 
+    suspend fun previewConflict(conflict: SyncConflict): ConflictPreviewResult = passphraseOperationMutex.withLock {
+        factory.restartResult()?.let { return@withLock ConflictPreviewResult.Error("KRON perlu dibuka ulang") }
+        factory.networkBlockedResult()?.let { return@withLock ConflictPreviewResult.Error(it.message) }
+        if (!secretStore.isStored() && !secretStore.hasStaged()) return@withLock ConflictPreviewResult.PassphraseRequired
+        coordinator.previewConflict(conflict).also { result ->
+            if (result is ConflictPreviewResult.Ready && secretStore.hasStaged()) {
+                if (secretStore.commitStaged()) factory.activateAfterConnection()
+            }
+        }
+    }
+
     suspend fun downloadAndApplyLatest(): SyncRunResult = passphraseOperationMutex.withLock {
         factory.clearRestartRequired()
         factory.restartResult()?.let { return it }

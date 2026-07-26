@@ -271,6 +271,55 @@ class DriveSyncCoordinator(
         resolution: ConflictResolution,
     ): SyncRunResult = syncMutex.withLock { resolveConflictLocked(conflict, resolution) }
 
+    suspend fun previewConflict(conflict: SyncConflict): ConflictPreviewResult = syncMutex.withLock {
+        val token = authorization.accessToken(interactive = false)
+        if (token !is DriveAccessTokenResult.Granted) {
+            return@withLock when (handleTokenFailure(token)) {
+                SyncRunResult.AuthorizationRequired -> ConflictPreviewResult.AuthorizationRequired
+                else -> ConflictPreviewResult.Error("Otorisasi Drive tidak tersedia")
+            }
+        }
+        val expected = conflict.remote
+            ?: return@withLock ConflictPreviewResult.Error("Snapshot Drive untuk konflik tidak tersedia")
+        try {
+            val before = drive.listSnapshots(token.accessToken)
+            val remote = before.firstOrNull { it.fileId == expected.fileId }
+                ?: return@withLock stalePreview(conflict)
+            val latestBefore = before
+                .filter { it.manifest.kind == SnapshotKind.ACTIVE && it.manifest.datasetId == remote.manifest.datasetId }
+                .maxWithOrNull(compareBy<RemoteDriveSnapshot>({ it.manifest.generation }, { it.createdAt }))
+            if (latestBefore?.fileId != remote.fileId) return@withLock stalePreview(conflict)
+
+            val passphrase = secretProvider.acquirePassphrase()
+                ?: return@withLock ConflictPreviewResult.PassphraseRequired
+            val envelope = drive.downloadSnapshot(token.accessToken, remote.fileId)
+            try {
+                val decrypted = cryptor.decrypt(envelope, passphrase)
+                require(decrypted.manifest == remote.manifest) { "Metadata snapshot Drive tidak cocok" }
+                val preview = try {
+                    local.previewRemotePayload(decrypted.payload, decrypted.manifest)
+                } finally {
+                    decrypted.payload.fill(0)
+                }
+                val latestAfter = drive.listSnapshots(token.accessToken)
+                    .filter { it.manifest.kind == SnapshotKind.ACTIVE && it.manifest.datasetId == remote.manifest.datasetId }
+                    .maxWithOrNull(compareBy<RemoteDriveSnapshot>({ it.manifest.generation }, { it.createdAt }))
+                if (latestAfter?.fileId != remote.fileId) return@withLock stalePreview(conflict)
+                ConflictPreviewResult.Ready(preview)
+            } finally {
+                envelope.fill(0)
+                passphrase.fill('\u0000')
+            }
+        } catch (error: Throwable) {
+            when (val failure = handleFailure(error)) {
+                SyncRunResult.AuthorizationRequired -> ConflictPreviewResult.AuthorizationRequired
+                SyncRunResult.PassphraseRequired -> ConflictPreviewResult.PassphraseRequired
+                is SyncRunResult.Error -> ConflictPreviewResult.Error(failure.message)
+                else -> ConflictPreviewResult.Error("Preview konflik tidak dapat dibuat")
+            }
+        }
+    }
+
     private suspend fun resolveConflictLocked(
         conflict: SyncConflict,
         resolution: ConflictResolution,
@@ -575,6 +624,18 @@ class DriveSyncCoordinator(
             )
         }
         return SyncRunResult.Conflict(updated)
+    }
+
+    private suspend fun stalePreview(previous: SyncConflict): ConflictPreviewResult.Stale {
+        val updated = previous.copy(reason = SyncConflictReason.REMOTE_CHANGED_DURING_RESOLUTION)
+        stateStore.update {
+            it.copy(
+                status = SyncStatus.CONFLICT,
+                lastError = "Snapshot Drive berubah. Tinjau konflik terbaru.",
+                conflictRemoteFileId = null,
+            )
+        }
+        return ConflictPreviewResult.Stale(updated)
     }
 
     private suspend fun handleTokenFailure(result: DriveAccessTokenResult): SyncRunResult = when (result) {

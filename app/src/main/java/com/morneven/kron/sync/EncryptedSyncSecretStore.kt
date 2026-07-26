@@ -24,7 +24,6 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
-import android.util.Log
 import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -67,7 +66,6 @@ class EncryptedSyncSecretStore @Inject constructor(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Throwable) {
-                    Log.w("EncryptedSyncSecretStore", "Failed to store staged passphrase")
                     // Do not rethrow; indicate failure to caller so UI can surface it.
                     return@withLock false
                 }
@@ -234,7 +232,6 @@ internal class CrashSafeSecretFile(
     private val target: File,
     private val validator: (File) -> Boolean,
 ) {
-    private val TAG = "CrashSafeSecretFile"
     private val temporary: File
         get() = File(requireNotNull(target.parentFile), "${target.name}.new")
     private val backup: File
@@ -276,15 +273,10 @@ internal class CrashSafeSecretFile(
                         val dest = File(quarantine, "${file.name}.${Instant.now().toEpochMilli()}.corrupt")
                         try {
                             Files.move(file.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
-                        } catch (moveErr: Throwable) {
-                            Log.w(TAG, "Failed to quarantine a corrupt secret artifact")
-                        }
+                        } catch (_: Throwable) { }
                     }
                 }
-                Log.w(TAG, "Quarantined corrupt secret artifacts; user will need to re-enter drive passphrase")
-            } catch (qe: Throwable) {
-                Log.w(TAG, "Failed to quarantine corrupt secret artifacts")
-            }
+            } catch (_: Throwable) { }
             return null
         }
         return null

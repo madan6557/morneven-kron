@@ -14,6 +14,9 @@ class BackupManagerLocalSnapshotSource(
     private val initialDeviceId: String = UUID.randomUUID().toString(),
 ) : LocalSnapshotSource {
     override suspend fun describe(): LocalDatasetSnapshot = withContext(Dispatchers.IO) {
+        require(database.kronDao().teamAccountCount() == 0) {
+            "Sinkronisasi privat tidak boleh memuat data Team"
+        }
         val syncState = database.kronDao().syncState() ?: SyncStateEntity(
             datasetId = initialDatasetId,
             deviceId = initialDeviceId,
@@ -37,13 +40,30 @@ class BackupManagerLocalSnapshotSource(
         )
     }
 
-    override suspend fun exportSnapshotPayload(): ByteArray = backupManager.createPortableSnapshotPayload()
+    override suspend fun exportSnapshotPayload(): ByteArray {
+        require(database.kronDao().teamAccountCount() == 0) {
+            "Sinkronisasi privat tidak boleh memuat data Team"
+        }
+        return backupManager.createPortableSnapshotPayload()
+    }
+
+    override suspend fun previewRemotePayload(
+        payload: ByteArray,
+        manifest: DriveSnapshotManifest,
+    ): ConflictPreview = backupManager.previewPortableSnapshotPayload(
+        payload = payload,
+        localSnapshotId = database.kronDao().syncState()?.lastSnapshotId,
+        remoteSnapshotId = manifest.snapshotId,
+    )
 
     override suspend fun applyRemoteAtomically(
         payload: ByteArray,
         manifest: DriveSnapshotManifest,
         account: GoogleAccountIdentity,
     ): LocalApplyOutcome {
+        require(database.kronDao().teamAccountCount() == 0) {
+            "Snapshot privat tidak boleh mengganti database yang memuat data Team"
+        }
         require(AesGcmDriveSnapshotCryptor.sha256(payload) == manifest.payloadSha256) {
             "Checksum payload Drive tidak cocok"
         }

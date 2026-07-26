@@ -34,6 +34,7 @@ interface AuthorizationClientBridge {
     ): AuthorizationClientResult
 
     suspend fun revokeAccess(account: GoogleAccountIdentity)
+    suspend fun revokeAccess(account: GoogleAccountIdentity, scopes: Set<String>) = revokeAccess(account)
     suspend fun clearToken(accessToken: String)
 }
 
@@ -66,9 +67,16 @@ class AuthorizationClientDriveSession(
     private val accountSelector: CredentialManagerAccountSelector?,
     private val authorizationClient: AuthorizationClientBridge,
     private val accountStore: SelectedGoogleAccountStore,
+    private val requestedScopes: Set<String> = setOf(DRIVE_APPDATA_SCOPE),
     private val nowEpochMillis: () -> Long = System::currentTimeMillis,
 ) : DriveAuthorizationSession {
     private var cachedGrant: CachedGrant? = null
+
+    init {
+        require(requestedScopes == setOf(DRIVE_APPDATA_SCOPE) || requestedScopes == setOf(DRIVE_FILE_SCOPE)) {
+            "Scope Google Drive tidak didukung"
+        }
+    }
 
     override suspend fun currentAccount(): GoogleAccountIdentity? = accountStore.read()
 
@@ -145,7 +153,7 @@ class AuthorizationClientDriveSession(
             Unit
         }
         if (account != null) try {
-            authorizationClient.revokeAccess(account)
+            authorizationClient.revokeAccess(account, requestedScopes)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -158,10 +166,10 @@ class AuthorizationClientDriveSession(
         account: GoogleAccountIdentity?,
         interactive: Boolean,
     ): AuthorizationClientResult {
-        val result = authorizationClient.authorize(account, setOf(DRIVE_APPDATA_SCOPE), interactive)
-        if (result is AuthorizationClientResult.Granted && interactive && DRIVE_APPDATA_SCOPE !in result.grantedScopes) {
+        val result = authorizationClient.authorize(account, requestedScopes, interactive)
+        if (result is AuthorizationClientResult.Granted && interactive && !result.grantedScopes.containsAll(requestedScopes)) {
             authorizationClient.clearToken(result.accessToken)
-            return AuthorizationClientResult.Failed("Izin appDataFolder tidak diberikan", retryable = false)
+            return AuthorizationClientResult.Failed("Izin Google Drive yang diperlukan tidak diberikan", retryable = false)
         }
         return result
     }
