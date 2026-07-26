@@ -14,6 +14,34 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class TeamWorkspaceStateTest {
     @Test
+    fun deletingCollaboratorCacheNeverDeletesOwner() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "team-member-cache.db"
+        context.deleteDatabase(name)
+        val database = KronDatabase.openPlaintextValidationDatabase(context, name)
+        try {
+            database.openHelper.writableDatabase.execSQL(
+                "INSERT INTO accounts(id,name,isActive,isArchived,createdAt,sharingMode,teamId,revision,updatedAt) " +
+                    "VALUES(1,'Team',1,0,1,'TEAM','team-1',0,1)",
+            )
+            val dao = database.kronDao()
+            dao.upsertTeamMembers(
+                listOf(
+                    TeamMemberEntity("owner", 1, "owner@example.com", role = TeamRole.OWNER, status = "ACTIVE"),
+                    TeamMemberEntity("member", 1, "member@example.com", role = TeamRole.EDITOR, status = "ACTIVE"),
+                ),
+            )
+
+            dao.deleteTeamMember(1, "member")
+
+            assertEquals(listOf("owner"), dao.teamMembers(1).map(TeamMemberEntity::permissionId))
+        } finally {
+            database.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    @Test
     fun invitationReplayMarkerIsIdempotent() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = "team-invitation-replay.db"
