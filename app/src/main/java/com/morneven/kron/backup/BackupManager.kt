@@ -131,6 +131,19 @@ class BackupManager @Inject constructor(
         }
     }
 
+    internal suspend fun validateTeamSnapshotPayload(payload: ByteArray, teamId: String): TeamSnapshotScope =
+        withContext(Dispatchers.IO) {
+            require(teamId.isNotBlank()) { "Team ID tidak valid" }
+            require(payload.isNotEmpty() && payload.size.toLong() <= MAX_SYNC_PAYLOAD_BYTES) {
+                "Snapshot Team tidak valid atau terlalu besar"
+            }
+            snapshotOperationLock.withLock {
+                withValidatedPortableCandidate(payload, "team-join") { validationFile ->
+                    TeamSnapshotPruner.validateImported(validationFile, teamId)
+                }
+            }
+        }
+
     suspend fun previewPortableSnapshotPayload(
         payload: ByteArray,
         localSnapshotId: String?,
@@ -140,21 +153,7 @@ class BackupManager @Inject constructor(
             "Snapshot Drive tidak valid atau terlalu besar"
         }
         snapshotOperationLock.withLock {
-            val workspace = File(context.cacheDir, "conflict-preview-${UUID.randomUUID()}")
-            check(workspace.mkdirs()) { "Staging Pusat Konflik tidak dapat dibuat" }
-            val validationFile = context.getDatabasePath(VALIDATION_DATABASE_NAME)
-            try {
-                val packageFile = File(workspace, "package.zip")
-                packageFile.outputStream().use { it.write(payload) }
-                val extracted = extractPackage(packageFile, workspace)
-                val format = extracted.manifest.optInt("format", -1)
-                require(format == LEGACY_FORMAT || format == CURRENT_FORMAT) { "Versi format backup tidak didukung" }
-                verifyExtractedPackage(extracted, format)
-                deleteDatabaseFiles(validationFile)
-                extracted.database.copyTo(validationFile, overwrite = true)
-                migrateAndValidateCandidate(validationFile)
-                validateDatabase(validationFile)
-
+            withValidatedPortableCandidate(payload, "conflict-preview") { validationFile ->
                 val local = readConflictDataset(localSnapshotId) { sql ->
                     database.openHelper.readableDatabase.query(sql)
                 }
@@ -166,10 +165,33 @@ class BackupManager @Inject constructor(
                     readConflictDataset(remoteSnapshotId) { sql -> candidate.rawQuery(sql, null) }
                 }
                 ConflictPreviewBuilder.build(local, remote)
-            } finally {
-                deleteDatabaseFiles(validationFile)
-                deleteScopedDirectory(workspace, context.cacheDir)
             }
+        }
+    }
+
+    private inline fun <T> withValidatedPortableCandidate(
+        payload: ByteArray,
+        directoryPrefix: String,
+        block: (File) -> T,
+    ): T {
+        val workspace = File(context.cacheDir, "$directoryPrefix-${UUID.randomUUID()}")
+        check(workspace.mkdirs()) { "Staging snapshot tidak dapat dibuat" }
+        val validationFile = context.getDatabasePath(VALIDATION_DATABASE_NAME)
+        return try {
+            val packageFile = File(workspace, "package.zip")
+            packageFile.outputStream().use { it.write(payload) }
+            val extracted = extractPackage(packageFile, workspace)
+            val format = extracted.manifest.optInt("format", -1)
+            require(format == LEGACY_FORMAT || format == CURRENT_FORMAT) { "Versi format backup tidak didukung" }
+            verifyExtractedPackage(extracted, format)
+            deleteDatabaseFiles(validationFile)
+            extracted.database.copyTo(validationFile, overwrite = true)
+            migrateAndValidateCandidate(validationFile)
+            validateDatabase(validationFile)
+            block(validationFile)
+        } finally {
+            deleteDatabaseFiles(validationFile)
+            deleteScopedDirectory(workspace, context.cacheDir)
         }
     }
 

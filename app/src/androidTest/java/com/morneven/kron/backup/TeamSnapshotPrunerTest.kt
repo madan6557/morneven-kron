@@ -31,6 +31,8 @@ class TeamSnapshotPrunerTest {
         val file = ApplicationProvider.getApplicationContext<Context>().getDatabasePath(name)
 
         TeamSnapshotPruner.prune(file, TeamSnapshotScope(1, TEAM_ID, 7))
+        assertEquals(TeamSnapshotScope(1, TEAM_ID, 7), TeamSnapshotPruner.validateImported(file, TEAM_ID))
+        assertTrue(runCatching { TeamSnapshotPruner.validateImported(file, "team-lain") }.isFailure)
 
         SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
             assertEquals(1, scalar(db, "SELECT COUNT(*) FROM accounts"))

@@ -1,0 +1,126 @@
+package com.morneven.kron.team
+
+import com.morneven.kron.BuildConfig
+import com.morneven.kron.audit.EvidenceSigningKeyManager
+import com.morneven.kron.backup.BackupManager
+import com.morneven.kron.data.KronDatabase
+import com.morneven.kron.data.TeamRole
+import com.morneven.kron.sync.GoogleAccountIdentity
+import com.morneven.kron.sync.RemoteDriveSnapshot
+import com.morneven.kron.sync.SnapshotDag
+import javax.inject.Inject
+import javax.inject.Singleton
+
+class TeamJoinPreflightResult(
+    val teamId: String,
+    val folderId: String,
+    val role: String,
+    val headSnapshotId: String,
+    val generation: Long,
+) {
+    override fun toString(): String = "TeamJoinPreflightResult(redacted)"
+}
+
+@Singleton
+class TeamJoinPreflight @Inject constructor(
+    private val database: KronDatabase,
+    private val drive: TeamDriveRestClient,
+    private val signingKeys: EvidenceSigningKeyManager,
+    private val snapshotCryptor: TeamSnapshotCryptor,
+    private val backupManager: BackupManager,
+) {
+    suspend fun verifyReadOnly(
+        accessToken: String,
+        googleAccount: GoogleAccountIdentity,
+        code: String,
+    ): TeamJoinPreflightResult {
+        check(BuildConfig.TEAM_ACCOUNT_ENABLED) { "Team Account belum aktif pada build ini" }
+        val invitation = TeamInvitationCodec.decode(code)
+        var invitationEnvelope = ByteArray(0)
+        var snapshotEnvelope = ByteArray(0)
+        var teamKey = ByteArray(0)
+        var payload = ByteArray(0)
+        try {
+            require(TeamInvitationCodec.emailMatches(invitation, googleAccount.email)) {
+                "Kode akses Team bukan untuk akun Google ini"
+            }
+            val inviteHash = TeamInvitationCodec.sha256(invitation.inviteId.toByteArray(Charsets.UTF_8))
+            require(!database.kronDao().teamInvitationWasUsed(inviteHash)) { "Kode akses Team sudah pernah digunakan" }
+
+            val workspace = drive.workspace(accessToken, invitation.folderId)
+            TeamJoinPolicy.requireCapabilities(invitation, workspace)
+            val invitationFile = TeamJoinPolicy.invitationFile(
+                drive.listFiles(accessToken, invitation.folderId, invitation.teamId),
+                invitation,
+            )
+            invitationEnvelope = drive.download(accessToken, invitationFile.fileId)
+            teamKey = TeamInvitationEnvelopeCrypto.open(invitation, invitationEnvelope, signingKeys).teamKey
+
+            val head = TeamJoinPolicy.snapshotHead(
+                drive.listSnapshots(accessToken, invitation.folderId, invitation.teamId),
+                invitation.teamId,
+            )
+            require(head.manifest.minimumAppVersionCode <= BuildConfig.VERSION_CODE) {
+                "Snapshot Team memerlukan versi KRON yang lebih baru"
+            }
+            snapshotEnvelope = drive.download(accessToken, head.fileId)
+            val opened = snapshotCryptor.decrypt(snapshotEnvelope, teamKey)
+            payload = opened.payload
+            require(opened.manifest == head.manifest) { "Metadata snapshot Team tidak cocok" }
+            val scope = backupManager.validateTeamSnapshotPayload(payload, invitation.teamId)
+            require(scope.generation == head.manifest.generation) { "Generation snapshot Team tidak cocok" }
+            return TeamJoinPreflightResult(
+                teamId = invitation.teamId,
+                folderId = invitation.folderId,
+                role = invitation.role,
+                headSnapshotId = head.manifest.snapshotId,
+                generation = head.manifest.generation,
+            )
+        } finally {
+            invitation.clear()
+            invitationEnvelope.fill(0)
+            snapshotEnvelope.fill(0)
+            teamKey.fill(0)
+            payload.fill(0)
+        }
+    }
+}
+
+internal object TeamJoinPolicy {
+    fun requireCapabilities(invitation: TeamInvitation, workspace: TeamDriveWorkspace) {
+        require(workspace.folderId == invitation.folderId) { "Workspace Team tidak cocok" }
+        require(workspace.capabilities.canRead && !workspace.capabilities.canShare && !workspace.writersCanShare) {
+            "Capability workspace Team tidak aman"
+        }
+        require(
+            when (invitation.role) {
+                TeamRole.EDITOR -> workspace.capabilities.canWrite
+                TeamRole.VIEWER -> !workspace.capabilities.canWrite
+                else -> false
+            },
+        ) { "Role undangan tidak cocok dengan capability Drive" }
+    }
+
+    fun invitationFile(files: List<TeamDriveFile>, invitation: TeamInvitation): TeamDriveFile {
+        val inviteHash = TeamInvitationCodec.sha256(invitation.inviteId.toByteArray(Charsets.UTF_8))
+        val expected = mapOf(
+            "product" to "KRON",
+            "teamId" to invitation.teamId,
+            "kind" to "invitation",
+            "invite" to inviteHash,
+            "target" to invitation.targetEmailHash,
+            "role" to invitation.role,
+            "expires" to invitation.expiresAtEpochMillis.toString(),
+            "owner" to invitation.ownerKeyFingerprint,
+        )
+        return files.filter { file ->
+            file.sizeBytes > 0 && expected.all { (key, value) -> file.appProperties[key] == value }
+        }.singleOrNull() ?: throw IllegalArgumentException("File undangan Team tidak ditemukan atau ganda")
+    }
+
+    fun snapshotHead(snapshots: List<RemoteDriveSnapshot>, teamId: String): RemoteDriveSnapshot {
+        val dag = SnapshotDag.inspect(snapshots, teamId)
+        require(dag.valid && dag.heads.size == 1) { "Snapshot Team bercabang atau tidak valid" }
+        return dag.heads.single()
+    }
+}

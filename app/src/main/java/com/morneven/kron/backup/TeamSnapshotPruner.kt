@@ -68,6 +68,25 @@ internal object TeamSnapshotPruner {
         }
     }
 
+    fun validateImported(file: File, teamId: String): TeamSnapshotScope {
+        require(teamId.isNotBlank()) { "Team ID tidak valid" }
+        return SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+            val scope = db.rawQuery(
+                """SELECT a.id,w.generation FROM accounts a
+                   JOIN team_workspaces w ON w.accountId=a.id AND w.teamId=a.teamId
+                   WHERE a.sharingMode='TEAM' AND a.teamId=?""",
+                arrayOf(teamId),
+            ).use { cursor ->
+                require(cursor.moveToFirst()) { "Identitas snapshot Team tidak ditemukan" }
+                val value = TeamSnapshotScope(cursor.getLong(0), teamId, cursor.getLong(1))
+                require(!cursor.moveToNext()) { "Snapshot Team memiliki identitas ganda" }
+                value
+            }
+            validateSnapshot(db, scope)
+            scope
+        }
+    }
+
     private fun validateGraph(db: SQLiteDatabase, scope: TeamSnapshotScope) {
         val accountId = scope.accountId.toString()
         val eventScope = "SELECT id FROM activity_events WHERE accountId=$accountId"
