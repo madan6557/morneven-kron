@@ -259,6 +259,8 @@ Keputusan implementasi untuk seal adalah mempertahankan `journal_seals` produksi
 
 Exporter snapshot Team membuat salinan plaintext di staging, menolak seluruh relasi graph yang keluar dari account target, menghapus seal lokal, cache collaborator, profil lokal, path receipt, identitas sync privat, dan semua row akun lain. Staging memakai `secure_delete` lalu `VACUUM` sebelum checksum agar isi row terhapus tidak tertinggal di free pages SQLite. Hanya attachment milik event account target yang boleh masuk package. Snapshot privat tetap memakai jalur lama dan tidak berubah.
 
+Generation workspace Team kini dinaikkan oleh trigger SQLite untuk mutasi account-scoped, termasuk relasi budget bertingkat, event, receipt, dan pemakaian undangan. Pergantian akun aktif dan mutasi akun privat tidak mengubah generation Team.
+
 Jaminan single-use untuk Viewer tetap menjadi release blocker. ACL Google dan email hash mencegah akun lain memakai kode, tetapi device kedua dari akun Google yang sama memiliki otoritas Drive yang sama. Marker atau envelope Drive dapat disalin sebelum dihapus, sehingga bukan jaminan kriptografis. Fase produksi harus memilih Owner-mediated approval atau coordinator tepercaya. Sampai keputusan itu diterapkan dan diuji, join Viewer tidak boleh diaktifkan pada build release.
 
 Build release tetap memakai `TEAM_ACCOUNT_ENABLED=false`. Build debug hanya memuat harness probe yang tidak menulis database KRON.

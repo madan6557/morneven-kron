@@ -1178,6 +1178,7 @@ abstract class KronDatabase : RoomDatabase() {
                     """.trimIndent())
                 }
             }
+            createTeamGenerationTriggers(db)
             val guardedTables = generationTables + listOf(
                 "cash_journal_lines",
                 "budget_journal_lines",
@@ -1208,6 +1209,83 @@ abstract class KronDatabase : RoomDatabase() {
                         END
                     """.trimIndent())
                 }
+            }
+        }
+
+        private fun createTeamGenerationTriggers(db: SupportSQLiteDatabase) {
+            if (!db.hasTable("team_workspaces")) return
+
+            db.execSQL(
+                """
+                CREATE TRIGGER IF NOT EXISTS team_generation_accounts_update
+                AFTER UPDATE ON accounts
+                WHEN OLD.name IS NOT NEW.name
+                  OR OLD.isArchived IS NOT NEW.isArchived
+                  OR OLD.archivedAt IS NOT NEW.archivedAt
+                  OR OLD.sharingMode IS NOT NEW.sharingMode
+                  OR OLD.teamId IS NOT NEW.teamId
+                  OR OLD.revision IS NOT NEW.revision
+                  OR OLD.updatedAt IS NOT NEW.updatedAt
+                  OR OLD.lastWriterId IS NOT NEW.lastWriterId
+                BEGIN
+                    UPDATE team_workspaces
+                    SET generation = generation + 1,
+                        updatedAt = strftime('%s','now') * 1000
+                    WHERE accountId = NEW.id;
+                END
+                """.trimIndent(),
+            )
+
+            val accountExpressions = mapOf(
+                "categories" to "{row}.accountId",
+                "portfolios" to "{row}.accountId",
+                "budget_periods" to "(SELECT accountId FROM portfolios WHERE id={row}.portfolioId)",
+                "allocations" to "(SELECT f.accountId FROM budget_periods p JOIN portfolios f ON f.id=p.portfolioId WHERE p.id={row}.periodId)",
+                "portfolio_allocation_templates" to "(SELECT accountId FROM portfolios WHERE id={row}.portfolioId)",
+                "recurring_rules" to "{row}.accountId",
+            )
+            accountExpressions.filterKeys { db.hasTable(it) }.forEach { (table, expression) ->
+                listOf("INSERT", "UPDATE", "DELETE").forEach { operation ->
+                    val rows = when (operation) {
+                        "INSERT" -> listOf("NEW")
+                        "DELETE" -> listOf("OLD")
+                        else -> listOf("OLD", "NEW")
+                    }
+                    val accountIds = rows.joinToString(" UNION ") { row ->
+                        "SELECT ${expression.replace("{row}", row)}"
+                    }
+                    db.execSQL(
+                        """
+                        CREATE TRIGGER IF NOT EXISTS team_generation_${table}_${operation.lowercase()}
+                        AFTER $operation ON $table
+                        BEGIN
+                            UPDATE team_workspaces
+                            SET generation = generation + 1,
+                                updatedAt = strftime('%s','now') * 1000
+                            WHERE accountId IN ($accountIds);
+                        END
+                        """.trimIndent(),
+                    )
+                }
+            }
+
+            mapOf(
+                "activity_events" to "NEW.accountId",
+                "receipts" to "(SELECT accountId FROM activity_events WHERE id=NEW.eventId)",
+                "team_invitation_uses" to "(SELECT accountId FROM team_workspaces WHERE teamId=NEW.teamId)",
+            ).filterKeys { db.hasTable(it) }.forEach { (table, accountId) ->
+                db.execSQL(
+                    """
+                    CREATE TRIGGER IF NOT EXISTS team_generation_${table}_insert
+                    AFTER INSERT ON $table
+                    BEGIN
+                        UPDATE team_workspaces
+                        SET generation = generation + 1,
+                            updatedAt = strftime('%s','now') * 1000
+                        WHERE accountId = $accountId;
+                    END
+                    """.trimIndent(),
+                )
             }
         }
 

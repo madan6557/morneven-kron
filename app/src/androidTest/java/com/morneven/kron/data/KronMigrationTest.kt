@@ -451,6 +451,29 @@ class KronMigrationTest {
                 assertTrue(cursor.moveToFirst())
                 assertEquals(0, cursor.getInt(0))
             }
+            execSQL("UPDATE accounts SET sharingMode='TEAM',teamId='team-15' WHERE id=1")
+            execSQL("INSERT INTO team_workspaces(accountId,teamId,folderId,localRole,ownerSubjectHash,generation,status,canRead,canWrite,canShare,updatedAt) VALUES(1,'team-15','folder-15','OWNER','owner-hash',0,'LOCAL_ONLY',1,1,1,0)")
+            execSQL("UPDATE accounts SET isActive=0 WHERE id=1")
+            query("SELECT generation FROM team_workspaces WHERE accountId=1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0L, cursor.getLong(0))
+            }
+            execSQL("UPDATE accounts SET name='Team Utama' WHERE id=1")
+            execSQL("UPDATE categories SET accountId=1 WHERE id=1")
+            execSQL("UPDATE portfolios SET name='Team Bulanan' WHERE id=1")
+            execSQL("UPDATE budget_periods SET status='CLOSED' WHERE id=1")
+            execSQL("UPDATE allocations SET plannedAmount=51000 WHERE id=1")
+            execSQL("UPDATE portfolio_allocation_templates SET plannedAmount=51000 WHERE id=1")
+            execSQL("UPDATE recurring_rules SET title='Team Rutin' WHERE id='rule-14'")
+            execSQL("INSERT INTO activity_events(id,type,title,note,source,effectiveEpochDay,createdAt,accountId) VALUES('team-event-15','INCOME','Team','','USER',2,22,1)")
+            execSQL("INSERT INTO receipts(id,eventId,localPath,storageId,displayName,mimeType,byteSize,sha256,encryptionVersion,createdAt,origin) VALUES(2,'team-event-15',NULL,'storage-team-15','Team.jpg','image/jpeg',1,'def456',0,23,'IMPORT')")
+            execSQL("INSERT INTO team_invitation_uses(inviteIdHash,teamId,usedAt) VALUES('invite-hash-15','team-15',24)")
+            execSQL("INSERT INTO accounts(id,name,isActive,isArchived,createdAt) VALUES(2,'Privat',0,0,25)")
+            execSQL("UPDATE accounts SET name='Privat Baru' WHERE id=2")
+            query("SELECT generation FROM team_workspaces WHERE accountId=1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(10L, cursor.getLong(0))
+            }
             query("PRAGMA foreign_key_check").use { cursor -> assertFalse(cursor.moveToFirst()) }
             query("PRAGMA integrity_check").use { cursor -> assertTrue(cursor.moveToFirst()); assertEquals("ok", cursor.getString(0)) }
             close()
