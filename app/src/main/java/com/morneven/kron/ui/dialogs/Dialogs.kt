@@ -840,7 +840,15 @@ fun AuditDialog(
     var correctedTitle by remember(event.id) { mutableStateOf(event.title) }
     var correctedNote by remember(event.id) { mutableStateOf(event.note) }
     val lifecycleEvent = event.type in setOf("ARCHIVE", "RESTORE")
-    val receipts = state.receipts.filter { it.eventId == event.id }
+    val isAttachEvidence = event.type == "ATTACH_EVIDENCE"
+    val parentEvent = if (isAttachEvidence && event.relatedEventId != null) {
+        state.activities.firstOrNull { it.id == event.relatedEventId }
+    } else null
+    val receipts = if (isAttachEvidence && parentEvent != null) {
+        state.receipts.filter { it.eventId == parentEvent.id }
+    } else {
+        state.receipts.filter { it.eventId == event.id }
+    }
     val actionEnabled = !lifecycleEvent && event.reversedByEventId == null && event.type != "REVERSAL" &&
         reason.isNotBlank() && (!correctionMode || correctedTitle.isNotBlank())
     FormDialog(
@@ -863,11 +871,23 @@ fun AuditDialog(
             .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss", java.util.Locale.forLanguageTag("id-ID")))
         Text("Tanggal efektif: ${LocalDate.ofEpochDay(event.effectiveEpochDay)}, $createdAtTime")
         Text("Sumber: ${event.source}")
-        Text("Dampak akun: ${displayMoney(event.cashImpact, state.valuesVisible)}")
-        Text("Dampak Vault: ${displayMoney(event.vaultImpact, state.valuesVisible)}")
-        Text("Dampak kategori: ${displayMoney(event.budgetImpact, state.valuesVisible)}")
-        Text("Debit: ${displayMoney(event.ledgerDebit, state.valuesVisible)}")
-        Text("Kredit: ${displayMoney(event.ledgerCredit, state.valuesVisible)}")
+
+        if (isAttachEvidence && parentEvent != null) {
+            HorizontalDivider()
+            Text("Transaksi induk", style = MaterialTheme.typography.titleMedium)
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(parentEvent.title, style = MaterialTheme.typography.bodyLarge)
+                Text("${parentEvent.type.replace('_', ' ')} · ${LocalDate.ofEpochDay(parentEvent.effectiveEpochDay)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (parentEvent.cashImpact != 0L) Text("Dampak akun: ${displayMoney(parentEvent.cashImpact, state.valuesVisible)}", style = MaterialTheme.typography.bodySmall)
+            }
+        } else {
+            Text("Dampak akun: ${displayMoney(event.cashImpact, state.valuesVisible)}")
+            Text("Dampak Vault: ${displayMoney(event.vaultImpact, state.valuesVisible)}")
+            Text("Dampak kategori: ${displayMoney(event.budgetImpact, state.valuesVisible)}")
+            Text("Debit: ${displayMoney(event.ledgerDebit, state.valuesVisible)}")
+            Text("Kredit: ${displayMoney(event.ledgerCredit, state.valuesVisible)}")
+        }
+
         if (event.note.isNotBlank()) Text("Catatan: ${event.note}")
         HorizontalDivider()
         Text("Foto bukti (${receipts.size})", style = MaterialTheme.typography.titleMedium)
@@ -875,8 +895,16 @@ fun AuditDialog(
             Text("Belum ada foto bukti untuk event ini.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
             receipts.take(10).forEach { receipt ->
+                val missing = runCatching { java.io.File(receipt.localPath).isFile }.getOrDefault(false).not()
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(receipt.displayName, style = MaterialTheme.typography.bodyLarge)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(receipt.displayName, style = MaterialTheme.typography.bodyLarge)
+                        if (missing) {
+                            Surface(color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f), shape = MaterialTheme.shapes.extraSmall) {
+                                Text("Hilang", modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
                     Text(
                         "${receipt.mimeType} · ${receipt.byteSize.coerceAtLeast(0) / 1024} KB · ${receipt.origin}",
                         style = MaterialTheme.typography.bodySmall,

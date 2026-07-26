@@ -44,13 +44,14 @@ object LegacyReceiptEncryption {
         attachmentStore: EncryptedAttachmentStore,
         receipt: LegacyReceipt,
     ) {
-        val source = File(receipt.localPath)
+        val source = runCatching { File(receipt.localPath) }.getOrNull()
+        require(source != null && source.isFile) { "Lampiran lama ${receipt.id} tidak ditemukan" }
         val target = attachmentStore.destination(receipt.storageId)
         val existing = target.takeIf(File::isFile)?.let { file ->
             runCatching { attachmentStore.inspect(file) }.getOrNull()
         }
         val stored = existing ?: run {
-            require(source.isFile) { "Lampiran lama ${receipt.id} tidak ditemukan" }
+            require(source != null && source.isFile) { "Lampiran lama ${receipt.id} tidak ditemukan" }
             source.inputStream().use { input -> attachmentStore.encrypt(input, receipt.storageId) }
             attachmentStore.inspect(target)
         }

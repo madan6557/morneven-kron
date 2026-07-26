@@ -81,8 +81,8 @@ class EvidencePackageManager @Inject constructor(
             var legacy = 0
             dao.allReceipts().forEach { receipt ->
                 if (receipt.origin == "LEGACY") legacy++
-                val file = File(receipt.localPath)
-                if (!file.isFile) {
+                val file = runCatching { File(receipt.localPath) }.getOrNull()
+                if (file == null || !file.isFile) {
                     missing++
                 } else {
                     val inspected = runCatching { attachmentStore.inspect(file) }.getOrNull()
@@ -299,8 +299,8 @@ class EvidencePackageManager @Inject constructor(
 
         val attachmentEntries = linkedMapOf<String, File>()
         receipts.forEach { receipt ->
-            val encrypted = File(receipt.localPath)
-            require(encrypted.isFile) { "Bukti ${receipt.id} tidak ditemukan" }
+            val encrypted = runCatching { File(receipt.localPath) }.getOrNull()
+            require(encrypted != null && encrypted.isFile) { "Bukti ${receipt.id} tidak ditemukan" }
             val inspected = attachmentStore.inspect(encrypted)
             require(inspected.sha256 == receipt.sha256 && inspected.byteSize == receipt.byteSize) { "Bukti ${receipt.id} berubah" }
             attachmentEntries["evidence/${receipt.id}-${safeFileName(receipt.displayName)}"] = encrypted

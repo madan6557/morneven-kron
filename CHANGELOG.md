@@ -16,6 +16,13 @@
 - UI hanya menampilkan `KRON 1.5.0` tanpa label Full Release atau LTS.
 - Kontrak SQLCipher passphrase KRON 1.4.7 dipertahankan tanpa rekey. Raw-key 1.4.x tetap hanya menjadi mode baca historis.
 
+## 1.5.23 - 2026-07-25
+
+- Halaman Beranda sekarang menyembunyikan log sistem (otomatisasi, rollover, reversal, arsip, pemulihan) dari daftar aktivitas terbaru.
+- Akses `ReceiptEntity.localPath` sekarang aman saat nilai path bukti hilang setelah penghapusan atau reversal.
+- AuditDialog untuk event `ATTACH_EVIDENCE` sekarang menampilkan transaksi induk (judul, tipe, tanggal, dampak akun) dan bukti yang terhubung.
+- AuditDialog sekarang menampilkan badge "Hilang" pada setiap bukti yang file-nya tidak ditemukan di disk.
+
 ## 1.5.22 - 2026-07-25
 
 - Sync on-change debounce dikurangi dari 30 detik menjadi 7 detik agar data lebih cepat muncul di perangkat lain.

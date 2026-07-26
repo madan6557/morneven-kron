@@ -267,7 +267,11 @@ fun HomeScreen(
             }
         }
 
-        val financialActivities = state.activities.filter { it.type !in setOf("TRANSFER", "CHANNEL_TRANSFER") }
+        val financialActivities = state.activities.filter {
+            it.type !in setOf("TRANSFER", "CHANNEL_TRANSFER") &&
+                it.source != "SYSTEM" &&
+                it.type !in setOf("REVERSAL", "ARCHIVE", "RESTORE", "RESTORE_REVERSAL")
+        }
         if (financialActivities.isNotEmpty()) {
             item { SectionHeader("Aktivitas terbaru", "Lihat semua", onAllActivities) }
             items(financialActivities.take(5), key = { it.id }) { activity ->

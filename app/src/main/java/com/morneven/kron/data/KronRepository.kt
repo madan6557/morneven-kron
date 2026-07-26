@@ -827,7 +827,7 @@ class KronRepository @Inject constructor(
         val deadline = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
         val expired = dao.receiptsForReversedEvents(deadline)
         for (receipt in expired) {
-            try { java.io.File(receipt.localPath).delete() } catch (_: Exception) {}
+            try { runCatching { java.io.File(receipt.localPath).delete() } } catch (_: Exception) {}
             dao.clearReceiptLocalPath(receipt.id)
         }
     }

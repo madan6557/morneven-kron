@@ -450,8 +450,8 @@ class BackupManager @Inject constructor(
     }
 
     private fun collectAttachments(receipts: List<ReceiptEntity>): List<ExportAttachment> = receipts.mapNotNull { receipt ->
-        val source = File(receipt.localPath)
-        if (!source.exists() || !source.isFile) {
+        val source = runCatching { File(receipt.localPath) }.getOrNull()
+        if (source == null || !source.exists() || !source.isFile) {
             Log.w("KRON_BACKUP", "Lampiran ${receipt.storageId} tidak ditemukan, dilewati")
             return@mapNotNull null
         }
