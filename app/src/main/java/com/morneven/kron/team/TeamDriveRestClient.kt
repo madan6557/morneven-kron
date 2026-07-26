@@ -243,7 +243,7 @@ class TeamDriveRestClient(
 
     suspend fun listSnapshots(accessToken: String, folderId: String, teamId: String): List<RemoteDriveSnapshot> =
         listFiles(accessToken, folderId, teamId).mapNotNull { file ->
-            file.snapshotManifest(teamId)?.let { manifest -> file.toRemoteSnapshot(manifest) }
+            if (!file.isSnapshot(teamId)) null else file.toRemoteSnapshot(file.snapshotManifest(teamId))
         }
 
     suspend fun download(accessToken: String, fileId: String): ByteArray = withContext(Dispatchers.IO) {
@@ -373,22 +373,27 @@ class TeamDriveRestClient(
             parentSnapshotIds.forEachIndexed { index, parent -> put("parent$index", parent) }
         }
 
-    private fun TeamDriveFile.snapshotManifest(teamId: String): DriveSnapshotManifest? = runCatching {
-        if (sizeBytes <= 0 || appProperties["product"] != "KRON" || appProperties["teamId"] != teamId || appProperties["kind"] != "snapshot") {
-            return null
-        }
+    private fun TeamDriveFile.isSnapshot(teamId: String): Boolean =
+        appProperties["product"] == "KRON" && appProperties["teamId"] == teamId && appProperties["kind"] == "snapshot"
+
+    private fun TeamDriveFile.snapshotManifest(teamId: String): DriveSnapshotManifest {
+        require(isSnapshot(teamId) && sizeBytes > 0) { "File snapshot Team tidak valid" }
         val parentCount = appProperties.getValue("parentCount").toInt()
         require(parentCount in 0..8) { "Jumlah parent snapshot Team tidak valid" }
         val parents = (0 until parentCount).map { index -> appProperties.getValue("parent$index") }
-        DriveSnapshotManifest.fromAppProperties(
+        return requireNotNull(DriveSnapshotManifest.fromAppProperties(
             appProperties + mapOf(
                 "product" to "KRON",
                 "kind" to appProperties.getValue("snapshotKind"),
                 "parent" to parents.firstOrNull().orEmpty(),
                 "parents" to parents.joinToString(","),
             ),
-        )?.also { require(it.datasetId == teamId && it.snapshotId == appProperties["snapshot"]) }
-    }.getOrNull()
+        )) { "Manifest file snapshot Team tidak valid" }.also {
+            require(it.datasetId == teamId && it.snapshotId == appProperties["snapshot"]) {
+                "Identitas file snapshot Team tidak cocok"
+            }
+        }
+    }
 
     private fun TeamDriveFile.toRemoteSnapshot(manifest: DriveSnapshotManifest) = RemoteDriveSnapshot(
         fileId = fileId,

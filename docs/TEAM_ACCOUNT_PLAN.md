@@ -263,6 +263,8 @@ Generation workspace Team kini dinaikkan oleh trigger SQLite untuk mutasi accoun
 
 Envelope snapshot Team memakai format `KRONTMS1` dengan AES-GCM dan Team key 256-bit secara langsung. Manifest protokol v2 menjadi authenticated data, checksum payload diverifikasi, key salah atau perubahan byte ditolak, dan payload tidak memakai passphrase sync privat. Upload Drive bersifat immutable serta wajib mengembalikan ukuran dan metadata yang identik. Parent DAG disimpan sebagai `parent0` sampai `parent7` pada `appProperties`, lalu direkonstruksi dan divalidasi saat listing.
 
+Publisher Team memverifikasi capability Drive dan head DAG sebelum serta sesudah upload. Metadata snapshot rusak, head tidak cocok, atau lebih dari satu head gagal tertutup ke status konflik. Aktivasi head lokal memakai compare-and-set terhadap account, team ID, generation, dan parent sehingga perubahan lokal yang terjadi selama export tidak dapat ditandai sebagai sudah tersinkron.
+
 Jaminan single-use untuk Viewer tetap menjadi release blocker. ACL Google dan email hash mencegah akun lain memakai kode, tetapi device kedua dari akun Google yang sama memiliki otoritas Drive yang sama. Marker atau envelope Drive dapat disalin sebelum dihapus, sehingga bukan jaminan kriptografis. Fase produksi harus memilih Owner-mediated approval atau coordinator tepercaya. Sampai keputusan itu diterapkan dan diuji, join Viewer tidak boleh diaktifkan pada build release.
 
 Build release tetap memakai `TEAM_ACCOUNT_ENABLED=false`. Build debug hanya memuat harness probe yang tidak menulis database KRON.

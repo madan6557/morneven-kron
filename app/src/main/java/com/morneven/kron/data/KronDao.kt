@@ -65,6 +65,36 @@ interface KronDao {
     @Query("SELECT * FROM team_members WHERE accountId = :accountId ORDER BY role, displayName, email")
     fun observeTeamMembers(accountId: Long): Flow<List<TeamMemberEntity>>
 
+    @Query("""
+        UPDATE team_workspaces
+        SET headSnapshotId = :snapshotId, status = :status, updatedAt = :updatedAt
+        WHERE accountId = :accountId AND teamId = :teamId AND generation = :generation
+          AND ((headSnapshotId IS NULL AND :expectedHead IS NULL) OR headSnapshotId = :expectedHead)
+    """)
+    suspend fun markTeamSnapshotPublished(
+        accountId: Long,
+        teamId: String,
+        generation: Long,
+        expectedHead: String?,
+        snapshotId: String,
+        status: String,
+        updatedAt: Long,
+    ): Int
+
+    @Query("""
+        UPDATE team_workspaces SET status = :status, updatedAt = :updatedAt
+        WHERE accountId = :accountId AND teamId = :teamId AND generation = :generation
+          AND ((headSnapshotId IS NULL AND :expectedHead IS NULL) OR headSnapshotId = :expectedHead)
+    """)
+    suspend fun markTeamSnapshotStatus(
+        accountId: Long,
+        teamId: String,
+        generation: Long,
+        expectedHead: String?,
+        status: String,
+        updatedAt: Long,
+    ): Int
+
     @Query("SELECT * FROM portfolios WHERE isArchived = 0 AND accountId = :accountId ORDER BY fundingPriority, createdAt")
     fun observePortfoliosForAccount(accountId: Long): Flow<List<PortfolioEntity>>
     @Query("SELECT * FROM portfolios WHERE isArchived = 1 AND accountId = :accountId ORDER BY archivedAt DESC, createdAt")

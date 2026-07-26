@@ -32,6 +32,23 @@ class TeamDriveRestClientTest {
     }
 
     @Test
+    fun listSnapshotsFailsClosedOnMalformedTeamMetadata() = runBlocking {
+        val malformed = fileJson(
+            "file-1",
+            "snapshot",
+            mapOf("product" to "KRON", "teamId" to "team-1"),
+        )
+        val client = TeamDriveRestClient(
+            endpoint = "https://drive.test",
+            connectionFactory = DriveHttpConnectionFactory { url ->
+                FakeHttpConnection(url, "{\"files\":[$malformed]}".toByteArray())
+            },
+        )
+
+        assertTrue(runCatching { client.listSnapshots("token", "folder-1", "team-1") }.isFailure)
+    }
+
+    @Test
     fun uploadSnapshotUsesImmutableFileAndChunkedParents() = runBlocking {
         lateinit var connection: FakeHttpConnection
         val response = fileJson(
