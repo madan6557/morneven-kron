@@ -2,10 +2,15 @@ package com.morneven.kron.team
 
 import com.morneven.kron.sync.DriveErrorClassifier
 import com.morneven.kron.sync.DriveHttpConnectionFactory
+import com.morneven.kron.sync.DriveJson
+import com.morneven.kron.sync.DriveSnapshotManifest
+import com.morneven.kron.sync.RemoteDriveSnapshot
+import com.morneven.kron.sync.SnapshotManifestCodec
 import com.morneven.kron.sync.readLimited
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -161,14 +166,9 @@ class TeamDriveRestClient(
         require(kind in setOf("snapshot", "blob", "invitation", "recovery", "tombstone")) { "Jenis file Team tidak valid" }
         require(bytes.isNotEmpty() && bytes.size <= MAX_FILE_BYTES) { "File Team tidak valid atau terlalu besar" }
         require(extraProperties.keys.all { it.matches(Regex("[A-Za-z0-9_.-]{1,64}")) }) { "Metadata file Team tidak valid" }
-        val properties = JSONObject().put("product", "KRON").put("teamId", teamId).put("kind", kind)
-        extraProperties.toSortedMap().forEach(properties::put)
-        val metadata = JSONObject()
-            .put("name", name)
-            .put("parents", JSONArray().put(folderId))
-            .put("appProperties", properties)
-            .toString()
-            .toByteArray(Charsets.UTF_8)
+        require(extraProperties.keys.none { it in setOf("product", "teamId", "kind") }) { "Metadata inti file Team tidak boleh diganti" }
+        val properties = mapOf("product" to "KRON", "teamId" to teamId, "kind" to kind) + extraProperties
+        val metadata = buildFileMetadata(name, folderId, properties).toByteArray(Charsets.UTF_8)
         val boundary = "kron-${UUID.randomUUID()}"
         val prefix = ("--$boundary\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n").toByteArray() +
             metadata + ("\r\n--$boundary\r\nContent-Type: application/octet-stream\r\n\r\n").toByteArray()
@@ -187,10 +187,36 @@ class TeamDriveRestClient(
                 output.write(suffix)
             }
             validate(connection)
-            parseFile(JSONObject(connection.inputStream.readLimited(MAX_RESPONSE_BYTES).toString(Charsets.UTF_8)))
+            parseFile(connection.inputStream.readLimited(MAX_RESPONSE_BYTES).toString(Charsets.UTF_8))
         } finally {
             connection.disconnect()
         }
+    }
+
+    suspend fun uploadSnapshot(
+        accessToken: String,
+        folderId: String,
+        teamId: String,
+        manifest: DriveSnapshotManifest,
+        encryptedEnvelope: ByteArray,
+    ): RemoteDriveSnapshot {
+        require(manifest.protocolVersion == 2 && manifest.datasetId == teamId) {
+            "Manifest snapshot Team tidak cocok"
+        }
+        require(manifest.snapshotId.matches(Regex("[A-Za-z0-9_.-]{1,100}"))) { "Snapshot ID Team tidak valid" }
+        val file = uploadImmutable(
+            accessToken = accessToken,
+            folderId = folderId,
+            name = "snapshot-${manifest.generation}-${manifest.snapshotId}.kronteam",
+            kind = "snapshot",
+            teamId = teamId,
+            bytes = encryptedEnvelope,
+            extraProperties = manifest.teamProperties(),
+        )
+        require(file.sizeBytes == encryptedEnvelope.size.toLong() && file.snapshotManifest(teamId) == manifest) {
+            "Metadata file snapshot Team tidak cocok"
+        }
+        return file.toRemoteSnapshot(manifest)
     }
 
     suspend fun listFiles(accessToken: String, folderId: String, teamId: String): List<TeamDriveFile> = withContext(Dispatchers.IO) {
@@ -208,13 +234,17 @@ class TeamDriveRestClient(
                 append("&fields=").append(fields).append("&pageSize=1000")
                 pageToken?.let { append("&pageToken=").append(encode(it)) }
             }
-            val json = JSONObject(request(accessToken, URL(url), "GET"))
-            val files = json.optJSONArray("files") ?: JSONArray()
-            for (index in 0 until files.length()) result += parseFile(files.getJSONObject(index))
-            pageToken = json.optString("nextPageToken").takeIf(String::isNotBlank)
+            val response = request(accessToken, URL(url), "GET")
+            result += DriveJson.arrayObjects(response, "files").map(::parseFile)
+            pageToken = DriveJson.optionalString(response, "nextPageToken")?.takeIf(String::isNotBlank)
         } while (pageToken != null)
         result
     }
+
+    suspend fun listSnapshots(accessToken: String, folderId: String, teamId: String): List<RemoteDriveSnapshot> =
+        listFiles(accessToken, folderId, teamId).mapNotNull { file ->
+            file.snapshotManifest(teamId)?.let { manifest -> file.toRemoteSnapshot(manifest) }
+        }
 
     suspend fun download(accessToken: String, fileId: String): ByteArray = withContext(Dispatchers.IO) {
         requireIdentifier(fileId, "File ID")
@@ -312,15 +342,61 @@ class TeamDriveRestClient(
         )
     }
 
-    private fun parseFile(value: JSONObject): TeamDriveFile {
-        val properties = value.optJSONObject("appProperties") ?: JSONObject()
+    private fun parseFile(value: String): TeamDriveFile {
+        val properties = DriveJson.stringObject(value, "appProperties")
         return TeamDriveFile(
-            fileId = value.getString("id"),
-            name = value.getString("name"),
-            sizeBytes = value.optString("size", "0").toLong(),
-            appProperties = properties.keys().asSequence().associateWith { properties.getString(it) },
+            fileId = DriveJson.string(value, "id"),
+            name = DriveJson.string(value, "name"),
+            sizeBytes = DriveJson.optionalStringOrNumber(value, "size")?.toLongOrNull() ?: 0,
+            appProperties = properties,
         )
     }
+
+    private fun buildFileMetadata(name: String, folderId: String, properties: Map<String, String>): String = buildString {
+        append("{\"name\":\"").append(SnapshotManifestCodec.escape(name)).append("\",")
+        append("\"parents\":[\"").append(SnapshotManifestCodec.escape(folderId)).append("\"],")
+        append("\"appProperties\":{")
+        properties.toSortedMap().entries.forEachIndexed { index, (key, value) ->
+            if (index > 0) append(',')
+            append('\"').append(SnapshotManifestCodec.escape(key)).append("\":\"")
+                .append(SnapshotManifestCodec.escape(value)).append('\"')
+        }
+        append("}}")
+    }
+
+    private fun DriveSnapshotManifest.teamProperties(): Map<String, String> = toAppProperties()
+        .filterKeys { it !in setOf("product", "kind", "parent", "parents") }
+        .toMutableMap()
+        .apply {
+            put("snapshotKind", kind.name)
+            put("parentCount", parentSnapshotIds.size.toString())
+            parentSnapshotIds.forEachIndexed { index, parent -> put("parent$index", parent) }
+        }
+
+    private fun TeamDriveFile.snapshotManifest(teamId: String): DriveSnapshotManifest? = runCatching {
+        if (sizeBytes <= 0 || appProperties["product"] != "KRON" || appProperties["teamId"] != teamId || appProperties["kind"] != "snapshot") {
+            return null
+        }
+        val parentCount = appProperties.getValue("parentCount").toInt()
+        require(parentCount in 0..8) { "Jumlah parent snapshot Team tidak valid" }
+        val parents = (0 until parentCount).map { index -> appProperties.getValue("parent$index") }
+        DriveSnapshotManifest.fromAppProperties(
+            appProperties + mapOf(
+                "product" to "KRON",
+                "kind" to appProperties.getValue("snapshotKind"),
+                "parent" to parents.firstOrNull().orEmpty(),
+                "parents" to parents.joinToString(","),
+            ),
+        )?.also { require(it.datasetId == teamId && it.snapshotId == appProperties["snapshot"]) }
+    }.getOrNull()
+
+    private fun TeamDriveFile.toRemoteSnapshot(manifest: DriveSnapshotManifest) = RemoteDriveSnapshot(
+        fileId = fileId,
+        name = name,
+        manifest = manifest,
+        createdAt = Instant.ofEpochMilli(manifest.createdAtEpochMillis),
+        sizeBytes = sizeBytes,
+    )
 
     private fun driveRole(role: String): String = when (role) {
         com.morneven.kron.data.TeamRole.EDITOR -> "writer"
