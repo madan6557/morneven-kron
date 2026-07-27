@@ -11,6 +11,7 @@ import kotlin.math.min
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
 import com.morneven.kron.sync.SyncStateBridge
+import com.morneven.kron.data.AccountSharingMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
@@ -274,6 +275,45 @@ class KronRepository @Inject constructor(
         dao.updateAccount(account.copy(isArchived = false, isActive = false, archivedAt = null).bumpRevision())
         dao.insertEvent(ActivityEventEntity(eventId, LedgerType.RESTORE, "Akun dipulihkan", reason, "USER", LocalDate.now().toEpochDay(), accountId = accountId))
         dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = reason, beforeJson = "{\"accountId\":$accountId,\"archived\":true}", afterJson = "{\"accountId\":$accountId,\"archived\":false,\"active\":false}"))
+        assertInvariant()
+    }
+
+    suspend fun leaveTeam(accountId: Long) = database.withTransaction {
+        teamAccessGuard.require(accountId, TeamCapability.READ)
+        val account = requireNotNull(dao.accountById(accountId)) { "Akun tidak ditemukan" }
+        require(account.sharingMode == AccountSharingMode.TEAM) { "Akun bukan Team" }
+        val workspace = dao.teamWorkspace(accountId) ?: error("Workspace Team tidak ditemukan")
+        val eventId = UUID.randomUUID().toString()
+        dao.updateAccount(account.copy(sharingMode = AccountSharingMode.PRIVATE, teamId = null).bumpRevision())
+        dao.deleteTeamWorkspace(workspace.teamId)
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.RESTORE, "Tinggalkan Team", "Akun dikembalikan ke mode privat", "USER", LocalDate.now().toEpochDay(), accountId = accountId))
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = "Tinggalkan Team", beforeJson = "{\"sharingMode\":\"TEAM\",\"teamId\":\"${workspace.teamId}\"}", afterJson = "{\"sharingMode\":\"PRIVATE\",\"teamId\":null}"))
+        assertInvariant()
+    }
+
+    suspend fun joinTeam(accountId: Long, inviteId: String, teamId: String, role: String) = database.withTransaction {
+        val account = requireNotNull(dao.accountById(accountId)) { "Akun tidak ditemukan" }
+        require(account.sharingMode == AccountSharingMode.PRIVATE) { "Akun bukan Private" }
+        val eventId = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        dao.updateAccount(account.copy(sharingMode = AccountSharingMode.TEAM, teamId = teamId).bumpRevision())
+        dao.upsertTeamWorkspace(TeamWorkspaceEntity(
+            accountId = accountId,
+            teamId = teamId,
+            folderId = "",
+            localRole = role,
+            ownerSubjectHash = "",
+            status = TeamWorkspaceStatus.LOCAL_ONLY,
+            updatedAt = now,
+        ))
+        val inviteIdHash = java.security.MessageDigest.getInstance("SHA-256").digest(inviteId.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+        dao.insertTeamInvitationUse(TeamInvitationUseEntity(
+            inviteIdHash = inviteIdHash,
+            teamId = teamId,
+            usedAt = now,
+        ))
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.RESTORE, "Gabung Team", "Akun bergabung ke Team", "USER", LocalDate.now().toEpochDay(), accountId = accountId))
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = "Gabung Team", beforeJson = "{\"sharingMode\":\"PRIVATE\",\"teamId\":null}", afterJson = "{\"sharingMode\":\"TEAM\",\"teamId\":\"$teamId\"}"))
         assertInvariant()
     }
 

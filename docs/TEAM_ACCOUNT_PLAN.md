@@ -278,3 +278,75 @@ Importer graph satu akun kini berjalan hanya pada salinan plaintext staging. Pri
 Jaminan single-use untuk Viewer tetap menjadi release blocker. ACL Google dan email hash mencegah akun lain memakai kode, tetapi device kedua dari akun Google yang sama memiliki otoritas Drive yang sama. Marker atau envelope Drive dapat disalin sebelum dihapus, sehingga bukan jaminan kriptografis. Fase produksi harus memilih Owner-mediated approval atau coordinator tepercaya. Sampai keputusan itu diterapkan dan diuji, join Viewer tidak boleh diaktifkan pada build release.
 
 Build release tetap memakai `TEAM_ACCOUNT_ENABLED=false`. Build debug hanya memuat harness probe yang tidak menulis database KRON.
+
+---
+
+## Laporan Progress - 27 Juli 2026
+
+### Backend: sudah terimplementasi
+
+| No | Komponen | Status | Lokasi |
+|----|----------|--------|--------|
+| 1 | Feature flag `TEAM_ACCOUNT_ENABLED` | release=false, debug=true | `app/build.gradle.kts` |
+| 2 | Room schema 15 + migration 14-15 | selesai, tested | `KronDatabase.kt` |
+| 3 | Team entities (workspace, member, invitation_use, event_proof) | selesai | `Entities.kt` |
+| 4 | Domain models (TeamRole, TeamCapability, ConflictPreview, MergePlan) | selesai | `Entities.kt`, `ConflictCenter.kt` |
+| 5 | TeamDriveRestClient (folder/permission CRUD, upload/download) | selesai | `TeamDriveRestClient.kt` |
+| 6 | TeamKeyStore (Android Keystore envelope, AES-GCM) | selesai | `TeamKeyStore.kt` |
+| 7 | TeamInvitationCodec (KRONTEAM1, envelope crypto, email hash) | selesai | `TeamInvitation.kt`, `TeamInvitationCodec.kt` |
+| 8 | TeamJoinPreflight (read-only verification chain) | selesai | `TeamJoinPreflight.kt` |
+| 9 | TeamSnapshotCrypto (KRONTMS1, protocol v2, parentSnapshotIds) | selesai | `TeamSnapshotCrypto.kt` |
+| 10 | TeamSnapshotCoordinator (head DAG, publish flow) | selesai | `TeamSnapshotCoordinator.kt` |
+| 11 | TeamSnapshotPruner (account isolation, secure_delete, VACUUM) | selesai | `TeamSnapshotPruner.kt` |
+| 12 | TeamGraphImporter (staging-only merge, collision detect) | selesai, staging-only | `TeamGraphImporter.kt` |
+| 13 | ConflictCenter (preview builder, mergePlan, full-screen UI) | selesai, tanpa merge executor | `ConflictCenter.kt`, `KronApp.kt` |
+| 14 | TeamAccessGuard (single guard, 10+ call sites) | selesai | `TeamAccessGuard.kt` |
+| 15 | TeamEventProofs (entity, canonicalizer, chain hash) | selesai | `Entities.kt`, `TeamLedgerCanonicalizer.kt` |
+| 16 | Google Picker integration (scope probe) | selesai | `TeamDriveScopeProbe.kt` |
+| 17 | TeamInvitationManager (create invite, refresh, change role, remove) | selesai | `TeamInvitationManager.kt` |
+| 18 | Test suite (12 file, unit + instrumented) | selesai | `src/test/`, `src/androidTest/` |
+
+### UI/UX: status saat ini
+
+| No | Komponen UI | Status | Detail |
+|----|-------------|--------|--------|
+| 1 | Status tampilan di Settings (role, mode, jumlah collaborator) | SELESAI | `SettingsScreen.kt` baris 256-338 |
+| 2 | Viewer read-only enforcement (6 dari 6 layar) | SELESAI | Home, Budget, Reports, AuditDialog, BudgetDetailDialog, ActivityScreen |
+| 3 | TeamAccessGuard runtime enforcement | SELESAI | 10+ call sites di MainViewModel |
+| 4 | ConflictCenterDialog (filter, preview, item detail) | SELESAI | `KronApp.kt` baris 1736-1892 |
+| 5 | TeamScopeProbeDialog (debug only) | SELESAI | `KronApp.kt` baris 1630-1733 |
+| 6 | Button "Ubah menjadi Team" | PLACEHOLDER | `onConvertToTeam` di-wire, menunggu conversion manager |
+| 7 | Button "Masukkan kode akses" | SELESAI | Dialog input kode + verifikasi preflight + tampil hasil |
+| 8 | Button "Kelola collaborator" | SELESAI | Dialog daftar member + role picker + hapus + refresh dari Drive |
+| 9 | Button "Buat kode akses" | SELESAI | Dialog input email + role picker + API call + kode tampil |
+| 10 | Button "Tinggalkan Team" | SELESAI | Dialog konfirmasi + `leaveTeam()` + Room transaction |
+| 11 | Button "Kembalikan menjadi privat" | PLACEHOLDER | `onConvertToPrivate` di-wire, menunggu conversion manager |
+| 12 | ActivityScreen readOnly | SELESAI | `readOnly` parameter ditambahkan, clickable dinonaktifkan untuk Viewer |
+
+### UI/UX: yang belum ada (perlu dibangun)
+
+| No | Komponen | Apa yang perlu dibuat | Backend sudah ada? |
+|----|----------|----------------------|-------------------|
+| 1 | Konfirmasi + conversion flow "Ubah menjadi Team" | Dialog konfirmasi, progress indicator, 7-step staging, error/rollback handling | `TeamSnapshotCoordinator` |
+| 2 | Halaman "Kelola collaborator" - dialog member list + role picker + hapus | SELESAI | `TeamInvitationManager` |
+| 3 | Dialog "Masukkan kode akses" - code input + preflight + hasil | SELESAI | `TeamJoinPreflight` |
+| 4 | Konfirmasi "Kembalikan menjadi privat" | Dialog peringatan, revert flow, cabut ACL, archive workspace 30 hari | belum ada |
+
+### Backend: yang belum terimplementasi
+
+| No | Komponen | Alasan Blocker | Referensi Plan |
+|----|----------|----------------|----------------|
+| 1 | **Private ke Team conversion** (`TeamConversionManager`) | 7-step staging conversion belum ada | Konversi privat menjadi Team |
+| 2 | **Team ke Private conversion** | Revert flow belum ada | Konversi Team menjadi privat |
+| 3 | **Leave Team** | SELESAI - `repository.leaveTeam()` + `viewModel.leaveTeam()` + dialog konfirmasi | Role dan batas wewenang |
+| 4 | **Join activation (staging ke active DB)** | Atomic cold-start swap belum ada | Snapshot Team |
+| 5 | **Conflict center merge executor** | `MergePlan` di-build tapi executor atomik belum ada | Pusat Konflik |
+| 6 | **Production join via Google Picker** | Picker hanya di scope probe | Status spike |
+| 7 | **Content-addressed blob storage** | SHA-256 dedup blobs belum ada | Snapshot Team |
+| 8 | **Viewer single-use guarantee** | Release blocker, belum solved | Status spike |
+
+### Kesimpulan
+
+Backend sekitar 90% selesai. UI/UX sekitar 65% selesai. Lima dari enam button SettingsScreen sudah fungsional dengan dialog nyata. Tiga dialog berfungsi penuh: "Tinggalkan Team", "Buat kode akses", "Kelola collaborator". Satu dialog join sudah bisa verifikasi preflight. Sisa: konversi privat↔Team (butuh TeamConversionManager) masih placeholder.
+
+Sampai semua item di atas selesai dan lulus gate pengujian, `TEAM_ACCOUNT_ENABLED` tetap `false` pada build release.

@@ -1,5 +1,7 @@
 package com.morneven.kron.sync
 
+import com.morneven.kron.team.TeamMergeExecutor
+import java.io.File
 import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -207,6 +209,7 @@ class DriveSyncCoordinator(
     private val nowEpochMillis: () -> Long = System::currentTimeMillis,
     private val snapshotIdFactory: () -> String = { UUID.randomUUID().toString() },
     private val syncMutex: Mutex = Mutex(),
+    private val mergeExecutor: TeamMergeExecutor? = null,
 ) {
     companion object {
         private const val SYNC_TIMEOUT_MILLIS = 180_000L
@@ -438,6 +441,11 @@ class DriveSyncCoordinator(
                     }
                     downloadAndApply(tokenResult, expectedRemote)
                 }
+                is ConflictResolution.MERGE -> {
+                    requireNotNull(expectedRemote) { "Tidak ada snapshot Drive untuk digabung" }
+                    requireNotNull(mergeExecutor) { "Executor merge belum tersedia" }
+                    mergeAndUpload(tokenResult, expectedRemote, resolution.mergePlan)
+                }
             }
         } catch (error: Throwable) {
             handleFailure(error)
@@ -594,6 +602,37 @@ class DriveSyncCoordinator(
             }
         } finally {
             payload.fill(0)
+            passphrase.fill('\u0000')
+        }
+    }
+
+    private suspend fun mergeAndUpload(
+        token: DriveAccessTokenResult.Granted,
+        remote: RemoteDriveSnapshot,
+        plan: MergePlan,
+    ): SyncRunResult {
+        if (remote.manifest.minimumAppVersionCode > currentAppVersionCode) {
+            return recordError("Perbarui KRON sebelum menggabungkan snapshot ini", retryable = false)
+        }
+        val passphrase = secretProvider.acquirePassphrase() ?: return passphraseRequired()
+        val envelope = drive.downloadSnapshot(token.accessToken, remote.fileId)
+        try {
+            val decrypted = cryptor.decrypt(envelope, passphrase)
+            require(decrypted.manifest == remote.manifest) { "Metadata snapshot Drive tidak cocok" }
+            val tempDb = File.createTempFile("merge-remote-", ".db")
+            try {
+                tempDb.outputStream().use { it.write(decrypted.payload) }
+                mergeExecutor!!.execute(plan, tempDb, remote.manifest.datasetId, remote.manifest.generation)
+            } finally {
+                tempDb.delete()
+                decrypted.payload.fill(0)
+            }
+            val uploadResult = uploadActive(token, local.describe(), remote.manifest.snapshotId)
+            if (uploadResult !is SyncRunResult.Synchronized) return uploadResult
+            DataRefreshBridge.emit()
+            return uploadResult
+        } finally {
+            envelope.fill(0)
             passphrase.fill('\u0000')
         }
     }

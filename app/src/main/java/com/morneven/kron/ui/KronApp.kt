@@ -110,6 +110,7 @@ import com.morneven.kron.ui.dialogs.EditAccountDialog
 import com.morneven.kron.data.AccountEntity
 import com.morneven.kron.data.AccountSharingMode
 import com.morneven.kron.data.TeamRole
+import com.morneven.kron.data.TeamMemberEntity
 import com.morneven.kron.ui.dialogs.AuditDialog
 import com.morneven.kron.ui.dialogs.BudgetDetailDialog
 import com.morneven.kron.ui.dialogs.BudgetHistoryDialog
@@ -136,6 +137,8 @@ import com.morneven.kron.sync.ConflictItemStatus
 import com.morneven.kron.sync.ConflictPreview
 import com.morneven.kron.sync.ConflictPreviewResult
 import com.morneven.kron.sync.DriveConnectResult
+import com.morneven.kron.sync.DriveAccessTokenResult
+import com.morneven.kron.team.TeamJoinPreflightResult
 import com.morneven.kron.sync.DriveSyncRuntime
 import com.morneven.kron.sync.GoogleAccountIdentity
 import com.morneven.kron.sync.SyncConflict
@@ -364,8 +367,20 @@ private fun MainScaffold(
     var showTeamScopeProbe by rememberSaveable { mutableStateOf(false) }
     var teamProbeMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var teamProbeBusy by remember { mutableStateOf(false) }
+    var showConvertToTeamConfirm by rememberSaveable { mutableStateOf(false) }
+    var showConvertToPrivateConfirm by rememberSaveable { mutableStateOf(false) }
+    var convertBusy by remember { mutableStateOf(false) }
     var pendingTeamAuthorization by remember { mutableStateOf<DriveConnectResult.UserActionRequired?>(null) }
     var pendingTeamPickerResolution by rememberSaveable { mutableStateOf<String?>(null) }
+    var showLeaveTeamConfirm by rememberSaveable { mutableStateOf(false) }
+    var showCreateInvite by rememberSaveable { mutableStateOf(false) }
+    var showJoinDialog by rememberSaveable { mutableStateOf(false) }
+    var joinCode by rememberSaveable { mutableStateOf("") }
+    var joinBusy by remember { mutableStateOf(false) }
+    var joinPreflightResult by rememberSaveable { mutableStateOf<TeamJoinPreflightResult?>(null) }
+    var showCollaboratorDialog by rememberSaveable { mutableStateOf(false) }
+    var collaboratorBusy by remember { mutableStateOf(false) }
+    var collaboratorConfirmRemove by remember { mutableStateOf<TeamMemberEntity?>(null) }
     var isAccountSwitching by remember { mutableStateOf(false) }
     var restartRequired by rememberSaveable { mutableStateOf(false) }
     var cloudWifiOnly by rememberSaveable(driveSyncRuntime) {
@@ -797,7 +812,7 @@ private fun MainScaffold(
                     readOnly = teamReadOnly,
                 )
             }
-            composable("activity") { ActivityScreen(state, { auditId = it }) }
+            composable("activity") { ActivityScreen(state, { auditId = it }, readOnly = teamReadOnly) }
             composable("reports") {
                 ReportsScreen(
                     state = state,
@@ -902,6 +917,26 @@ private fun MainScaffold(
                             viewModel.setScreenshotAllowed(false)
                         }
                     },
+                    onConvertToTeam = if (state.activeAccount?.sharingMode == AccountSharingMode.PRIVATE) {
+                        { showConvertToTeamConfirm = true }
+                    } else null,
+                    onJoinTeam = if (state.activeAccount?.sharingMode == AccountSharingMode.PRIVATE) {
+                        { showJoinDialog = true; joinCode = ""; joinPreflightResult = null }
+                    } else null,
+                    onManageCollaborators = if (state.teamWorkspace?.localRole == TeamRole.OWNER) {
+                        { showCollaboratorDialog = true }
+                    } else null,
+                    onCreateTeamInvite = if (state.teamWorkspace?.localRole == TeamRole.OWNER) {
+                        { showCreateInvite = true }
+                    } else null,
+                    onLeaveTeam = if (state.activeAccount?.sharingMode == AccountSharingMode.TEAM &&
+                        state.teamWorkspace?.localRole != TeamRole.OWNER
+                    ) {
+                        { showLeaveTeamConfirm = true }
+                    } else null,
+                    onConvertToPrivate = if (state.teamWorkspace?.localRole == TeamRole.OWNER) {
+                        { showConvertToPrivateConfirm = true }
+                    } else null,
                     onRunTeamScopeProbe = teamDriveScopeProbe?.let {
                         {
                             teamProbeMessage = if (it.hasProbe()) {
@@ -947,6 +982,65 @@ private fun MainScaffold(
                 teamProbeBusy = true
                 teamProbeMessage = null
                 scope.launch { handleTeamProbeResult(teamDriveScopeProbe.selectOwnerAndRemoveProbe()) }
+            },
+        )
+    }
+    if (showConvertToTeamConfirm && teamDriveScopeProbe != null && state.activeAccount != null) {
+        AlertDialog(
+            onDismissRequest = { if (!convertBusy) showConvertToTeamConfirm = false },
+            title = { Text("Konversi ke Team Account") },
+            text = {
+                Text("Akun ${state.activeAccount!!.name} akan dikonversi ke Team Account. " +
+                    "Workspace Team akan dibuat di Google Drive. " +
+                    "Backup database akan dibuat otomatis sebelum konversi. Lanjutkan?")
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !convertBusy,
+                    onClick = {
+                        convertBusy = true
+                        scope.launch {
+                            val tr = teamDriveScopeProbe.getAccessToken(interactive = true)
+                            if (tr is DriveAccessTokenResult.Granted) {
+                                viewModel.convertPrivateToTeam(tr.accessToken, tr.account, state.activeAccount!!.id)
+                            } else {
+                                viewModel.showMessage("Akses Google Drive diperlukan untuk konversi")
+                            }
+                            convertBusy = false
+                            showConvertToTeamConfirm = false
+                        }
+                    },
+                ) { Text("Konversi") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConvertToTeamConfirm = false }) { Text("Batal") }
+            },
+        )
+    }
+    if (showConvertToPrivateConfirm && state.activeAccount != null) {
+        AlertDialog(
+            onDismissRequest = { if (!convertBusy) showConvertToPrivateConfirm = false },
+            title = { Text("Kembali ke Private") },
+            text = {
+                Text("Akun ${state.activeAccount!!.name} akan dikembalikan ke akun Private. " +
+                    "Data Team (workspace, collaborator) akan dihapus. " +
+                    "Backup database akan dibuat otomatis. Lanjutkan?")
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !convertBusy,
+                    onClick = {
+                        convertBusy = true
+                        scope.launch {
+                            viewModel.convertTeamToPrivate(state.activeAccount!!.id)
+                            convertBusy = false
+                            showConvertToPrivateConfirm = false
+                        }
+                    },
+                ) { Text("Konversi") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConvertToPrivateConfirm = false }) { Text("Batal") }
             },
         )
     }
@@ -1034,6 +1128,295 @@ private fun MainScaffold(
         }
         ActionDialog.ACCOUNT -> AccountDialog({ dialog = null }) { name, openingCash, openingEBudget -> dialog = null; viewModel.addAccount(name, openingCash, openingEBudget) }
         null -> Unit
+    }
+    if (showLeaveTeamConfirm) {
+        val accountName = state.activeAccount?.name ?: "akun ini"
+        AlertDialog(
+            onDismissRequest = { showLeaveTeamConfirm = false },
+            title = { Text("Tinggalkan Team?") },
+            text = { Text("Anda akan keluar dari Team untuk \"$accountName\". Data Team yang sudah tersinkron tidak akan terhapus dari Drive, tetapi Anda tidak dapat lagi mengaksesnya dari perangkat ini. Kode akses baru diperlukan untuk bergabung kembali.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showLeaveTeamConfirm = false
+                    state.activeAccount?.let { viewModel.leaveTeam(it.id) }
+                }) { Text("Tinggalkan") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLeaveTeamConfirm = false }) { Text("Batal") }
+            },
+        )
+    }
+    if (showCreateInvite) {
+        var inviteEmail by rememberSaveable { mutableStateOf("") }
+        var inviteRole by rememberSaveable { mutableStateOf("EDITOR") }
+        var inviteBusy by remember { mutableStateOf(false) }
+        var inviteCode by rememberSaveable { mutableStateOf<String?>(null) }
+        AlertDialog(
+            onDismissRequest = { if (!inviteBusy) showCreateInvite = false },
+            title = { Text("Buat Kode Akses") },
+            text = {
+                if (inviteCode != null) {
+                    Column {
+                        Text("Kode akses berhasil dibuat:", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.height(8.dp))
+                        Text(inviteCode!!, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(8.dp).background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small).padding(8.dp))
+                        Spacer(Modifier.height(4.dp))
+                        Text("Bagikan kode ini kepada calon collaborator. Kode hanya berlaku 24 jam.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else {
+                    Column {
+                        OutlinedTextField(
+                            value = inviteEmail,
+                            onValueChange = { inviteEmail = it },
+                            label = { Text("Email Google") },
+                            singleLine = true,
+                            enabled = !inviteBusy,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text("Role", style = MaterialTheme.typography.labelMedium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(selected = inviteRole == "EDITOR", onClick = { inviteRole = "EDITOR" }, label = { Text("Editor") })
+                            FilterChip(selected = inviteRole == "VIEWER", onClick = { inviteRole = "VIEWER" }, label = { Text("Viewer") })
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                if (inviteCode != null) {
+                    TextButton(onClick = { showCreateInvite = false }) { Text("Selesai") }
+                } else {
+                    TextButton(
+                        onClick = {
+                            inviteBusy = true
+                            scope.launch {
+                                val tokenResult = teamDriveScopeProbe?.let { probe ->
+                                    probe.getAccessToken(interactive = true)
+                                }
+                                when (tokenResult) {
+                                    is DriveAccessTokenResult.Granted -> {
+                                        state.activeAccount?.let { acct ->
+                                            viewModel.createTeamInvite(
+                                                accessToken = tokenResult.accessToken,
+                                                account = tokenResult.account,
+                                                accountId = acct.id,
+                                                targetEmail = inviteEmail,
+                                                role = inviteRole,
+                                            ) { code ->
+                                                inviteBusy = false
+                                                inviteCode = code
+                                            }
+                                        }
+                                    }
+                                    else -> {
+                                        inviteBusy = false
+                                        viewModel.showMessage("Token Google Drive tidak tersedia")
+                                    }
+                                }
+                            }
+                        },
+                        enabled = inviteEmail.isNotBlank() && !inviteBusy,
+                    ) { Text("Buat") }
+                }
+            },
+            dismissButton = {
+                if (!inviteBusy) {
+                    TextButton(onClick = { showCreateInvite = false }) { Text("Batal") }
+                }
+            },
+        )
+    }
+    if (showJoinDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!joinBusy) { showJoinDialog = false; joinPreflightResult = null } },
+            title = { Text(if (joinPreflightResult != null) "Kode valid" else "Masukkan Kode Akses") },
+            text = {
+                val result = joinPreflightResult
+                if (result != null) {
+                    Column {
+                        Text("Kode akses Team valid. Detail workspace:")
+                        Spacer(Modifier.height(8.dp))
+                        Text("Role: ${result.role.lowercase().replaceFirstChar(Char::uppercase)}")
+                        Text("Team ID: ${result.teamId.take(8)}...")
+                        Text("Folder: ${result.folderId.take(8)}...")
+                    }
+                } else {
+                    Column {
+                        Text("Tempel kode akses yang diterima dari Owner Team:")
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = joinCode,
+                            onValueChange = { joinCode = it.uppercase() },
+                            label = { Text("Kode akses") },
+                            placeholder = { Text("KRONTEAM1.") },
+                            singleLine = true,
+                            enabled = !joinBusy,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        if (joinBusy) {
+                            Spacer(Modifier.height(8.dp))
+                            Text("Memverifikasi...", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                val preflight = joinPreflightResult
+                if (preflight != null) {
+                    if (joinBusy) {
+                        Text("Mengaktifkan...", style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        TextButton(onClick = {
+                            joinBusy = true
+                            scope.launch {
+                                val tr = teamDriveScopeProbe?.getAccessToken(interactive = true)
+                                if (tr is DriveAccessTokenResult.Granted) {
+                                    state.activeAccount?.let { acct ->
+                                        viewModel.joinTeam(tr.accessToken, tr.account, joinCode, acct.id, preflight)
+                                    }
+                                } else {
+                                    viewModel.showMessage("Token Google Drive tidak tersedia")
+                                }
+                                joinBusy = false
+                                showJoinDialog = false
+                                joinPreflightResult = null
+                            }
+                        }) { Text("Gabung") }
+                    }
+                } else {
+                    TextButton(
+                        onClick = {
+                            joinBusy = true
+                            scope.launch {
+                                val tr = teamDriveScopeProbe?.getAccessToken(interactive = true)
+                                when (tr) {
+                                    is DriveAccessTokenResult.Granted -> {
+                                        viewModel.verifyJoinCode(tr.accessToken, tr.account, joinCode) { result ->
+                                            joinPreflightResult = result
+                                            joinBusy = false
+                                        }
+                                    }
+                                    else -> {
+                                        joinBusy = false
+                                        viewModel.showMessage("Token Google Drive tidak tersedia")
+                                    }
+                                }
+                            }
+                        },
+                        enabled = joinCode.startsWith("KRONTEAM1.") && !joinBusy,
+                    ) { Text("Verifikasi") }
+                }
+            },
+            dismissButton = {
+                if (joinPreflightResult != null) {
+                    TextButton(onClick = { showJoinDialog = false; joinPreflightResult = null }) { Text("Tutup") }
+                } else {
+                    TextButton(onClick = { showJoinDialog = false }) { Text("Batal") }
+                }
+            },
+        )
+    }
+    if (showCollaboratorDialog) {
+        var collabRefreshBusy by remember { mutableStateOf(false) }
+        AlertDialog(
+            onDismissRequest = { if (!collabRefreshBusy) showCollaboratorDialog = false },
+            title = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Collaborator")
+                    if (collabRefreshBusy) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    } else {
+                        TextButton(onClick = {
+                            collabRefreshBusy = true
+                            scope.launch {
+                                val tr = teamDriveScopeProbe?.getAccessToken(interactive = false)
+                                when (tr) {
+                                    is DriveAccessTokenResult.Granted -> {
+                                        state.activeAccount?.let { acct ->
+                                            viewModel.refreshTeamMembers(tr.accessToken, tr.account, acct.id)
+                                        }
+                                        collabRefreshBusy = false
+                                    }
+                                    is DriveAccessTokenResult.UserActionRequired -> {
+                                        val tr2 = teamDriveScopeProbe?.getAccessToken(interactive = true)
+                                        when (tr2) {
+                                            is DriveAccessTokenResult.Granted -> {
+                                                state.activeAccount?.let { acct ->
+                                                    viewModel.refreshTeamMembers(tr2.accessToken, tr2.account, acct.id)
+                                                }
+                                            }
+                                            else -> viewModel.showMessage("Token Drive tidak tersedia")
+                                        }
+                                        collabRefreshBusy = false
+                                    }
+                                    else -> {
+                                        collabRefreshBusy = false
+                                        viewModel.showMessage("Token Drive tidak tersedia")
+                                    }
+                                }
+                            }
+                        }) { Text("Refresh") }
+                    }
+                }
+            },
+            text = {
+                if (state.teamMembers.isEmpty()) {
+                    Text("Belum ada collaborator. Gunakan 'Buat kode akses' untuk menambahkan member.")
+                } else {
+                    Column {
+                        state.teamMembers.forEach { member ->
+                            MemberRow(
+                                member = member,
+                                onRoleChange = { role ->
+                                    scope.launch {
+                                        val tr = teamDriveScopeProbe?.getAccessToken(interactive = true)
+                                        if (tr is DriveAccessTokenResult.Granted) {
+                                            state.activeAccount?.let { acct ->
+                                                viewModel.changeTeamMemberRole(tr.accessToken, tr.account, acct.id, member.permissionId, role)
+                                            }
+                                        } else viewModel.showMessage("Token Drive tidak tersedia")
+                                    }
+                                },
+                                onRemove = { collaboratorConfirmRemove = member },
+                            )
+                            if (member != state.teamMembers.last()) {
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showCollaboratorDialog = false }) { Text("Tutup") }
+            },
+        )
+    }
+    collaboratorConfirmRemove?.let { member ->
+        AlertDialog(
+            onDismissRequest = { collaboratorConfirmRemove = null },
+            title = { Text("Hapus collaborator?") },
+            text = { Text("${member.displayName ?: member.email} akan kehilangan akses ke workspace Team ini. Data yang sudah tersalin di perangkat member tidak dapat dihapus paksa.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        val tr = teamDriveScopeProbe?.getAccessToken(interactive = true)
+                        if (tr is DriveAccessTokenResult.Granted) {
+                            state.activeAccount?.let { acct ->
+                                viewModel.removeTeamMember(tr.accessToken, tr.account, acct.id, member.permissionId)
+                            }
+                        } else viewModel.showMessage("Token Drive tidak tersedia")
+                        collaboratorConfirmRemove = null
+                    }
+                }) { Text("Hapus", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { collaboratorConfirmRemove = null }) { Text("Batal") }
+            },
+        )
     }
     auditId?.let { id ->
         state.activities.firstOrNull { it.id == id }?.let { event ->
@@ -1912,6 +2295,38 @@ private fun ConflictEventDetails(
 }
 
 @Composable
+private fun MemberRow(
+    member: TeamMemberEntity,
+    onRoleChange: (String) -> Unit,
+    onRemove: () -> Unit,
+) {
+    Column {
+        Text(member.displayName ?: member.email, style = MaterialTheme.typography.bodyMedium)
+        if (member.displayName != null) {
+            Text(member.email, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(top = 4.dp),
+        ) {
+            FilterChip(
+                selected = member.role == "EDITOR",
+                onClick = { if (member.role != "EDITOR") onRoleChange("EDITOR") },
+                label = { Text("Editor") },
+            )
+            FilterChip(
+                selected = member.role == "VIEWER",
+                onClick = { if (member.role != "VIEWER") onRoleChange("VIEWER") },
+                label = { Text("Viewer") },
+            )
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = onRemove) { Text("Hapus", color = MaterialTheme.colorScheme.error) }
+        }
+    }
+}
+
+@Composable
 private fun ConflictMutableDetails(source: String, item: com.morneven.kron.sync.ConflictMutableRecord) {
     Text(
         "$source: revisi ${item.revision} | penulis ${item.lastWriterId.ifBlank { "tidak tersedia" }} | " +
@@ -1920,7 +2335,6 @@ private fun ConflictMutableDetails(source: String, item: com.morneven.kron.sync.
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
-
 private val conflictDateFormat = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.forLanguageTag("id-ID"))
 private val conflictDateTimeFormat = DateTimeFormatter.ofPattern("d MMM yyyy, HH.mm", Locale.forLanguageTag("id-ID"))
 

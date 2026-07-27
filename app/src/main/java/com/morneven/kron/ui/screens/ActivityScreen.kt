@@ -60,7 +60,7 @@ import kotlin.math.min
 import kotlinx.coroutines.flow.distinctUntilChanged
 
 @Composable
-fun ActivityScreen(state: KronUiState, onEvent: (String) -> Unit, modifier: Modifier = Modifier) {
+fun ActivityScreen(state: KronUiState, onEvent: (String) -> Unit, modifier: Modifier = Modifier, readOnly: Boolean = false) {
     var typeFilter by rememberSaveable { mutableStateOf(ActivityFilter.ALL) }
     var dateFilter by rememberSaveable { mutableStateOf(ActivityDateRange.ALL) }
     var query by rememberSaveable { mutableStateOf("") }
@@ -153,7 +153,7 @@ fun ActivityScreen(state: KronUiState, onEvent: (String) -> Unit, modifier: Modi
                     color = MaterialTheme.colorScheme.tertiary,
                     modifier = Modifier.padding(top = 6.dp),
                 )
-                is ActivityTimelineItem.Event -> ActivityCard(item.value, state.valuesVisible, onEvent)
+                is ActivityTimelineItem.Event -> ActivityCard(item.value, state.valuesVisible, onEvent, readOnly)
             }
         }
         item { Spacer(Modifier.height(80.dp)) }
@@ -185,7 +185,7 @@ private fun ActivitySearchField(query: String, onQuery: (String) -> Unit, focusM
 }
 
 @Composable
-private fun ActivityCard(event: ActivityRow, valuesVisible: Boolean, onEvent: (String) -> Unit) {
+private fun ActivityCard(event: ActivityRow, valuesVisible: Boolean, onEvent: (String) -> Unit, readOnly: Boolean = false) {
     val impact = event.primaryImpact()
     val money = displayMoney(impact, valuesVisible)
     val reversed = event.reversedByEventId != null
@@ -193,7 +193,7 @@ private fun ActivityCard(event: ActivityRow, valuesVisible: Boolean, onEvent: (S
     HudCard(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onEvent(event.id) }
+            .then(if (readOnly) Modifier else Modifier.clickable { onEvent(event.id) })
             .semantics(mergeDescendants = true) { role = Role.Button },
     ) {
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -232,7 +232,8 @@ private fun ActivityCard(event: ActivityRow, valuesVisible: Boolean, onEvent: (S
                 Text(event.note, style = MaterialTheme.typography.bodySmall, maxLines = 4, overflow = TextOverflow.Ellipsis)
             }
             Text(
-                if (auditOnly) "Ketuk untuk melihat audit" else "Ketuk untuk melihat audit atau membuat koreksi",
+                if (readOnly) "Mode baca - akun Team Viewer"
+                else if (auditOnly) "Ketuk untuk melihat audit" else "Ketuk untuk melihat audit atau membuat koreksi",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
             )

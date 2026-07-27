@@ -272,6 +272,7 @@ interface KronDao {
     @Query("DELETE FROM team_members WHERE accountId = :accountId") suspend fun clearTeamMembers(accountId: Long)
     @Query("DELETE FROM team_members WHERE accountId = :accountId AND permissionId = :permissionId")
     suspend fun deleteTeamMember(accountId: Long, permissionId: String)
+    @Query("DELETE FROM team_workspaces WHERE teamId = :teamId") suspend fun deleteTeamWorkspace(teamId: String)
     @Query("SELECT EXISTS(SELECT 1 FROM team_invitation_uses WHERE inviteIdHash = :inviteIdHash)") suspend fun teamInvitationWasUsed(inviteIdHash: String): Boolean
     @Query("SELECT * FROM team_event_proofs WHERE eventId = :eventId LIMIT 1") suspend fun teamEventProof(eventId: String): TeamEventProofEntity?
     @Query("SELECT * FROM team_event_proofs WHERE chainId = :chainId ORDER BY sequence DESC LIMIT 1") suspend fun latestTeamEventProof(chainId: String): TeamEventProofEntity?

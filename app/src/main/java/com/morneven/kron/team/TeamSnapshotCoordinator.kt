@@ -5,12 +5,15 @@ import com.morneven.kron.backup.BackupManager
 import com.morneven.kron.data.KronDatabase
 import com.morneven.kron.data.TeamAccessGuard
 import com.morneven.kron.data.TeamCapability
+import com.morneven.kron.data.ReceiptEntity
 import com.morneven.kron.data.TeamWorkspaceStatus
+import com.morneven.kron.security.EncryptedAttachmentStore
 import com.morneven.kron.sync.AesGcmDriveSnapshotCryptor
 import com.morneven.kron.sync.DriveSnapshotManifest
 import com.morneven.kron.sync.RemoteDriveSnapshot
 import com.morneven.kron.sync.SnapshotKind
 import com.morneven.kron.sync.SnapshotDag
+import java.io.ByteArrayOutputStream
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -27,6 +30,8 @@ class TeamSnapshotCoordinator @Inject constructor(
     private val keyStore: TeamKeyStore,
     private val drive: TeamDriveRestClient,
     private val cryptor: TeamSnapshotCryptor,
+    private val attachmentStore: EncryptedAttachmentStore,
+    private val blobStore: TeamBlobStore? = null,
 ) {
     suspend fun publish(accessToken: String, accountId: Long): RemoteDriveSnapshot {
         check(BuildConfig.TEAM_ACCOUNT_ENABLED) { "Team Account belum aktif pada build ini" }
@@ -95,12 +100,43 @@ class TeamSnapshotCoordinator @Inject constructor(
                 updatedAt = System.currentTimeMillis(),
             )
             if (updated != 1) throw TeamSnapshotConflictException()
+            try {
+                uploadReceiptBlobs(accessToken, accountId, teamKey)
+            } catch (_: Exception) {
+                // ponytail: gagal upload bukti bukan kegagalan snapshot
+            }
             return uploaded
         } finally {
             teamKey.fill(0)
             payload.fill(0)
             envelope.fill(0)
         }
+    }
+
+    suspend fun uploadReceiptBlobs(
+        accessToken: String,
+        accountId: Long,
+        teamKey: ByteArray,
+    ): Map<String, TeamBlobReference> {
+        val blobStore = requireNotNull(blobStore) { "Blob store belum dikonfigurasi" }
+        val workspace = requireNotNull(database.kronDao().teamWorkspace(accountId)) { "Workspace tidak ditemukan" }
+        val receipts = database.kronDao().receiptsForAccount(accountId)
+            .filter { !it.localPath.isNullOrBlank() }
+        val refs = mutableMapOf<String, TeamBlobReference>()
+        for (receipt in receipts) {
+            val plaintext = decryptReceipt(receipt)
+            val ref = blobStore.upload(accessToken, workspace.folderId, workspace.teamId, plaintext, teamKey)
+            refs[receipt.storageId] = ref
+        }
+        return refs
+    }
+
+    private fun decryptReceipt(receipt: ReceiptEntity): ByteArray {
+        val file = java.io.File(requireNotNull(receipt.localPath) { "File bukti ${receipt.storageId} tidak ditemukan" })
+        if (receipt.encryptionVersion != EncryptedAttachmentStore.ENCRYPTION_VERSION) return file.readBytes()
+        val bos = ByteArrayOutputStream()
+        attachmentStore.decrypt(file, bos)
+        return bos.toByteArray()
     }
 
     private suspend fun markConflict(accountId: Long, teamId: String, generation: Long, expectedHead: String?) {

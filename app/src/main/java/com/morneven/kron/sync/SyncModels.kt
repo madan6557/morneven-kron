@@ -177,10 +177,11 @@ data class SyncConflict(
     val remoteHeads: List<RemoteDriveSnapshot> = listOfNotNull(remote),
 )
 
-enum class ConflictResolution {
-    KEEP_BOTH,
-    USE_THIS_DEVICE,
-    USE_DRIVE,
+sealed interface ConflictResolution {
+    data object KEEP_BOTH : ConflictResolution
+    data object USE_THIS_DEVICE : ConflictResolution
+    data object USE_DRIVE : ConflictResolution
+    data class MERGE(val mergePlan: MergePlan) : ConflictResolution
 }
 
 sealed interface SyncRunResult {

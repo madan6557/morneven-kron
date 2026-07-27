@@ -28,10 +28,26 @@ import com.morneven.kron.data.ScheduleCalculator
 import com.morneven.kron.data.SyncStateEntity
 import com.morneven.kron.data.TransactionDirection
 import com.morneven.kron.data.TransactionSplitEntity
+import com.morneven.kron.audit.EvidenceSigningKeyManager
 import com.morneven.kron.data.TeamAccessGuard
 import com.morneven.kron.data.TeamCapability
 import com.morneven.kron.data.TeamMemberEntity
+import com.morneven.kron.data.TeamRole
 import com.morneven.kron.data.TeamWorkspaceEntity
+import com.morneven.kron.team.ConversionRequest
+import com.morneven.kron.team.TeamConversionManager
+import com.morneven.kron.team.TeamInvitationCodec
+import com.morneven.kron.team.TeamInvitationEnvelopeCrypto
+import com.morneven.kron.team.TeamDriveRestClient
+import com.morneven.kron.team.TeamInvitationManager
+import com.morneven.kron.team.TeamJoinPolicy
+import com.morneven.kron.team.TeamJoinPreflight
+import com.morneven.kron.team.TeamJoinPreflightResult
+import com.morneven.kron.team.TeamKeyStore
+import com.morneven.kron.team.TeamSnapshotCoordinator
+import com.morneven.kron.team.TeamSnapshotConflictException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.morneven.kron.preferences.PrivacyPreferences
 import com.morneven.kron.report.CsvExporter
 import com.morneven.kron.security.ImageCompressor
@@ -160,6 +176,13 @@ class MainViewModel @Inject constructor(
     private val imageCompressor: ImageCompressor,
     private val evidencePackageManager: EvidencePackageManager,
     private val teamAccessGuard: TeamAccessGuard,
+    private val teamInvitationManager: TeamInvitationManager,
+    private val teamKeyStore: TeamKeyStore,
+    private val teamJoinPreflight: TeamJoinPreflight,
+    private val signingKeys: EvidenceSigningKeyManager,
+    private val teamSnapshotCoordinator: TeamSnapshotCoordinator,
+    private val teamConversionManager: TeamConversionManager,
+    private val teamDriveClient: TeamDriveRestClient,
 ) : ViewModel() {
     private val message = MutableStateFlow<String?>(null)
     private val sessionVisibility = MutableStateFlow<Boolean?>(null)
@@ -484,6 +507,137 @@ class MainViewModel @Inject constructor(
 
     fun restoreAccount(accountId: Long, reason: String) = runAction("Akun dipulihkan") {
         repository.restoreAccount(accountId, reason)
+    }
+
+    fun leaveTeam(accountId: Long) = runAction("Berhasil keluar dari Team") {
+        val workspace = repository.teamWorkspace.first()
+            ?: error("Tidak ada workspace Team aktif")
+        teamKeyStore.clear(workspace.teamId)
+        repository.leaveTeam(accountId)
+    }
+
+    fun createTeamInvite(
+        accessToken: String,
+        account: GoogleAccountIdentity,
+        accountId: Long,
+        targetEmail: String,
+        role: String,
+        onCode: (String) -> Unit,
+    ) = viewModelScope.launch {
+        runCatching {
+            teamInvitationManager.create(accessToken, account, accountId, targetEmail, role)
+        }
+            .onSuccess { result -> onCode(result.code) }
+            .onFailure {
+                if (it is CancellationException) throw it
+                message.value = it.message ?: "Gagal membuat kode akses"
+            }
+    }
+
+    fun refreshTeamMembers(
+        accessToken: String,
+        account: GoogleAccountIdentity,
+        accountId: Long,
+    ) = viewModelScope.launch {
+        runCatching {
+            teamInvitationManager.refreshMembers(accessToken, account, accountId)
+        }
+            .onFailure {
+                if (it is CancellationException) throw it
+                message.value = it.message ?: "Gagal memperbarui daftar collaborator"
+            }
+    }
+
+    fun changeTeamMemberRole(
+        accessToken: String,
+        account: GoogleAccountIdentity,
+        accountId: Long,
+        permissionId: String,
+        role: String,
+    ) = runAction("Role collaborator diperbarui") {
+        teamInvitationManager.changeRole(accessToken, account, accountId, permissionId, role)
+    }
+
+    fun removeTeamMember(
+        accessToken: String,
+        account: GoogleAccountIdentity,
+        accountId: Long,
+        permissionId: String,
+    ) = runAction("Collaborator dihapus") {
+        teamInvitationManager.removeMember(accessToken, account, accountId, permissionId)
+    }
+
+    fun publishTeamSnapshot(
+        accessToken: String,
+        accountId: Long,
+    ) = runAction("Snapshot Team berhasil diunggah") {
+        teamSnapshotCoordinator.publish(accessToken, accountId)
+    }
+
+    fun verifyJoinCode(
+        accessToken: String,
+        googleAccount: GoogleAccountIdentity,
+        code: String,
+        onResult: (TeamJoinPreflightResult) -> Unit,
+    ) = viewModelScope.launch {
+        runCatching {
+            teamJoinPreflight.verifyReadOnly(accessToken, googleAccount, code)
+        }
+            .onSuccess { result -> onResult(result) }
+            .onFailure {
+                if (it is CancellationException) throw it
+                message.value = it.message ?: "Kode akses tidak valid"
+            }
+    }
+
+    fun convertPrivateToTeam(
+        accessToken: String,
+        account: GoogleAccountIdentity,
+        accountId: Long,
+    ) = runAction("Akun berhasil dikonversi ke Team") {
+        val teamId = java.util.UUID.randomUUID().toString()
+        val workspace = teamDriveClient.createWorkspace(accessToken, teamId)
+        val subjectHash = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(account.subjectId.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        val request = ConversionRequest(
+            teamId = teamId,
+            folderId = workspace.folderId,
+            localRole = TeamRole.OWNER,
+            ownerSubjectHash = subjectHash,
+            ownerEmail = account.email,
+            ownerDisplayName = account.displayName,
+        )
+        val result = teamConversionManager.convertPrivateToTeam(listOf(accountId), request)
+        message.value = "Akun dikonversi ke Team. Backup pra-konversi: ${result.preConversionBackupPath}"
+    }
+
+    fun convertTeamToPrivate(accountId: Long) =
+        runAction("Akun berhasil dikonversi ke Private") {
+            val workspace = repository.teamWorkspace.first()
+                ?: error("Tidak ada workspace Team aktif")
+            teamKeyStore.clear(workspace.teamId)
+            teamConversionManager.convertTeamToPrivate(listOf(accountId))
+        }
+
+    fun joinTeam(
+        accessToken: String,
+        googleAccount: GoogleAccountIdentity,
+        code: String,
+        accountId: Long,
+        preflightResult: TeamJoinPreflightResult,
+    ) = runAction("Berhasil bergabung ke Team") {
+        val invitation = TeamInvitationCodec.decode(code)
+        val files = teamDriveClient.listFiles(accessToken, preflightResult.folderId, preflightResult.teamId)
+        val envelopeFile = TeamJoinPolicy.invitationFile(files, invitation)
+        val envelope = teamDriveClient.download(accessToken, envelopeFile.fileId)
+        val opened = TeamInvitationEnvelopeCrypto.open(invitation, envelope, signingKeys)
+        try {
+            teamKeyStore.store(preflightResult.teamId, opened.teamKey)
+            repository.joinTeam(accountId, invitation.inviteId, preflightResult.teamId, preflightResult.role)
+        } finally {
+            opened.teamKey.fill(0)
+        }
     }
 
     fun addIncome(

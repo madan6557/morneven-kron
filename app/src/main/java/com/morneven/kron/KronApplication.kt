@@ -12,6 +12,7 @@ import androidx.work.WorkManager
 import com.morneven.kron.automation.AutomationWorker
 import com.morneven.kron.backup.BackupManager
 import com.morneven.kron.security.SqlCipherLibrary
+import com.morneven.kron.team.TeamAtomicSwap
 import com.morneven.kron.sync.DriveSyncRuntimeFactory
 import dagger.hilt.android.HiltAndroidApp
 import java.util.concurrent.TimeUnit
@@ -31,6 +32,7 @@ class KronApplication : Application() {
         super.attachBaseContext(base)
         SqlCipherLibrary.ensureLoaded()
         BackupManager.applyPendingRestore(this)
+        TeamAtomicSwap.applyPendingSwap(this)
     }
 
     override fun onCreate() {

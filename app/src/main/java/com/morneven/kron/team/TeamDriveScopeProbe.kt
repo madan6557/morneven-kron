@@ -45,6 +45,8 @@ class TeamDriveScopeProbe internal constructor(
 
     suspend fun connect(): DriveConnectResult = authorization.connect()
 
+    suspend fun getAccessToken(interactive: Boolean = true): DriveAccessTokenResult = authorization.accessToken(interactive)
+
     suspend fun selectMemberAccount(): TeamScopeProbeResult = try {
         val account = accountSelector.selectAccount()
         requireMember(account)

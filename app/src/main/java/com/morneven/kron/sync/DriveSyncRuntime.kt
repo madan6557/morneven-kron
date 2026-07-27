@@ -9,6 +9,7 @@ import androidx.activity.result.IntentSenderRequest
 import com.morneven.kron.BuildConfig
 import com.morneven.kron.backup.BackupManager
 import com.morneven.kron.data.KronDatabase
+import com.morneven.kron.team.TeamMergeExecutor
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
@@ -403,6 +404,7 @@ class DriveSyncRuntimeFactory @Inject constructor(
     private val database: KronDatabase,
     private val backupManager: BackupManager,
     private val secretStore: EncryptedSyncSecretStore,
+    private val mergeExecutor: TeamMergeExecutor,
 ) {
     private val syncPreferences = context.getSharedPreferences(SYNC_PREFERENCES, Context.MODE_PRIVATE)
     private val accountStore = PreferencesSelectedGoogleAccountStore(context)
@@ -559,6 +561,7 @@ class DriveSyncRuntimeFactory @Inject constructor(
         secretProvider = secretStore,
         currentAppVersionCode = BuildConfig.VERSION_CODE,
         syncMutex = processSyncMutex,
+        mergeExecutor = mergeExecutor,
     )
 
     internal suspend fun installAccountMigration(account: GoogleAccountIdentity): SyncRunResult {
