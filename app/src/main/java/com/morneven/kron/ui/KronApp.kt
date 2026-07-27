@@ -21,6 +21,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -28,6 +29,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -60,6 +62,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -103,6 +106,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.morneven.kron.BuildConfig
 import com.morneven.kron.R
 import com.morneven.kron.automation.AutomationWorker
 import com.morneven.kron.ui.dialogs.AccountDialog
@@ -381,8 +385,20 @@ private fun MainScaffold(
     var showCollaboratorDialog by rememberSaveable { mutableStateOf(false) }
     var collaboratorBusy by remember { mutableStateOf(false) }
     var collaboratorConfirmRemove by remember { mutableStateOf<TeamMemberEntity?>(null) }
+    var showOneTimeOfferDialog by rememberSaveable { mutableStateOf(false) }
+    var oneTimeOfferCode by rememberSaveable { mutableStateOf<String?>(null) }
+    var showOneTimeOpenDialog by rememberSaveable { mutableStateOf(false) }
+    var oneTimeCapsuleCode by rememberSaveable { mutableStateOf("") }
     var isAccountSwitching by remember { mutableStateOf(false) }
     var restartRequired by rememberSaveable { mutableStateOf(false) }
+    val oneTimeOfferManager = remember {
+        com.morneven.kron.sharing.onetime.OneTimeOfferManager(activity.applicationContext)
+    }
+    var oneTimeScopeBusy by remember { mutableStateOf(false) }
+    var oneTimeSelectedScope by rememberSaveable { mutableStateOf("Last30Days") }
+    var showOneTimeScopePicker by rememberSaveable { mutableStateOf(false) }
+    var showOneTimeApprovalDialog by remember { mutableStateOf(false) }
+    var oneTimePendingApprovals by remember { mutableStateOf<List<com.morneven.kron.sharing.onetime.OfferRecord>>(emptyList()) }
     var cloudWifiOnly by rememberSaveable(driveSyncRuntime) {
         mutableStateOf(driveSyncRuntime?.isWifiOnly() ?: false)
     }
@@ -947,6 +963,27 @@ private fun MainScaffold(
                             showTeamScopeProbe = true
                         }
                     },
+                    onCreateOneTimeOffer = if (BuildConfig.ONE_TIME_VIEW_ENABLED &&
+                        state.activeAccount?.sharingMode == AccountSharingMode.TEAM &&
+                        state.teamWorkspace?.localRole == TeamRole.OWNER
+                    ) {
+                        { showOneTimeScopePicker = true; oneTimeOfferCode = null; oneTimeSelectedScope = "Last30Days" }
+                    } else null,
+                    onOpenOneTimeCapsule = if (BuildConfig.ONE_TIME_VIEW_ENABLED) {
+                        { showOneTimeOpenDialog = true; oneTimeCapsuleCode = "" }
+                    } else null,
+                    onViewOneTimeApprovals = if (BuildConfig.ONE_TIME_VIEW_ENABLED &&
+                        state.activeAccount?.sharingMode == AccountSharingMode.TEAM &&
+                        state.teamWorkspace?.localRole == TeamRole.OWNER
+                    ) {
+                        {
+                            oneTimePendingApprovals = oneTimeOfferManager.getPendingApprovals()
+                            showOneTimeApprovalDialog = true
+                        }
+                    } else null,
+                    oneTimePendingApprovalCount = oneTimeOfferManager.getPendingApprovals().size,
+                    driveSyncConnected = cloudBackupState.status != CloudSyncStatus.UNAVAILABLE &&
+                        cloudBackupState.status != CloudSyncStatus.NOT_CONNECTED,
                 )
             }
         }
@@ -1415,6 +1452,151 @@ private fun MainScaffold(
             },
             dismissButton = {
                 TextButton(onClick = { collaboratorConfirmRemove = null }) { Text("Batal") }
+            },
+        )
+    }
+    if (showOneTimeOfferDialog) {
+        AlertDialog(
+            onDismissRequest = { showOneTimeOfferDialog = false; oneTimeOfferCode = null },
+            title = { Text("Buat Tautan Sekali Buka") },
+            text = {
+                if (oneTimeOfferCode != null) {
+                    Column {
+                        Text("Tautan berhasil dibuat:", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.height(8.dp))
+                        Text(oneTimeOfferCode!!, style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(8.dp)
+                                .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)
+                                .padding(8.dp))
+                        Spacer(Modifier.height(8.dp))
+                        Text("Bagikan tautan ini kepada penerima. Tautan hanya dapat digunakan satu kali.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else if (oneTimeScopeBusy) {
+                    Column {
+                        CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+                        Spacer(Modifier.height(8.dp))
+                        Text("Membuat kapsul...", modifier = Modifier.align(Alignment.CenterHorizontally))
+                    }
+                } else {
+                    Column {
+                        Text("Pilih rentang data yang akan dibagikan:", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.height(8.dp))
+                        val scopes = listOf("Last30Days" to "30 Hari Terakhir", "CurrentMonthReport" to "Bulan Ini", "CurrentSummary" to "Semua Data", "CurrentFullSnapshot" to "Full Snapshot")
+                        scopes.forEach { (value, label) ->
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { oneTimeSelectedScope = value }) {
+                                androidx.compose.material3.RadioButton(selected = oneTimeSelectedScope == value, onClick = { oneTimeSelectedScope = value })
+                                Spacer(Modifier.width(8.dp))
+                                Text(label)
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text("Data akan dienkripsi dan hanya dapat dibuka satu kali pada perangkat penerima.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            },
+            confirmButton = {
+                if (oneTimeOfferCode != null) {
+                    TextButton(onClick = { showOneTimeOfferDialog = false; oneTimeOfferCode = null }) { Text("Selesai") }
+                } else {
+                    TextButton(
+                        onClick = {
+                            oneTimeScopeBusy = true
+                            scope.launch {
+                                val driveSubjectId = driveSyncRuntime?.currentAccount()?.subjectId
+                                val result = oneTimeOfferManager.createOffer(state, oneTimeSelectedScope, driveSubjectId)
+                                if (result != null) {
+                                    oneTimeOfferCode = result.code
+                                } else {
+                                    viewModel.showMessage("Gagal membuat kapsul")
+                                }
+                                oneTimeScopeBusy = false
+                            }
+                        },
+                        enabled = !oneTimeScopeBusy,
+                    ) { Text("Buat Tautan") }
+                }
+            },
+            dismissButton = {
+                if (oneTimeOfferCode == null) {
+                    TextButton(onClick = { showOneTimeOfferDialog = false }) { Text("Batal") }
+                }
+            },
+        )
+    }
+    if (showOneTimeApprovalDialog) {
+        AlertDialog(
+            onDismissRequest = { showOneTimeApprovalDialog = false },
+            title = { Text("Persetujuan Tertunda") },
+            text = {
+                if (oneTimePendingApprovals.isEmpty()) {
+                    Text("Tidak ada permintaan yang menunggu persetujuan.")
+                } else {
+                    Column {
+                        oneTimePendingApprovals.forEach { record ->
+                            Text("Kode: ${record.code}", style = MaterialTheme.typography.bodyMedium)
+                            Text("Ruang lingkup: ${record.dataScope}", style = MaterialTheme.typography.bodySmall)
+                            Text("Status: ${record.status.name}", style = MaterialTheme.typography.bodySmall)
+                            TextButton(onClick = {
+                                scope.launch {
+                                    if (oneTimeOfferManager.approveAndIssue(record.code)) {
+                                        viewModel.showMessage("Kapsul diterbitkan untuk ${record.code}")
+                                    } else {
+                                        viewModel.showMessage("Gagal menyetujui ${record.code}")
+                                    }
+                                    oneTimePendingApprovals = oneTimeOfferManager.getPendingApprovals()
+                                }
+                            }) { Text("Setujui & Terbitkan") }
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showOneTimeApprovalDialog = false }) { Text("Tutup") }
+            },
+        )
+    }
+    if (showOneTimeOpenDialog) {
+        AlertDialog(
+            onDismissRequest = { showOneTimeOpenDialog = false },
+            title = { Text("Buka Kapsul Sekali") },
+            text = {
+                Column {
+                    Text("Masukkan tautan yang diterima dari pemilik Team:", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = oneTimeCapsuleCode,
+                        onValueChange = { oneTimeCapsuleCode = it.uppercase() },
+                        label = { Text("Kode kapsul") },
+                        placeholder = { Text("KRONCP1.") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            val capsule = oneTimeOfferManager.consume(oneTimeCapsuleCode)
+                            if (capsule != null) {
+                                val encoded = com.morneven.kron.sharing.onetime.ViewCapsuleCodec.encodeToString(capsule)
+                                showOneTimeOpenDialog = false
+                                activity.startActivity(
+                                    com.morneven.kron.sharing.viewer.SecureViewerActivity.createIntent(
+                                        activity, capsule.manifest.capsuleId, encoded
+                                    )
+                                )
+                            } else {
+                                viewModel.showMessage("Kode tidak valid atau kapsul sudah dibuka")
+                            }
+                        }
+                    },
+                    enabled = oneTimeCapsuleCode.startsWith("KRONCP1."),
+                ) { Text("Buka") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showOneTimeOpenDialog = false }) { Text("Batal") }
             },
         )
     }

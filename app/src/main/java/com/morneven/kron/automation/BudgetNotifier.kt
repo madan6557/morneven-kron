@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.morneven.kron.R
@@ -21,7 +22,8 @@ class BudgetNotifier @Inject constructor(
     private val preferences = context.getSharedPreferences("budget_notification_thresholds", Context.MODE_PRIVATE)
 
     fun sync(rows: List<AllocationBalanceRow>) {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         rows.filter { it.periodStatus == PeriodStatus.ACTIVE || it.periodStatus == PeriodStatus.RESOLUTION_REQUIRED }.forEach { row ->
             val threshold = threshold(row)
             val key = "${row.periodId}:${row.id}"

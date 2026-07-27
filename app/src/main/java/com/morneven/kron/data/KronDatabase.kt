@@ -1098,7 +1098,6 @@ abstract class KronDatabase : RoomDatabase() {
                 "SELECT * FROM recurring_occurrences ORDER BY id",
                 "SELECT * FROM audit_snapshots ORDER BY id",
                 "SELECT * FROM receipts ORDER BY id",
-                "SELECT * FROM sync_state ORDER BY id",
                 "SELECT * FROM ledger_accounts ORDER BY id",
                 "SELECT * FROM ledger_lines ORDER BY id",
                 "SELECT * FROM journal_seals ORDER BY id",

@@ -131,6 +131,11 @@ fun SettingsScreen(
     onLeaveTeam: (() -> Unit)? = null,
     onConvertToPrivate: (() -> Unit)? = null,
     onRunTeamScopeProbe: (() -> Unit)? = null,
+    onCreateOneTimeOffer: (() -> Unit)? = null,
+    onOpenOneTimeCapsule: (() -> Unit)? = null,
+    onViewOneTimeApprovals: (() -> Unit)? = null,
+    oneTimePendingApprovalCount: Int = 0,
+    driveSyncConnected: Boolean = false,
 ) {
     var showArchive by rememberSaveable { mutableStateOf(false) }
     var showGlossary by rememberSaveable { mutableStateOf(false) }
@@ -301,7 +306,7 @@ fun SettingsScreen(
                 } else if (account?.sharingMode != AccountSharingMode.TEAM) {
                     Button(
                         onClick = { onConvertToTeam?.invoke() },
-                        enabled = onConvertToTeam != null,
+                        enabled = onConvertToTeam != null && driveSyncConnected,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     ) { Text("Ubah menjadi Team") }
                     TextButton(
@@ -334,6 +339,41 @@ fun SettingsScreen(
                         enabled = onLeaveTeam != null,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     ) { Text("Tinggalkan Team") }
+                }
+            }
+        }
+
+        if (onCreateOneTimeOffer != null || onOpenOneTimeCapsule != null || onViewOneTimeApprovals != null) {
+            item { SectionHeader("Sekali Buka") }
+            if (onCreateOneTimeOffer != null) {
+                item {
+                    HudCard {
+                        Button(
+                            onClick = onCreateOneTimeOffer,
+                            enabled = driveSyncConnected,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) { Text("Buat Tautan Sekali Buka") }
+                    }
+                }
+            }
+            if (onOpenOneTimeCapsule != null) {
+                item {
+                    HudCard {
+                        Button(
+                            onClick = onOpenOneTimeCapsule,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) { Text("Buka Kapsul yang Diterima") }
+                    }
+                }
+            }
+            if (onViewOneTimeApprovals != null && oneTimePendingApprovalCount > 0) {
+                item {
+                    HudCard {
+                        Button(
+                            onClick = onViewOneTimeApprovals,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) { Text("Persetujuan Tertunda ($oneTimePendingApprovalCount)") }
+                    }
                 }
             }
         }

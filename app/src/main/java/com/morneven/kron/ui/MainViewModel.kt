@@ -56,6 +56,8 @@ import com.morneven.kron.evidence.EvidenceHealth
 import com.morneven.kron.evidence.EvidencePackageManager
 import com.morneven.kron.evidence.EvidenceVerificationResult
 import com.morneven.kron.sync.GoogleAccountIdentity
+import com.morneven.kron.sync.PreferencesSelectedGoogleAccountStore
+import com.morneven.kron.sync.SelectedGoogleAccountStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
@@ -184,6 +186,7 @@ class MainViewModel @Inject constructor(
     private val teamConversionManager: TeamConversionManager,
     private val teamDriveClient: TeamDriveRestClient,
 ) : ViewModel() {
+    private val driveSyncAccountStore: SelectedGoogleAccountStore = PreferencesSelectedGoogleAccountStore(context)
     private val message = MutableStateFlow<String?>(null)
     private val sessionVisibility = MutableStateFlow<Boolean?>(null)
     private val manualRestoreReady = MutableStateFlow(false)
@@ -595,6 +598,11 @@ class MainViewModel @Inject constructor(
         account: GoogleAccountIdentity,
         accountId: Long,
     ) = runAction("Akun berhasil dikonversi ke Team") {
+        val driveSyncAccount = driveSyncAccountStore.read()
+            ?: error("Hubungkan Google Drive (Drive Sync) terlebih dahulu sebelum membuat Team")
+        require(driveSyncAccount.subjectId == account.subjectId) {
+            "Owner Team harus menggunakan akun Google yang sama dengan Drive Sync"
+        }
         val teamId = java.util.UUID.randomUUID().toString()
         val workspace = teamDriveClient.createWorkspace(accessToken, teamId)
         val subjectHash = java.security.MessageDigest.getInstance("SHA-256")
