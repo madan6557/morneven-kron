@@ -32,3 +32,8 @@ signing.properties
 
 # Release binaries are uploaded as GitHub Release assets, not committed to source
 releases/
+
+# Generated PDF documents and one-off design notes
+docs/*.pdf
+docs/md2pdf.py
+docs/at-most-once cryptographic opening.md
