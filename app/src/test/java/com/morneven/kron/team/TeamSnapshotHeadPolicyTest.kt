@@ -3,17 +3,41 @@ package com.morneven.kron.team
 import com.morneven.kron.sync.DriveSnapshotManifest
 import com.morneven.kron.sync.RemoteDriveSnapshot
 import java.time.Instant
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TeamSnapshotHeadPolicyTest {
     @Test
+    fun syncPolicyUsesTrackedGenerationInsteadOfUnstablePackageBytes() {
+        fun decide(
+            canWrite: Boolean = true,
+            localHead: String? = "base",
+            localGeneration: Long = 4,
+            remoteHead: String = "base",
+            remoteGeneration: Long = 4,
+            baseGeneration: Long? = 4,
+            descends: Boolean = false,
+        ) = TeamSyncPolicy.decide(
+            canWrite, localHead, localGeneration, remoteHead, remoteGeneration, baseGeneration, descends,
+        )
+
+        assertEquals(TeamSyncDecision.NO_CHANGES, decide())
+        assertEquals(TeamSyncDecision.UPLOAD, decide(localGeneration = 5))
+        assertEquals(TeamSyncDecision.CONFLICT, decide(canWrite = false, localGeneration = 5))
+        assertEquals(TeamSyncDecision.PULL, decide(remoteHead = "child", remoteGeneration = 6, descends = true))
+        assertEquals(TeamSyncDecision.CONFLICT, decide(remoteHead = "child", remoteGeneration = 6, localGeneration = 5, descends = true))
+        assertEquals(TeamSyncDecision.CONFLICT, decide(remoteHead = "child", remoteGeneration = 6, baseGeneration = null))
+    }
+
+    @Test
     fun acceptsOnlyTheExpectedSingleDagHead() {
         val root = remote("root")
         val head = remote("head", listOf("root"))
 
         assertTrue(TeamSnapshotHeadPolicy.matches(emptyList(), null))
+        assertTrue(TeamSnapshotHeadPolicy.matches(emptyList(), ""))
         assertTrue(TeamSnapshotHeadPolicy.matches(listOf(root, head), "head"))
         assertFalse(TeamSnapshotHeadPolicy.matches(listOf(root, head), "root"))
         assertFalse(TeamSnapshotHeadPolicy.matches(listOf(root, head, remote("fork", listOf("root"))), "head"))

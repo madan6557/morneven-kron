@@ -9,7 +9,6 @@ import androidx.activity.result.IntentSenderRequest
 import com.morneven.kron.BuildConfig
 import com.morneven.kron.backup.BackupManager
 import com.morneven.kron.data.KronDatabase
-import com.morneven.kron.team.TeamMergeExecutor
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
@@ -38,6 +37,11 @@ class DriveSyncRuntime internal constructor(
     private val passphraseOperationMutex = Mutex()
 
     suspend fun currentAccount(): GoogleAccountIdentity? = authorization.currentAccount()
+
+    fun networkBlockMessage(): String? = factory.networkBlockMessage()
+
+    /** Team sync is user-initiated and may use cellular data regardless of private-sync preference. */
+    fun teamNetworkBlockMessage(): String? = factory.networkBlockMessage(allowMetered = true)
 
     suspend fun connect(passphrase: CharArray): DriveConnectResult {
         if (!BuildConfig.DRIVE_SYNC_CONFIGURED) {
@@ -404,7 +408,6 @@ class DriveSyncRuntimeFactory @Inject constructor(
     private val database: KronDatabase,
     private val backupManager: BackupManager,
     private val secretStore: EncryptedSyncSecretStore,
-    private val mergeExecutor: TeamMergeExecutor,
 ) {
     private val syncPreferences = context.getSharedPreferences(SYNC_PREFERENCES, Context.MODE_PRIVATE)
     private val accountStore = PreferencesSelectedGoogleAccountStore(context)
@@ -456,7 +459,8 @@ class DriveSyncRuntimeFactory @Inject constructor(
                 .collect { watch ->
                     val localGeneration = watch.localGeneration
                     val lastSyncedGeneration = watch.lastSyncedGeneration
-                    val changed = previousGeneration?.let { it != localGeneration } ?: false
+                    val changed = previousGeneration?.let { it != localGeneration }
+                        ?: (localGeneration > lastSyncedGeneration)
                     previousGeneration = localGeneration
                     if (watch.billingBlocked || watch.status == SyncStatus.RESTART_REQUIRED.name) {
                         deactivate()
@@ -516,14 +520,14 @@ class DriveSyncRuntimeFactory @Inject constructor(
         return SyncRunResult.RestartRequired(state.lastSnapshotId ?: "pending-restore")
     }
 
-    internal fun networkBlockMessage(): String? {
+    fun networkBlockMessage(allowMetered: Boolean = false): String? {
         val manager = context.getSystemService(ConnectivityManager::class.java)
         val capabilities = manager.getNetworkCapabilities(manager.activeNetwork)
             ?: return "Tidak ada koneksi internet"
         if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
             return "Tidak ada koneksi internet"
         }
-        if (isWifiOnly() && !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) {
+        if (!allowMetered && isWifiOnly() && !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) {
             return "Menunggu jaringan tanpa meter"
         }
         return null
@@ -561,7 +565,6 @@ class DriveSyncRuntimeFactory @Inject constructor(
         secretProvider = secretStore,
         currentAppVersionCode = BuildConfig.VERSION_CODE,
         syncMutex = processSyncMutex,
-        mergeExecutor = mergeExecutor,
     )
 
     internal suspend fun installAccountMigration(account: GoogleAccountIdentity): SyncRunResult {

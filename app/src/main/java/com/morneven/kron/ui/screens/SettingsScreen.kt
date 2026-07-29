@@ -1,6 +1,7 @@
 package com.morneven.kron.ui.screens
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -10,9 +11,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.AccountBalance
@@ -50,6 +53,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -59,6 +64,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.morneven.kron.BuildConfig
 import com.morneven.kron.data.AccountEntity
+import com.morneven.kron.data.AccountBalanceRow
 import com.morneven.kron.data.AccountSharingMode
 import com.morneven.kron.data.RecurringRuleEntity
 import com.morneven.kron.data.TeamRole
@@ -96,6 +102,19 @@ data class CloudBackupUiState(
     val detail: String? = null,
 )
 
+enum class SyncMode { PRIVATE_DRIVE, TEAM }
+
+data class SyncCardUiState(
+    val mode: SyncMode,
+    val status: CloudSyncStatus,
+    val accountLabel: String?,
+    val kronAccountName: String?,
+    val teamRole: String? = null,
+    val lastSyncedAt: Long? = null,
+    val wifiOnly: Boolean = false,
+    val detail: String? = null,
+)
+
 @Composable
 fun SettingsScreen(
     state: KronUiState,
@@ -117,6 +136,12 @@ fun SettingsScreen(
     cloudBackupState: CloudBackupUiState = CloudBackupUiState(),
     onConnectCloud: (() -> Unit)? = null,
     onSyncNow: (() -> Unit)? = null,
+    onSyncTeam: (() -> Unit)? = null,
+    teamSyncing: Boolean = false,
+    teamSyncDetail: String? = null,
+    teamSyncFailed: Boolean = false,
+    teamWaitingNetwork: Boolean = false,
+    teamGoogleAccountLabel: String? = null,
     onDisconnectCloud: (() -> Unit)? = null,
     onChangeCloudAccount: (() -> Unit)? = null,
     onWifiOnly: ((Boolean) -> Unit)? = null,
@@ -140,6 +165,12 @@ fun SettingsScreen(
     var showArchive by rememberSaveable { mutableStateOf(false) }
     var showGlossary by rememberSaveable { mutableStateOf(false) }
     val activeAccounts = state.accountBalances
+    val privateAccounts = activeAccounts.filter { account ->
+        state.accounts.firstOrNull { it.id == account.id }?.sharingMode != AccountSharingMode.TEAM
+    }.sortedByDescending { it.isActive }
+    val teamAccounts = activeAccounts.filter { account ->
+        state.accounts.firstOrNull { it.id == account.id }?.sharingMode == AccountSharingMode.TEAM
+    }.sortedByDescending { it.isActive }
     val activeReadOnly = state.activeAccount?.sharingMode == AccountSharingMode.TEAM &&
         state.teamWorkspace?.localRole == TeamRole.VIEWER
     val uriHandler = LocalUriHandler.current
@@ -168,57 +199,18 @@ fun SettingsScreen(
         }
 
         if (!showArchive) {
-            items(activeAccounts, key = { it.id }) { account ->
-                val entity = state.accounts.firstOrNull { it.id == account.id }
-                val workspace = state.teamWorkspace?.takeIf { it.accountId == account.id }
-                val readOnly = entity?.sharingMode == AccountSharingMode.TEAM && workspace?.localRole == TeamRole.VIEWER
-                HudCard(accent = if (account.isActive) KronGreen.copy(alpha = 0.62f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.Top,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(account.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            Text(
-                                if (account.isActive) "AKUN AKTIF" else "Tidak aktif",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (account.isActive) KronGreen else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                if (entity?.sharingMode == AccountSharingMode.TEAM) {
-                                    "TEAM ${workspace?.localRole ?: "BELUM TERVERIFIKASI"}"
-                                } else {
-                                    "PRIVAT"
-                                },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        IconButton(onClick = { entity?.let(onEditAccount) }, enabled = entity != null && !readOnly) {
-                            Icon(Icons.Outlined.Edit, contentDescription = "Edit akun ${account.name}")
-                        }
-                        IconButton(
-                            onClick = { entity?.let(onArchiveAccount) },
-                            enabled = entity != null && !readOnly && !account.isActive && account.cashBalance == 0L && account.eBudgetBalance == 0L,
-                        ) {
-                            Icon(Icons.Outlined.Archive, contentDescription = "Arsipkan akun ${account.name}")
-                        }
-                    }
-                    AccountChannelBalance("CASH", account.cashBalance, state.valuesVisible)
-                    Spacer(Modifier.height(8.dp))
-                    AccountChannelBalance("EBUDGET", account.eBudgetBalance, state.valuesVisible)
-                    if (!account.isActive && (account.cashBalance != 0L || account.eBudgetBalance != 0L)) {
-                        Text(
-                            "Kosongkan kedua kanal sebelum akun dapat diarsipkan.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 8.dp),
-                        )
-                    }
-                    if (!account.isActive && entity != null) {
-                        TextButton(onClick = { onActivateAccount(entity) }) { Text("Jadikan akun aktif") }
-                    }
+            listOf("Akun Privat" to privateAccounts, "Akun Team" to teamAccounts)
+                .filter { it.second.isNotEmpty() }
+                .forEach { (title, accounts) ->
+                item {
+                    Text(title, style = MaterialTheme.typography.titleMedium)
+                    AccountCarousel(
+                        accounts = accounts,
+                        state = state,
+                        onEditAccount = onEditAccount,
+                        onArchiveAccount = onArchiveAccount,
+                        onActivateAccount = onActivateAccount,
+                    )
                 }
             }
             item {
@@ -292,17 +284,6 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.tertiary,
                     )
-                } else if (account?.sharingMode != AccountSharingMode.TEAM && onConvertToTeam == null) {
-                    Text(
-                        "Build pengujian hanya memverifikasi akses drive.file lintas akun. Data keuangan tidak akan diubah.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.tertiary,
-                    )
-                    Button(
-                        onClick = { onRunTeamScopeProbe?.invoke() },
-                        enabled = onRunTeamScopeProbe != null,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    ) { Text("Uji akses Drive Team") }
                 } else if (account?.sharingMode != AccountSharingMode.TEAM) {
                     Button(
                         onClick = { onConvertToTeam?.invoke() },
@@ -343,38 +324,15 @@ fun SettingsScreen(
             }
         }
 
-        if (onCreateOneTimeOffer != null || onOpenOneTimeCapsule != null || onViewOneTimeApprovals != null) {
-            item { SectionHeader("Sekali Buka") }
-            if (onCreateOneTimeOffer != null) {
-                item {
-                    HudCard {
-                        Button(
-                            onClick = onCreateOneTimeOffer,
-                            enabled = driveSyncConnected,
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                        ) { Text("Buat Tautan Sekali Buka") }
-                    }
-                }
-            }
-            if (onOpenOneTimeCapsule != null) {
-                item {
-                    HudCard {
-                        Button(
-                            onClick = onOpenOneTimeCapsule,
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                        ) { Text("Buka Kapsul yang Diterima") }
-                    }
-                }
-            }
-            if (onViewOneTimeApprovals != null && oneTimePendingApprovalCount > 0) {
-                item {
-                    HudCard {
-                        Button(
-                            onClick = onViewOneTimeApprovals,
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                        ) { Text("Persetujuan Tertunda ($oneTimePendingApprovalCount)") }
-                    }
-                }
+        item { SectionHeader("Kapsul") }
+        item {
+            HudCard {
+                Text("Coming Soon", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Fitur Kapsul belum tersedia dan tidak aktif pada build ini.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
 
@@ -418,15 +376,34 @@ fun SettingsScreen(
         }
 
         item {
-            SectionHeader("Cloud dan backup")
-            CloudSyncCard(
-                state = cloudBackupState,
+            SectionHeader("Sinkronisasi")
+            val teamMode = state.activeAccount?.sharingMode == AccountSharingMode.TEAM
+            val teamStatus = when {
+                teamSyncing -> CloudSyncStatus.SYNCING
+                teamWaitingNetwork -> CloudSyncStatus.WAITING_NETWORK
+                teamSyncFailed -> CloudSyncStatus.FAILED
+                state.teamWorkspace?.status == "CONFLICT" -> CloudSyncStatus.CONFLICT
+                state.teamWorkspace?.status == "REVOKED" -> CloudSyncStatus.FAILED
+                state.teamWorkspace?.status == "SYNCED" -> CloudSyncStatus.SYNCED
+                else -> CloudSyncStatus.NOT_CONNECTED
+            }
+            SyncCard(
+                state = SyncCardUiState(
+                    mode = if (teamMode) SyncMode.TEAM else SyncMode.PRIVATE_DRIVE,
+                    status = if (teamMode) teamStatus else cloudBackupState.status,
+                    accountLabel = if (teamMode) teamGoogleAccountLabel else cloudBackupState.accountLabel,
+                    kronAccountName = state.activeAccount?.name,
+                    teamRole = state.teamWorkspace?.localRole,
+                    lastSyncedAt = if (teamMode) state.teamWorkspace?.updatedAt else cloudBackupState.lastSyncedAt,
+                    wifiOnly = cloudBackupState.wifiOnly,
+                    detail = if (teamMode) teamSyncDetail else cloudBackupState.detail,
+                ),
                 onConnect = onConnectCloud,
-                onSyncNow = onSyncNow,
+                onSyncNow = if (teamMode) onSyncTeam else onSyncNow,
                 onDisconnect = onDisconnectCloud,
                 onChangeAccount = onChangeCloudAccount,
                 onWifiOnly = onWifiOnly,
-                onClearDriveData = onClearDriveData,
+                onClearDriveData = onClearDriveData.takeUnless { teamMode },
             )
         }
         item {
@@ -605,6 +582,93 @@ private fun RecurringRuleCard(
 }
 
 @Composable
+private fun AccountCarousel(
+    accounts: List<AccountBalanceRow>,
+    state: KronUiState,
+    onEditAccount: (AccountEntity) -> Unit,
+    onArchiveAccount: (AccountEntity) -> Unit,
+    onActivateAccount: (AccountEntity) -> Unit,
+) {
+    val listState = rememberLazyListState()
+    LazyRow(
+        modifier = Modifier.fillMaxWidth(),
+        state = listState,
+        flingBehavior = rememberSnapFlingBehavior(lazyListState = listState),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items(accounts, key = { it.id }) { account ->
+            val entity = state.accounts.firstOrNull { it.id == account.id }
+            val workspace = state.teamWorkspace?.takeIf { it.accountId == account.id }
+            val readOnly = entity?.sharingMode == AccountSharingMode.TEAM && workspace?.localRole == TeamRole.VIEWER
+            HudCard(
+                modifier = Modifier.fillParentMaxWidth().heightIn(min = 230.dp),
+                accent = if (account.isActive) KronGreen.copy(alpha = 0.62f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text(account.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            if (account.isActive) "AKUN AKTIF" else "Tidak aktif",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (account.isActive) KronGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            if (entity?.sharingMode == AccountSharingMode.TEAM) {
+                                workspace?.localRole?.let { "TEAM $it" } ?: "TEAM"
+                            } else "PRIVAT",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(onClick = { entity?.let(onEditAccount) }, enabled = entity != null && !readOnly) {
+                        Icon(Icons.Outlined.Edit, contentDescription = "Edit akun ${account.name}")
+                    }
+                    IconButton(
+                        onClick = { entity?.let(onArchiveAccount) },
+                        enabled = entity != null && !readOnly && !account.isActive && account.cashBalance == 0L && account.eBudgetBalance == 0L,
+                    ) {
+                        Icon(Icons.Outlined.Archive, contentDescription = "Arsipkan akun ${account.name}")
+                    }
+                }
+                AccountChannelBalance("CASH", account.cashBalance, state.valuesVisible)
+                Spacer(Modifier.height(8.dp))
+                AccountChannelBalance("EBUDGET", account.eBudgetBalance, state.valuesVisible)
+                if (!account.isActive && (account.cashBalance != 0L || account.eBudgetBalance != 0L)) {
+                    Text(
+                        "Kosongkan kedua kanal sebelum akun dapat diarsipkan.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+                if (!account.isActive && entity != null) {
+                    TextButton(onClick = { onActivateAccount(entity) }, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text("Jadikan akun aktif")
+                    }
+                }
+            }
+        }
+    }
+    if (accounts.size > 1) {
+        val selected = listState.firstVisibleItemIndex.coerceIn(accounts.indices)
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 10.dp).semantics {
+                contentDescription = "Akun ${selected + 1} dari ${accounts.size}"
+            },
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            accounts.indices.forEach { index ->
+                Surface(
+                    modifier = Modifier.padding(horizontal = 3.dp).width(if (index == selected) 18.dp else 7.dp).height(7.dp),
+                    shape = MaterialTheme.shapes.extraLarge,
+                    color = if (index == selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                ) {}
+            }
+        }
+    }
+}
+
+@Composable
 private fun AccountChannelBalance(channel: String, value: Long, valuesVisible: Boolean) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         ChannelBadge(channel)
@@ -618,8 +682,8 @@ private fun AccountChannelBalance(channel: String, value: Long, valuesVisible: B
 }
 
 @Composable
-private fun CloudSyncCard(
-    state: CloudBackupUiState,
+private fun SyncCard(
+    state: SyncCardUiState,
     onConnect: (() -> Unit)?,
     onSyncNow: (() -> Unit)?,
     onDisconnect: (() -> Unit)?,
@@ -627,9 +691,13 @@ private fun CloudSyncCard(
     onWifiOnly: ((Boolean) -> Unit)?,
     onClearDriveData: (() -> Unit)? = null,
 ) {
-    val connected = state.status !in setOf(CloudSyncStatus.NOT_CONNECTED, CloudSyncStatus.UNAVAILABLE)
+    val team = state.mode == SyncMode.TEAM
+    val connected = if (team) state.teamRole != null else state.status !in setOf(CloudSyncStatus.NOT_CONNECTED, CloudSyncStatus.UNAVAILABLE)
     val actionsBlocked = state.status in setOf(CloudSyncStatus.SYNCING, CloudSyncStatus.RESTART_REQUIRED)
-    val (statusLabel, statusColor) = cloudStatusPresentation(state.status)
+    val (defaultStatusLabel, statusColor) = cloudStatusPresentation(state.status)
+    val statusLabel = if (team && state.teamRole != null && state.status == CloudSyncStatus.NOT_CONNECTED) {
+        "Belum tersinkron"
+    } else defaultStatusLabel
     HudCard(accent = statusColor.copy(alpha = 0.55f)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
             Icon(
@@ -638,8 +706,10 @@ private fun CloudSyncCard(
                 tint = statusColor,
             )
             Column(Modifier.weight(1f)) {
-                Text("Google Drive", style = MaterialTheme.typography.titleMedium)
+                Text(if (team) "Team di Google Drive" else "Drive Privat", style = MaterialTheme.typography.titleMedium)
                 Text(statusLabel, style = MaterialTheme.typography.labelSmall, color = statusColor)
+                state.kronAccountName?.let { Text(it, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                state.teamRole?.let { Text("Role ${it.lowercase().replaceFirstChar(Char::uppercase)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 state.accountLabel?.let { account ->
                     Text(account, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -657,7 +727,7 @@ private fun CloudSyncCard(
             state.detail ?: when (state.status) {
                 CloudSyncStatus.UNAVAILABLE -> "Sinkronisasi belum dikonfigurasi pada build ini. Backup lokal tetap tersedia."
                 CloudSyncStatus.NOT_CONNECTED -> "Opsional. Data disimpan terenkripsi pada Drive akun yang dipilih."
-                CloudSyncStatus.CONFLICT -> "Data perangkat dan Drive sama-sama berubah. Pilih versi melalui Pusat Konflik."
+                CloudSyncStatus.CONFLICT -> "Data perangkat dan ${if (team) "Team" else "Drive"} sama-sama berubah. Tinjau perbedaannya sebelum melanjutkan."
                 CloudSyncStatus.RESTART_REQUIRED -> "Snapshot Drive sudah divalidasi. Buka ulang KRON untuk menerapkannya dengan aman."
                 CloudSyncStatus.FREE_ONLY_BLOCKED -> "Sinkronisasi dihentikan karena layanan meminta billing. Backup lokal tetap tersedia."
                 else -> "Data lokal tetap dapat digunakan tanpa koneksi internet."
@@ -676,19 +746,29 @@ private fun CloudSyncCard(
             )
         }
         when {
-            !connected && onConnect != null -> Button(onClick = onConnect) { Text("Hubungkan Drive") }
+            !connected && onConnect != null -> Button(
+                onClick = onConnect,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            ) { Text("Hubungkan Drive") }
             connected && onSyncNow != null -> Button(
                 onClick = onSyncNow,
                 enabled = !actionsBlocked && state.status != CloudSyncStatus.FREE_ONLY_BLOCKED,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
             ) {
                 Icon(Icons.Outlined.Sync, contentDescription = null)
-                Text(if (state.status == CloudSyncStatus.CONFLICT) "Pusat Konflik" else "Sinkronkan")
+                Text(
+                    when {
+                        state.status == CloudSyncStatus.CONFLICT -> "Buka Pusat Konflik"
+                        team && state.teamRole == TeamRole.VIEWER -> "Ambil pembaruan Team"
+                        team -> "Sinkronkan Team"
+                        else -> "Sinkronkan"
+                    },
+                )
             }
         }
         if (connected && onChangeAccount != null && !actionsBlocked) {
-            TextButton(onClick = onChangeAccount, modifier = Modifier.padding(top = 4.dp)) {
-                Text("Ganti akun Drive")
+            TextButton(onClick = onChangeAccount, modifier = Modifier.padding(top = 4.dp).heightIn(min = 48.dp)) {
+                Text(if (team) "Otorisasi ulang Drive Team" else "Ganti akun Drive")
             }
         }
         if (connected && !actionsBlocked) {

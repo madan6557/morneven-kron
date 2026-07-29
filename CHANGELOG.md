@@ -1,5 +1,15 @@
 # KRON Changelog
 
+## 1.6.1 - 2026-07-29
+
+- Menstabilkan Team Account berbasis Google Drive tanpa backend untuk peran Owner, Editor, dan Viewer.
+- Snapshot Team kini memakai satu file stabil dengan scope `drive.file`; Editor memperbarui file yang sama tanpa melakukan operasi jaringan pada thread UI.
+- Join Team memakai kode akses terenkripsi dan Google Picker yang dibatasi ke file snapshot Team yang dituju.
+- Recovery Team Owner dan Member disimpan tersembunyi di sinkronisasi Privat. Akun hasil recovery tetap tampil hanya dalam grup Akun Team.
+- Sinkronisasi Privat dan Team dipisahkan dengan jelas dalam satu kartu sesuai akun aktif, termasuk status, role, dan tindakan otorisasi ulang yang relevan.
+- Room schema 16 menambahkan referensi file snapshot Team yang stabil melalui migrasi 15 ke 16 tanpa mengubah migrasi yang telah dikirim.
+- Kapsul One-Time View tetap dinonaktifkan dan ditampilkan sebagai Coming Soon.
+
 ## 1.5.0 - 2026-07-22
 
 - Menambahkan general ledger double-entry schema 13 dengan akun aset Cash/eBudget, modal awal, pemasukan, pengeluaran, transfer, reversal, dan legacy clearing.

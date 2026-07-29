@@ -17,6 +17,7 @@ class TeamJoinPreflightResult(
     val role: String,
     val headSnapshotId: String,
     val generation: Long,
+    val liveFileId: String,
 ) {
     override fun toString(): String = "TeamJoinPreflightResult(redacted)"
 }
@@ -36,7 +37,6 @@ class TeamJoinPreflight @Inject constructor(
     ): TeamJoinPreflightResult {
         check(BuildConfig.TEAM_ACCOUNT_ENABLED) { "Team Account belum aktif pada build ini" }
         val invitation = TeamInvitationCodec.decode(code)
-        var invitationEnvelope = ByteArray(0)
         var snapshotEnvelope = ByteArray(0)
         var teamKey = ByteArray(0)
         var payload = ByteArray(0)
@@ -47,19 +47,18 @@ class TeamJoinPreflight @Inject constructor(
             val inviteHash = TeamInvitationCodec.sha256(invitation.inviteId.toByteArray(Charsets.UTF_8))
             require(!database.kronDao().teamInvitationWasUsed(inviteHash)) { "Kode akses Team sudah pernah digunakan" }
 
-            val workspace = drive.workspace(accessToken, invitation.folderId)
-            TeamJoinPolicy.requireCapabilities(invitation, workspace)
-            val invitationFile = TeamJoinPolicy.invitationFile(
-                drive.listFiles(accessToken, invitation.folderId, invitation.teamId),
-                invitation,
-            )
-            invitationEnvelope = drive.download(accessToken, invitationFile.fileId)
-            teamKey = TeamInvitationEnvelopeCrypto.open(invitation, invitationEnvelope, signingKeys).teamKey
-
-            val head = TeamJoinPolicy.snapshotHead(
-                drive.listSnapshots(accessToken, invitation.folderId, invitation.teamId),
-                invitation.teamId,
-            )
+            val liveFileId = requireNotNull(invitation.liveFileId) {
+                "Kode akses lama tidak didukung untuk drive.file. Minta Owner membuat undangan baru."
+            }
+            val invitationEnvelope = requireNotNull(invitation.embeddedEnvelopeCopy()) {
+                "Envelope kode akses Team tidak tersedia"
+            }
+            try {
+                teamKey = TeamInvitationEnvelopeCrypto.open(invitation, invitationEnvelope, signingKeys).teamKey
+            } finally {
+                invitationEnvelope.fill(0)
+            }
+            val head = drive.stableSnapshot(accessToken, liveFileId, invitation.teamId)
             require(head.manifest.minimumAppVersionCode <= BuildConfig.VERSION_CODE) {
                 "Snapshot Team memerlukan versi KRON yang lebih baru"
             }
@@ -75,47 +74,30 @@ class TeamJoinPreflight @Inject constructor(
                 role = invitation.role,
                 headSnapshotId = head.manifest.snapshotId,
                 generation = head.manifest.generation,
+                liveFileId = liveFileId,
             )
         } finally {
             invitation.clear()
-            invitationEnvelope.fill(0)
             snapshotEnvelope.fill(0)
             teamKey.fill(0)
             payload.fill(0)
         }
     }
 }
-
+/** Legacy-code validator kept so old invitations remain diagnosable. Runtime joins use the stable file path above. */
 internal object TeamJoinPolicy {
     fun requireCapabilities(invitation: TeamInvitation, workspace: TeamDriveWorkspace) {
-        require(workspace.folderId == invitation.folderId) { "Workspace Team tidak cocok" }
-        require(workspace.capabilities.canRead && !workspace.capabilities.canShare && !workspace.writersCanShare) {
-            "Capability workspace Team tidak aman"
+        require(workspace.folderId == invitation.folderId && workspace.capabilities.canRead &&
+            !workspace.capabilities.canShare && !workspace.writersCanShare) { "Capability workspace Team tidak aman" }
+        require((invitation.role == TeamRole.EDITOR) == workspace.capabilities.canWrite) {
+            "Role undangan tidak cocok dengan capability Drive"
         }
-        require(
-            when (invitation.role) {
-                TeamRole.EDITOR -> workspace.capabilities.canWrite
-                TeamRole.VIEWER -> !workspace.capabilities.canWrite
-                else -> false
-            },
-        ) { "Role undangan tidak cocok dengan capability Drive" }
     }
 
-    fun invitationFile(files: List<TeamDriveFile>, invitation: TeamInvitation): TeamDriveFile {
-        val inviteHash = TeamInvitationCodec.sha256(invitation.inviteId.toByteArray(Charsets.UTF_8))
-        val expected = mapOf(
-            "product" to "KRON",
-            "teamId" to invitation.teamId,
-            "kind" to "invitation",
-            "invite" to inviteHash,
-            "target" to invitation.targetEmailHash,
-            "role" to invitation.role,
-            "expires" to invitation.expiresAtEpochMillis.toString(),
-            "owner" to invitation.ownerKeyFingerprint,
-        )
-        return files.filter { file ->
-            file.sizeBytes > 0 && expected.all { (key, value) -> file.appProperties[key] == value }
-        }.singleOrNull() ?: throw IllegalArgumentException("File undangan Team tidak ditemukan atau ganda")
+    fun invitationCandidates(files: List<TeamDriveFile>, invitation: TeamInvitation): List<TeamDriveFile> {
+        val name = "invitation-${TeamInvitationCodec.sha256(invitation.inviteId.toByteArray(Charsets.UTF_8))}.kronteam"
+        return files.filter { it.sizeBytes > 0 && it.name == name }.sortedBy(TeamDriveFile::fileId)
+            .ifEmpty { throw IllegalArgumentException("File undangan Team tidak ditemukan") }
     }
 
     fun snapshotHead(snapshots: List<RemoteDriveSnapshot>, teamId: String): RemoteDriveSnapshot {

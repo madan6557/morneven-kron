@@ -19,7 +19,7 @@ import kotlinx.coroutines.withContext
 
 class CreatedTeamInvitation(
     val code: String,
-    val invitationFileId: String,
+    val snapshotFileId: String,
     val member: TeamDriveMember,
 ) {
     override fun toString(): String = "CreatedTeamInvitation(redacted)"
@@ -41,6 +41,9 @@ class TeamInvitationManager @Inject constructor(
         role: String,
     ): CreatedTeamInvitation {
         val workspace = requireOwnerWorkspace(accessToken, googleAccount, accountId)
+        require(!workspace.headSnapshotId.isNullOrBlank() && !workspace.liveFileId.isNullOrBlank()) {
+            "Sinkronkan Team Owner terlebih dahulu sebelum membuat undangan"
+        }
         val dao = database.kronDao()
 
         val invitation = TeamInvitationCodec.create(
@@ -49,31 +52,25 @@ class TeamInvitationManager @Inject constructor(
             targetEmail = targetEmail,
             role = role,
             ownerKeyFingerprint = signingKeys.publicRecord().fingerprint,
+            liveFileId = workspace.liveFileId,
         )
         val teamKey = requireNotNull(keyStore.acquire(workspace.teamId)) { "Team key tidak tersedia" }
         var envelope = ByteArray(0)
-        var invitationFile: TeamDriveFile? = null
         var member: TeamDriveMember? = null
         try {
-            val code = TeamInvitationCodec.encode(invitation)
             envelope = TeamInvitationEnvelopeCrypto.seal(invitation, teamKey, signingKeys)
-            val uploaded = drive.uploadInvitation(accessToken, workspace.folderId, invitation, envelope)
-            invitationFile = uploaded
+            val code = TeamInvitationCodec.encode(invitation, envelope)
             val granted = drive.addMember(accessToken, workspace.folderId, targetEmail, role)
             member = granted
             require(granted.role == role && TeamInvitationCodec.emailMatches(invitation, granted.email)) {
                 "Identitas atau role collaborator Drive tidak cocok"
             }
             dao.upsertTeamMembers(listOf(TeamMemberPolicy.toEntity(accountId, granted)))
-            return CreatedTeamInvitation(code, uploaded.fileId, granted)
+            return CreatedTeamInvitation(code, requireNotNull(workspace.liveFileId), granted)
         } catch (error: Exception) {
             withContext(NonCancellable) {
                 member?.let { granted ->
                     runCatching { drive.removeMember(accessToken, workspace.folderId, granted.permissionId) }
-                        .onFailure(error::addSuppressed)
-                }
-                invitationFile?.let { uploaded ->
-                    runCatching { drive.delete(accessToken, uploaded.fileId) }
                         .onFailure(error::addSuppressed)
                 }
             }

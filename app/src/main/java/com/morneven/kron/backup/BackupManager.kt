@@ -6,10 +6,13 @@ import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
 import android.system.Os
 import android.system.OsConstants
+import android.util.Base64
 import com.morneven.kron.data.FundingChannel
 import com.morneven.kron.data.AccountSharingMode
 import com.morneven.kron.data.KronDatabase
 import com.morneven.kron.data.ReceiptEntity
+import com.morneven.kron.data.TeamRole
+import com.morneven.kron.data.TeamWorkspaceStatus
 import com.morneven.kron.security.DatabaseEncryptionManager
 import com.morneven.kron.security.EncryptedAttachmentStore
 import com.morneven.kron.security.SnapshotOperationLock
@@ -19,6 +22,8 @@ import com.morneven.kron.sync.ConflictEventRecord
 import com.morneven.kron.sync.ConflictMutableRecord
 import com.morneven.kron.sync.ConflictPreview
 import com.morneven.kron.sync.ConflictPreviewBuilder
+import com.morneven.kron.team.TeamAtomicSwap
+import com.morneven.kron.team.TeamKeyStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -57,6 +62,7 @@ class BackupManager @Inject constructor(
     private val attachmentStore: EncryptedAttachmentStore,
     private val databaseEncryption: DatabaseEncryptionManager,
     private val snapshotOperationLock: SnapshotOperationLock,
+    private val teamKeyStore: TeamKeyStore,
 ) {
     suspend fun export(uri: Uri, password: CharArray) = withContext(Dispatchers.IO) {
         require(password.size >= MIN_PASSWORD_LENGTH) { "Password backup minimal 12 karakter" }
@@ -144,6 +150,82 @@ class BackupManager @Inject constructor(
             }
         }
 
+    suspend fun stageNewTeamAccountForRestart(
+        payload: ByteArray,
+        teamId: String,
+        folderId: String,
+        liveFileId: String? = null,
+        role: String,
+        headSnapshotId: String,
+        generation: Long,
+        inviteIdHash: String,
+    ) = withContext(Dispatchers.IO) {
+        require(payload.isNotEmpty() && payload.size.toLong() <= MAX_SYNC_PAYLOAD_BYTES) {
+            "Snapshot Team tidak valid atau terlalu besar"
+        }
+        snapshotOperationLock.withLock {
+            withValidatedPortableCandidate(payload, "team-join") { validationFile ->
+                val scope = TeamSnapshotPruner.validateImported(validationFile, teamId)
+                require(scope.generation == generation) { "Generation snapshot Team tidak cocok" }
+                stageTeamDatabaseForRestart(validationFile) { target, source ->
+                    TeamGraphImporter.merge(target, source, TeamImportMetadata(
+                        teamId = teamId,
+                        folderId = folderId,
+                        liveFileId = liveFileId,
+                        localRole = role,
+                        headSnapshotId = headSnapshotId,
+                        generation = generation,
+                        inviteIdHash = inviteIdHash,
+                        importedAt = System.currentTimeMillis(),
+                    ))
+                }
+            }
+        }
+    }
+
+    suspend fun stageExistingTeamAccountForRestart(
+        payload: ByteArray,
+        teamId: String,
+        folderId: String,
+        liveFileId: String? = null,
+        role: String,
+        headSnapshotId: String,
+        generation: Long,
+    ) = withContext(Dispatchers.IO) {
+        require(payload.isNotEmpty() && payload.size.toLong() <= MAX_SYNC_PAYLOAD_BYTES) {
+            "Snapshot Team tidak valid atau terlalu besar"
+        }
+        snapshotOperationLock.withLock {
+            withValidatedPortableCandidate(payload, "team-sync") { validationFile ->
+                val scope = TeamSnapshotPruner.validateImported(validationFile, teamId)
+                require(scope.generation == generation) { "Generation snapshot Team tidak cocok" }
+                stageTeamDatabaseForRestart(validationFile) { target, source ->
+                    TeamGraphRefresher.refresh(target, source, teamId, folderId, liveFileId, role, headSnapshotId, generation)
+                }
+            }
+        }
+    }
+
+    private fun stageTeamDatabaseForRestart(
+        source: File,
+        transform: (target: File, source: File) -> Unit,
+    ) {
+        database.openHelper.writableDatabase.query("PRAGMA wal_checkpoint(FULL)").use { it.moveToFirst() }
+        val live = context.getDatabasePath(KronDatabase.DATABASE_NAME)
+        val plaintext = File(context.cacheDir, "team-transform-${UUID.randomUUID()}.db")
+        val encrypted = File(context.cacheDir, "team-transform-${UUID.randomUUID()}.encrypted")
+        try {
+            databaseEncryption.exportPlaintext(live, plaintext)
+            transform(plaintext, source)
+            validateDatabase(plaintext)
+            databaseEncryption.encryptPortableDatabaseUsingCurrentMode(plaintext, live, encrypted)
+            TeamAtomicSwap.stageReplaceForRestart(context, encrypted)
+        } finally {
+            deleteDatabaseFiles(plaintext)
+            deleteDatabaseFiles(encrypted)
+        }
+    }
+
     suspend fun previewPortableSnapshotPayload(
         payload: ByteArray,
         localSnapshotId: String?,
@@ -154,7 +236,7 @@ class BackupManager @Inject constructor(
         }
         snapshotOperationLock.withLock {
             withValidatedPortableCandidate(payload, "conflict-preview") { validationFile ->
-                val local = readConflictDataset(localSnapshotId) { sql ->
+                val local = readConflictDataset(localSnapshotId, privateOnly = true) { sql ->
                     database.openHelper.readableDatabase.query(sql)
                 }
                 val remote = SQLiteDatabase.openDatabase(
@@ -162,8 +244,30 @@ class BackupManager @Inject constructor(
                     null,
                     SQLiteDatabase.OPEN_READONLY,
                 ).use { candidate ->
-                    readConflictDataset(remoteSnapshotId) { sql -> candidate.rawQuery(sql, null) }
+                    readConflictDataset(remoteSnapshotId, privateOnly = true) { sql -> candidate.rawQuery(sql, null) }
                 }
+                ConflictPreviewBuilder.build(local, remote)
+            }
+        }
+    }
+
+    suspend fun previewTeamSnapshotPayload(
+        payload: ByteArray,
+        accountId: Long,
+        localSnapshotId: String?,
+        remoteSnapshotId: String,
+    ): ConflictPreview = withContext(Dispatchers.IO) {
+        require(accountId > 0 && payload.isNotEmpty() && payload.size.toLong() <= MAX_SYNC_PAYLOAD_BYTES) {
+            "Snapshot Team tidak valid atau terlalu besar"
+        }
+        snapshotOperationLock.withLock {
+            withValidatedPortableCandidate(payload, "team-conflict-preview") { validationFile ->
+                val local = readConflictDataset(localSnapshotId, accountId) { sql ->
+                    database.openHelper.readableDatabase.query(sql)
+                }
+                val remote = SQLiteDatabase.openDatabase(
+                    validationFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY,
+                ).use { candidate -> readConflictDataset(remoteSnapshotId, null) { sql -> candidate.rawQuery(sql, null) } }
                 ConflictPreviewBuilder.build(local, remote)
             }
         }
@@ -238,124 +342,6 @@ class BackupManager @Inject constructor(
         }
     }
 
-    suspend fun applyPortableSnapshotDirectly(
-        payload: ByteArray,
-        datasetId: String,
-        generation: Long,
-        parentSnapshotId: String?,
-        snapshotId: String,
-        accountSubject: String,
-        accountEmail: String,
-    ) = withContext(Dispatchers.IO) {
-        require(payload.isNotEmpty() && payload.size.toLong() <= MAX_SYNC_PAYLOAD_BYTES) {
-            "Snapshot Drive tidak valid atau terlalu besar"
-        }
-        require(
-            datasetId.isNotBlank() && snapshotId.isNotBlank() && generation >= 0 &&
-                accountSubject.isNotBlank() && accountEmail.isNotBlank(),
-        ) {
-            "Metadata snapshot Drive tidak valid"
-        }
-        snapshotOperationLock.withLock {
-            val workspace = File(context.cacheDir, "restore-${UUID.randomUUID()}")
-            workspace.mkdirs()
-            try {
-                val packageFile = File(workspace, "package.zip")
-                packageFile.outputStream().use { it.write(payload) }
-                val extracted = extractPackage(packageFile, workspace)
-                val format = extracted.manifest.optInt("format", -1)
-                require(format == LEGACY_FORMAT || format == CURRENT_FORMAT) { "Versi format backup tidak didukung" }
-                verifyExtractedPackage(extracted, format)
-                val validationFile = context.getDatabasePath(VALIDATION_DATABASE_NAME)
-                deleteDatabaseFiles(validationFile)
-                try {
-                    extracted.database.copyTo(validationFile, overwrite = true)
-                    migrateAndValidateCandidate(validationFile)
-                    normalizeSyncState(
-                        validationFile, extracted.manifest, preserveTargetAccount = true,
-                        driveMetadata = DriveRestoreMetadata(
-                            datasetId = datasetId, generation = generation,
-                            parentSnapshotId = parentSnapshotId, snapshotId = snapshotId,
-                            accountSubject = accountSubject, accountEmail = accountEmail,
-                        ),
-                    )
-                    databaseEncryption.prepareValidatedRestoreKey()
-                    installReceiptPayloadsDirect(validationFile, extracted.attachments)
-                    validateDatabase(validationFile)
-                    val liveDb = database.openHelper.writableDatabase
-                    liveDb.execSQL(
-                        "ATTACH DATABASE ? AS restore_db KEY ''",
-                        arrayOf(validationFile.absolutePath),
-                    )
-                    val appendOnlyTables = listOf(
-                        "activity_events", "cash_journal_lines", "budget_journal_lines",
-                        "transaction_splits", "audit_snapshots", "ledger_lines",
-                        "journal_seals", "evidence_keys", "team_invitation_uses", "team_event_proofs",
-                    )
-                    for (table in appendOnlyTables) {
-                        liveDb.execSQL("DROP TRIGGER IF EXISTS append_only_${table}_delete")
-                        liveDb.execSQL("DROP TRIGGER IF EXISTS append_only_${table}_update")
-                    }
-                    liveDb.execSQL("DROP TRIGGER IF EXISTS append_only_receipts_update")
-                    liveDb.execSQL("DROP TRIGGER IF EXISTS append_only_receipts_delete")
-                    val guardedTables = listOf(
-                        "accounts", "categories", "portfolios",
-                        "budget_periods", "allocations",
-                        "portfolio_allocation_templates", "activity_events",
-                        "recurring_rules", "receipts",
-                        "cash_journal_lines", "budget_journal_lines",
-                        "transaction_splits", "recurring_occurrences",
-                        "audit_snapshots", "ledger_accounts",
-                        "ledger_lines", "journal_seals", "evidence_keys",
-                        "team_workspaces", "team_members", "team_invitation_uses", "team_event_proofs",
-                    )
-                    for (table in guardedTables) {
-                        for (op in listOf("INSERT", "UPDATE", "DELETE")) {
-                            liveDb.execSQL(
-                                "DROP TRIGGER IF EXISTS sync_write_guard_${table}_${op.lowercase()}",
-                            )
-                        }
-                    }
-                    val cursor = liveDb.query(
-                        """SELECT name FROM restore_db.sqlite_master
-                           WHERE type='table' AND name NOT LIKE 'room_%'
-                           AND name != 'sync_state' AND name != 'android_metadata'""",
-                    )
-                    val tables = mutableListOf<String>()
-                    while (cursor.moveToNext()) tables.add(cursor.getString(0))
-                    cursor.close()
-                    val dao = database.kronDao()
-                    for (table in tables) {
-                        dao.executeRaw(
-                            androidx.sqlite.db.SimpleSQLiteQuery("DELETE FROM $table"),
-                        )
-                        dao.executeRaw(
-                            androidx.sqlite.db.SimpleSQLiteQuery(
-                                "INSERT INTO $table SELECT * FROM restore_db.$table",
-                            ),
-                        )
-                    }
-                    for (table in tables) {
-                        try {
-                            liveDb.execSQL(
-                                "UPDATE $table SET _rowid_ = _rowid_ WHERE _rowid_ IN (SELECT _rowid_ FROM $table LIMIT 1)",
-                            )
-                        } catch (_: Exception) {
-                        }
-                    }
-                    database.invalidationTracker.refreshAsync()
-                    recreateAppendOnlyTriggers(liveDb)
-                    recreateSyncWriteGuardTriggers(liveDb)
-                    liveDb.execSQL("DETACH DATABASE restore_db")
-                } finally {
-                    deleteDatabaseFiles(validationFile)
-                }
-            } finally {
-                deleteScopedDirectory(workspace, context.cacheDir)
-            }
-        }
-    }
-
     suspend fun stageRestore(uri: Uri, password: CharArray) = withContext(Dispatchers.IO) {
         require(password.size >= LEGACY_MIN_PASSWORD_LENGTH) { "Password backup minimal 8 karakter" }
         try {
@@ -380,6 +366,7 @@ class BackupManager @Inject constructor(
         val databaseFile = context.getDatabasePath(KronDatabase.DATABASE_NAME)
         require(databaseFile.exists()) { "Database belum tersedia" }
         val portable = File(context.cacheDir, "backup-portable-${UUID.randomUUID()}.db")
+        val teamRecovery = mutableListOf<TeamRecoveryExport>()
         try {
             val teamScope = teamAccountId?.let { accountId ->
                 val account = requireNotNull(database.kronDao().accountById(accountId)) { "Team Account tidak ditemukan" }
@@ -393,13 +380,16 @@ class BackupManager @Inject constructor(
                 TeamSnapshotScope(accountId, workspace.teamId, workspace.generation)
             }
             val receipts = teamScope?.let { database.kronDao().receiptsForAccount(it.accountId) }
-                ?: database.kronDao().allReceipts()
+                ?: database.kronDao().receiptsForPrivateAccounts()
             val attachments = collectAttachments(receipts)
             databaseEncryption.exportPlaintext(databaseFile, portable)
-            teamScope?.let {
-                TeamSnapshotPruner.prune(portable, it)
-                validateDatabase(portable)
+            if (teamScope == null) teamRecovery += buildTeamRecoveryCopies(portable)
+            if (teamScope != null) {
+                TeamSnapshotPruner.prune(portable, teamScope)
+            } else {
+                PrivateSnapshotPruner.prune(portable)
             }
+            validateDatabase(portable)
             val databaseBytes = portable.length()
             require(databaseBytes in 1..MAX_DATABASE_BYTES) { "Ukuran database tidak valid" }
             val databaseSha = sha256(portable)
@@ -407,6 +397,13 @@ class BackupManager @Inject constructor(
             val schemaVersion = database.openHelper.readableDatabase.query("PRAGMA user_version").use { cursor ->
                 require(cursor.moveToFirst())
                 cursor.getInt(0)
+            }
+            val recoveryIndex = teamRecovery.takeIf { it.isNotEmpty() }?.let { recoveries ->
+                JSONObject()
+                    .put("version", TEAM_RECOVERY_VERSION)
+                    .put("teams", org.json.JSONArray().apply { recoveries.forEach { put(it.toJson()) } })
+                    .toString()
+                    .toByteArray(Charsets.UTF_8)
             }
             val manifest = JSONObject()
                 .put("format", CURRENT_FORMAT)
@@ -418,6 +415,10 @@ class BackupManager @Inject constructor(
                 .put("attachmentCount", attachments.size)
                 .put("datasetId", teamScope?.teamId ?: syncState?.datasetId ?: JSONObject.NULL)
                 .put("generation", teamScope?.generation ?: syncState?.localGeneration ?: 0)
+            recoveryIndex?.let {
+                manifest.put("teamRecoveryIndexSha256", sha256(it))
+                manifest.put("teamRecoveryIndexBytes", it.size)
+            }
             teamScope?.let {
                 manifest.put("scope", "TEAM")
                 manifest.put("teamId", it.teamId)
@@ -427,6 +428,12 @@ class BackupManager @Inject constructor(
                 attachments.forEach { attachment ->
                     append(attachment.entryName).append('\t').append(attachment.sha256)
                         .append('\t').append(attachment.byteSize).append('\n')
+                }
+                teamRecovery.forEach { recovery ->
+                    append(recovery.snapshotEntry).append('\t').append(recovery.snapshotSha256)
+                        .append('\t').append(recovery.snapshot.length()).append('\n')
+                    append(recovery.keyEntry).append('\t').append(recovery.keySha256)
+                        .append('\t').append(recovery.key.size).append('\n')
                 }
             }
             ZipOutputStream(output).use { zip ->
@@ -446,8 +453,26 @@ class BackupManager @Inject constructor(
                     }
                     zip.closeEntry()
                 }
+                recoveryIndex?.let { index ->
+                    zip.writeEntry(
+                        TEAM_RECOVERY_INDEX_ENTRY,
+                        index,
+                    )
+                    teamRecovery.forEach { recovery ->
+                        zip.putNextEntry(stableZipEntry(recovery.snapshotEntry))
+                        recovery.snapshot.inputStream().use { it.copyToWithLimit(zip, MAX_DATABASE_BYTES) }
+                        zip.closeEntry()
+                        zip.putNextEntry(stableZipEntry(recovery.keyEntry))
+                        zip.write(recovery.key)
+                        zip.closeEntry()
+                    }
+                }
             }
         } finally {
+            teamRecovery.forEach {
+                it.key.fill(0)
+                deleteDatabaseFiles(it.snapshot)
+            }
             deleteDatabaseFiles(portable)
         }
     }
@@ -464,30 +489,315 @@ class BackupManager @Inject constructor(
         verifyExtractedPackage(extracted, format)
         val validationFile = context.getDatabasePath(VALIDATION_DATABASE_NAME)
         deleteDatabaseFiles(validationFile)
+        val installedRecoveryKeys = mutableListOf<String>()
         try {
             extracted.database.copyTo(validationFile, overwrite = true)
             migrateAndValidateCandidate(validationFile)
             normalizeSyncState(validationFile, extracted.manifest, preserveTargetSyncAccount, driveMetadata)
-            databaseEncryption.prepareValidatedRestoreKey()
+            if (driveMetadata == null) databaseEncryption.prepareValidatedRestoreKey()
 
             val pending = File(context.filesDir, PENDING_DIRECTORY)
             deleteScopedDirectory(pending, context.filesDir)
             val pendingReceipts = File(pending, "receipts").apply { mkdirs() }
             installReceiptPayloads(validationFile, extracted.attachments, pendingReceipts)
-            validateDatabase(validationFile)
+            if (driveMetadata != null) {
+                val hasRemoteTeams = SQLiteDatabase.openDatabase(
+                    validationFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY,
+                ).use { scalar(it, "SELECT COUNT(*) FROM accounts WHERE sharingMode='TEAM'") > 0L }
+                if (!hasRemoteTeams) {
+                    preserveLocalTeams(validationFile, pendingReceipts)
+                }
+                normalizeSyncState(validationFile, extracted.manifest, preserveTargetSyncAccount, driveMetadata)
+            }
+            val recoveryKeys = importTeamRecoveryCopies(validationFile, teamRecoveryCopies(extracted))
+            try {
+                validateDatabase(validationFile)
+                restoreTeamRecoveryKeys(validationFile, extracted.manifest)
+                installedRecoveryKeys += installTeamRecoveryKeys(recoveryKeys)
+            } finally {
+                recoveryKeys.forEach { it.key.fill(0) }
+            }
             pending.mkdirs()
             val pendingDatabase = File(pending, DATABASE_ENTRY)
-            databaseEncryption.encryptPortableDatabase(validationFile, pendingDatabase)
+            if (driveMetadata == null) {
+                databaseEncryption.encryptPortableDatabase(validationFile, pendingDatabase)
+            } else {
+                databaseEncryption.encryptPortableDatabaseUsingCurrentMode(
+                    validationFile, context.getDatabasePath(KronDatabase.DATABASE_NAME), pendingDatabase,
+                )
+            }
+            val attachmentCount = pendingReceipts.listFiles()?.count(File::isFile) ?: 0
             val ready = JSONObject()
                 .put("format", CURRENT_FORMAT)
                 .put("databaseSha256", sha256(pendingDatabase))
-                .put("attachmentCount", extracted.attachments.size)
+                .put("attachmentCount", attachmentCount)
                 .put("receiptsSha256", directorySha256Static(pendingReceipts))
                 .put("stagedAt", Instant.now().toString())
             syncDirectoryStatic(requireNotNull(pending.parentFile))
             writeTextAndSync(File(pending, READY_FILE), ready.toString())
+        } catch (error: Throwable) {
+            installedRecoveryKeys.forEach { teamKeyStore.clear(it) }
+            throw error
         } finally {
             deleteDatabaseFiles(validationFile)
+        }
+    }
+
+    private fun preserveLocalTeams(candidate: File, pendingReceipts: File) {
+        val live = context.getDatabasePath(KronDatabase.DATABASE_NAME)
+        val local = File(context.cacheDir, "private-sync-local-${UUID.randomUUID()}.db")
+        try {
+            database.openHelper.writableDatabase.query("PRAGMA wal_checkpoint(FULL)").use { it.moveToFirst() }
+            databaseEncryption.exportPlaintext(live, local)
+            val teams = SQLiteDatabase.openDatabase(local.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+                db.rawQuery(
+                    """SELECT a.id,a.isActive,w.teamId,w.folderId,w.localRole,w.liveFileId,w.headSnapshotId,w.generation,w.status
+                       FROM accounts a JOIN team_workspaces w ON w.accountId=a.id
+                       WHERE a.sharingMode='TEAM' ORDER BY a.isActive""",
+                    null,
+                ).use { cursor ->
+                    buildList {
+                        while (cursor.moveToNext()) add(
+                            LocalTeam(
+                                accountId = cursor.getLong(0),
+                                active = cursor.getInt(1) != 0,
+                                teamId = cursor.getString(2),
+                                folderId = cursor.getString(3),
+                                role = cursor.getString(4),
+                                liveFileId = cursor.getString(5),
+                                headSnapshotId = cursor.getString(6),
+                                generation = cursor.getLong(7),
+                                status = cursor.getString(8),
+                            ),
+                        )
+                    }
+                }
+            }
+            if (teams.isEmpty()) return
+            SQLiteDatabase.openDatabase(candidate.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+                require(scalar(db, "SELECT COUNT(*) FROM accounts WHERE sharingMode='TEAM'") == 0L) {
+                    "Snapshot Drive Privat tidak boleh memuat akun Team"
+                }
+            }
+            teams.forEach { team ->
+                val source = File(context.cacheDir, "private-sync-team-${UUID.randomUUID()}.db")
+                try {
+                    local.copyTo(source, overwrite = true)
+                    TeamSnapshotPruner.prune(source, TeamSnapshotScope(team.accountId, team.teamId, team.generation))
+                    TeamGraphImporter.merge(
+                        candidate,
+                        source,
+                        TeamImportMetadata(
+                            teamId = team.teamId,
+                            folderId = team.folderId,
+                            liveFileId = team.liveFileId,
+                            localRole = team.role,
+                            headSnapshotId = team.headSnapshotId,
+                            generation = team.generation,
+                            inviteIdHash = null,
+                            importedAt = System.currentTimeMillis(),
+                            activateImported = team.active,
+                            workspaceStatus = team.status,
+                        ),
+                    )
+                } finally {
+                    deleteDatabaseFiles(source)
+                }
+            }
+            SQLiteDatabase.openDatabase(candidate.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+                require(scalar(db, "SELECT COUNT(*) FROM accounts WHERE sharingMode='TEAM'") == teams.size.toLong()) {
+                    "Akun Team lokal tidak seluruhnya dipertahankan"
+                }
+                teams.forEach { team ->
+                    val count = db.rawQuery(
+                        "SELECT COUNT(*) FROM accounts WHERE sharingMode='TEAM' AND teamId=?",
+                        arrayOf(team.teamId),
+                    ).use { cursor ->
+                        require(cursor.moveToFirst())
+                        cursor.getLong(0)
+                    }
+                    require(count == 1L) { "Identitas akun Team lokal berubah" }
+                }
+            }
+            preserveTeamReceiptFiles(local, candidate, pendingReceipts)
+        } finally {
+            deleteDatabaseFiles(local)
+        }
+    }
+
+    private suspend fun buildTeamRecoveryCopies(source: File): List<TeamRecoveryExport> {
+        val dao = database.kronDao()
+        return buildList {
+            dao.allAccounts().forEach { account ->
+                if (account.sharingMode != AccountSharingMode.TEAM || account.teamId.isNullOrBlank()) return@forEach
+                val workspace = dao.teamWorkspace(account.id) ?: return@forEach
+                val key = teamKeyStore.acquire(workspace.teamId)
+                    ?: throw IllegalStateException("Team key recovery tidak tersedia")
+                val snapshot = File(context.cacheDir, "team-recovery-${UUID.randomUUID()}.sqlite")
+                try {
+                    source.copyTo(snapshot, overwrite = true)
+                    TeamSnapshotPruner.prune(snapshot, TeamSnapshotScope(account.id, workspace.teamId, workspace.generation))
+                    val teamHash = sha256(workspace.teamId.toByteArray(Charsets.UTF_8))
+                    add(
+                        TeamRecoveryExport(
+                            teamId = workspace.teamId,
+                            folderId = workspace.folderId,
+                            localRole = workspace.localRole,
+                            liveFileId = workspace.liveFileId,
+                            generation = workspace.generation,
+                            headSnapshotId = workspace.headSnapshotId,
+                            ownerSubjectHash = workspace.ownerSubjectHash,
+                            keyFingerprint = sha256(key),
+                            snapshotEntry = "$TEAM_RECOVERY_PREFIX$teamHash.sqlite",
+                            keyEntry = "$TEAM_RECOVERY_PREFIX$teamHash.key",
+                            snapshot = snapshot,
+                            snapshotSha256 = sha256(snapshot),
+                            key = key,
+                            keySha256 = sha256(key),
+                        ),
+                    )
+                } catch (error: Throwable) {
+                    key.fill(0)
+                    deleteDatabaseFiles(snapshot)
+                    throw error
+                }
+            }
+        }
+    }
+
+    private fun importTeamRecoveryCopies(
+        candidate: File,
+        recoveries: List<ExtractedTeamRecovery>,
+    ): List<PendingTeamKey> = buildList {
+        recoveries.forEach { recovery ->
+            val alreadyPresent = SQLiteDatabase.openDatabase(candidate.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+                db.rawQuery(
+                    "SELECT COUNT(*) FROM accounts WHERE sharingMode='TEAM' AND teamId=?",
+                    arrayOf(recovery.teamId),
+                ).use { cursor -> require(cursor.moveToFirst()); cursor.getLong(0) }
+            }
+            if (alreadyPresent > 0) return@forEach
+            val scope = TeamSnapshotPruner.validateImported(recovery.snapshot, recovery.teamId)
+            require(scope.generation == recovery.generation) { "Generation recovery Team tidak cocok" }
+            if (recovery.ownerSubjectHash.isNotBlank()) {
+                val owner = SQLiteDatabase.openDatabase(recovery.snapshot.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+                    db.rawQuery("SELECT ownerSubjectHash FROM team_workspaces WHERE teamId=?", arrayOf(recovery.teamId)).use { cursor ->
+                        require(cursor.moveToFirst()) { "Identitas Owner recovery tidak ditemukan" }
+                        cursor.getString(0)
+                    }
+                }
+                require(owner == recovery.ownerSubjectHash) { "Identitas Owner recovery tidak cocok" }
+            }
+            val key = recovery.key.readBytes()
+            try {
+                require(key.size == TEAM_KEY_BYTES && sha256(key) == recovery.keyFingerprint) {
+                    "Envelope Team recovery tidak valid"
+                }
+                TeamGraphImporter.merge(
+                    candidate,
+                    recovery.snapshot,
+                    TeamImportMetadata(
+                        teamId = recovery.teamId,
+                        folderId = recovery.folderId,
+                        localRole = recovery.localRole,
+                        liveFileId = recovery.liveFileId,
+                        headSnapshotId = recovery.headSnapshotId,
+                        generation = recovery.generation,
+                        inviteIdHash = null,
+                        importedAt = System.currentTimeMillis(),
+                        activateImported = false,
+                        workspaceStatus = TeamWorkspaceStatus.LOCAL_ONLY,
+                    ),
+                )
+                add(PendingTeamKey(recovery.teamId, key))
+            } catch (error: Throwable) {
+                key.fill(0)
+                throw error
+            }
+        }
+    }
+
+    private suspend fun installTeamRecoveryKeys(keys: List<PendingTeamKey>): List<String> {
+        val installed = mutableListOf<String>()
+        try {
+            keys.forEach { pending ->
+                val existing = teamKeyStore.acquire(pending.teamId)
+                if (existing == null) {
+                    teamKeyStore.store(pending.teamId, pending.key)
+                    installed += pending.teamId
+                } else {
+                    try {
+                        require(existing.contentEquals(pending.key)) { "Team key recovery berbeda" }
+                    } finally {
+                        existing.fill(0)
+                    }
+                }
+            }
+            return installed
+        } catch (error: Throwable) {
+            installed.forEach { teamKeyStore.clear(it) }
+            throw error
+        }
+    }
+
+    /** Reads the temporary v1 manifest produced before recovery copies became ZIP entries. */
+    private suspend fun restoreTeamRecoveryKeys(candidate: File, manifest: JSONObject) {
+        if (manifest.optInt("teamRecoveryVersion", 0) != 1) return
+        val envelopes = manifest.optJSONArray("teamRecovery") ?: return
+        SQLiteDatabase.openDatabase(candidate.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+            for (index in 0 until envelopes.length()) {
+                val envelope = TeamRecoveryEnvelope.fromJson(envelopes.getJSONObject(index))
+                val ownerWorkspace = db.rawQuery(
+                    """SELECT COUNT(*) FROM accounts a JOIN team_workspaces w ON w.accountId=a.id
+                       WHERE a.sharingMode='TEAM' AND a.teamId=? AND w.folderId=? AND w.localRole='OWNER'""",
+                    arrayOf(envelope.teamId, envelope.folderId),
+                ).use { cursor -> cursor.moveToFirst() && cursor.getLong(0) == 1L }
+                require(ownerWorkspace) { "Recovery Team Owner tidak cocok" }
+                val key = runCatching { Base64.decode(envelope.keyBase64, Base64.NO_WRAP) }
+                    .getOrElse { throw IllegalArgumentException("Envelope Team tidak valid") }
+                require(key.size == 32) { "Ukuran Team key recovery tidak valid" }
+                try {
+                    val existing = teamKeyStore.acquire(envelope.teamId)
+                    if (existing == null) {
+                        teamKeyStore.store(envelope.teamId, key)
+                    } else {
+                        try {
+                            require(existing.contentEquals(key)) { "Team key recovery berbeda" }
+                        } finally {
+                            existing.fill(0)
+                        }
+                    }
+                } finally {
+                    key.fill(0)
+                }
+            }
+        }
+    }
+
+    private fun preserveTeamReceiptFiles(local: File, candidate: File, pendingReceipts: File) {
+        val target = SQLiteDatabase.openDatabase(candidate.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+        try {
+            SQLiteDatabase.openDatabase(local.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { source ->
+                source.rawQuery(
+                    """SELECT r.storageId,r.localPath FROM receipts r JOIN activity_events e ON e.id=r.eventId
+                       JOIN accounts a ON a.id=e.accountId WHERE a.sharingMode='TEAM' AND r.localPath IS NOT NULL""",
+                    null,
+                ).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val storageId = cursor.getString(0)
+                        val file = File(cursor.getString(1))
+                        if (!file.isFile || !isAppPrivate(file)) continue
+                        val staged = File(pendingReceipts, "$storageId.kat")
+                        copyFileToNewAndSync(file, staged)
+                        target.execSQL(
+                            "UPDATE receipts SET localPath=? WHERE storageId=?",
+                            arrayOf(attachmentStore.destination(storageId).absolutePath, storageId),
+                        )
+                    }
+                }
+            }
+        } finally {
+            target.close()
         }
     }
 
@@ -637,8 +947,10 @@ class BackupManager @Inject constructor(
     private fun extractPackage(packageFile: File, workspace: File): ExtractedPackage {
         var manifestBytes: ByteArray? = null
         var checksumBytes: ByteArray? = null
+        var teamRecoveryIndexBytes: ByteArray? = null
         var databaseFile: File? = null
         val attachments = linkedMapOf<String, ExtractedAttachment>()
+        val teamRecoveryFiles = linkedMapOf<String, File>()
         val seen = mutableSetOf<String>()
         var totalBytes = 0L
         ZipInputStream(packageFile.inputStream().buffered()).use { zip ->
@@ -655,6 +967,9 @@ class BackupManager @Inject constructor(
                     }
                     name == CHECKSUM_ENTRY -> {
                         checksumBytes = zip.readEntryWithLimit(MAX_CHECKSUM_INDEX_BYTES) { totalBytes += it }
+                    }
+                    name == TEAM_RECOVERY_INDEX_ENTRY -> {
+                        teamRecoveryIndexBytes = zip.readEntryWithLimit(MAX_TEAM_RECOVERY_INDEX_BYTES) { totalBytes += it }
                     }
                     name == DATABASE_ENTRY -> {
                         val target = File(workspace, "database-extracted.sqlite")
@@ -693,6 +1008,13 @@ class BackupManager @Inject constructor(
                             sha256 = digest.digest().toHex(),
                         )
                     }
+                    TEAM_RECOVERY_SNAPSHOT_ENTRY.matches(name) || TEAM_RECOVERY_KEY_ENTRY.matches(name) -> {
+                        require(teamRecoveryFiles.size < MAX_TEAM_RECOVERY_ENTRIES) { "Jumlah recovery Team terlalu banyak" }
+                        val target = File(workspace, "recovery-${teamRecoveryFiles.size}.bin")
+                        val limit = if (TEAM_RECOVERY_KEY_ENTRY.matches(name)) TEAM_KEY_BYTES.toLong() else MAX_DATABASE_BYTES
+                        target.outputStream().use { output -> zip.copyEntryWithLimit(output, limit) { totalBytes += it } }
+                        teamRecoveryFiles[name] = target
+                    }
                     else -> throw IllegalArgumentException("Backup memiliki file yang tidak dikenal: $name")
                 }
                 require(totalBytes <= MAX_EXTRACTED_BYTES) { "Isi backup melebihi batas aman" }
@@ -705,6 +1027,9 @@ class BackupManager @Inject constructor(
             checksumIndex = checksumBytes?.toString(Charsets.UTF_8),
             database = requireNotNull(databaseFile) { "Database backup tidak ditemukan" },
             attachments = attachments,
+            teamRecoveryIndex = teamRecoveryIndexBytes?.let { JSONObject(it.toString(Charsets.UTF_8)) },
+            teamRecoveryIndexBytes = teamRecoveryIndexBytes,
+            teamRecoveryFiles = teamRecoveryFiles,
         )
     }
 
@@ -715,15 +1040,28 @@ class BackupManager @Inject constructor(
         }
         if (format == LEGACY_FORMAT) {
             require(extracted.attachments.isEmpty()) { "Backup lama tidak boleh memiliki lampiran terpisah" }
+            require(extracted.teamRecoveryIndex == null && extracted.teamRecoveryFiles.isEmpty()) {
+                "Backup lama tidak boleh memiliki recovery Team"
+            }
             return
         }
         require(extracted.manifest.optInt("attachmentCount", -1) == extracted.attachments.size) {
             "Jumlah lampiran backup tidak cocok"
         }
+        extracted.teamRecoveryIndex?.let {
+            val bytes = requireNotNull(extracted.teamRecoveryIndexBytes)
+            require(extracted.manifest.optString("teamRecoveryIndexSha256") == sha256(bytes)) {
+                "Checksum indeks recovery Team tidak cocok"
+            }
+            require(extracted.manifest.optLong("teamRecoveryIndexBytes", -1) == bytes.size.toLong()) {
+                "Ukuran indeks recovery Team tidak cocok"
+            }
+        } ?: require(extracted.teamRecoveryFiles.isEmpty()) { "Recovery Team tidak memiliki indeks" }
         val expected = parseChecksumIndex(requireNotNull(extracted.checksumIndex) { "Indeks checksum tidak ditemukan" })
         val actualNames = buildSet {
             add(DATABASE_ENTRY)
             addAll(extracted.attachments.keys)
+            addAll(extracted.teamRecoveryFiles.keys)
         }
         require(expected.keys == actualNames) { "Indeks checksum backup tidak lengkap" }
         val databaseCheck = requireNotNull(expected[DATABASE_ENTRY])
@@ -736,6 +1074,16 @@ class BackupManager @Inject constructor(
                 "Checksum lampiran tidak cocok"
             }
         }
+        teamRecoveryCopies(extracted).forEach { recovery ->
+            val snapshotCheck = requireNotNull(expected[recovery.snapshotEntry])
+            require(snapshotCheck.sha256 == sha256(recovery.snapshot) && snapshotCheck.bytes == recovery.snapshot.length()) {
+                "Checksum snapshot recovery Team tidak cocok"
+            }
+            val keyCheck = requireNotNull(expected[recovery.keyEntry])
+            require(keyCheck.sha256 == sha256(recovery.key) && keyCheck.bytes == recovery.key.length()) {
+                "Checksum envelope recovery Team tidak cocok"
+            }
+        }
     }
 
     private fun parseChecksumIndex(value: String): Map<String, FileStats> {
@@ -744,7 +1092,10 @@ class BackupManager @Inject constructor(
             val parts = line.split('\t')
             require(parts.size == 3) { "Indeks checksum tidak valid" }
             val name = parts[0]
-            require(name == DATABASE_ENTRY || ATTACHMENT_ENTRY.matches(name)) { "Nama checksum tidak valid" }
+            require(
+                name == DATABASE_ENTRY || ATTACHMENT_ENTRY.matches(name) ||
+                    TEAM_RECOVERY_SNAPSHOT_ENTRY.matches(name) || TEAM_RECOVERY_KEY_ENTRY.matches(name),
+            ) { "Nama checksum tidak valid" }
             val checksum = parts[1]
             require(SHA256.matches(checksum)) { "Checksum tidak valid" }
             val bytes = parts[2].toLongOrNull()
@@ -752,6 +1103,42 @@ class BackupManager @Inject constructor(
             require(result.put(name, FileStats(bytes, checksum)) == null) { "Checksum ganda tidak diizinkan" }
         }
         return result
+    }
+
+    private fun teamRecoveryCopies(extracted: ExtractedPackage): List<ExtractedTeamRecovery> {
+        val index = extracted.teamRecoveryIndex
+        if (index == null) {
+            require(extracted.teamRecoveryFiles.isEmpty()) { "Recovery Team tidak memiliki indeks" }
+            return emptyList()
+        }
+        require(index.optInt("version", -1) == TEAM_RECOVERY_VERSION) { "Versi recovery Team tidak didukung" }
+        val entries = index.optJSONArray("teams") ?: throw IllegalArgumentException("Indeks recovery Team tidak valid")
+        require(entries.length() in 1..MAX_TEAM_RECOVERY_ENTRIES) { "Jumlah recovery Team tidak valid" }
+        val expectedFiles = mutableSetOf<String>()
+        val teamIds = mutableSetOf<String>()
+        return buildList {
+            for (position in 0 until entries.length()) {
+                val item = entries.getJSONObject(position)
+                val teamId = item.getString("teamId").also { require(it.isNotBlank()) { "Team ID recovery tidak valid" } }
+                require(teamIds.add(teamId)) { "Team recovery ganda" }
+                val folderId = item.getString("folderId").also { require(it.isNotBlank()) { "Folder recovery Team tidak valid" } }
+                val localRole = item.optString("localRole", "OWNER").also {
+                    require(it in setOf(TeamRole.OWNER, TeamRole.EDITOR, TeamRole.VIEWER)) { "Role recovery Team tidak valid" }
+                }
+                val generation = item.getLong("generation").also { require(it >= 0) { "Generation recovery Team tidak valid" } }
+                val head = item.optString("headSnapshotId").takeIf { it.isNotBlank() && it != "null" }
+                val liveFileId = item.optString("liveFileId").takeIf { it.isNotBlank() && it != "null" }
+                val owner = item.optString("ownerSubjectHash").takeIf { it.isNotBlank() && it != "null" } ?: ""
+                val keyFingerprint = item.getString("keyFingerprint").also { require(SHA256.matches(it)) { "Fingerprint recovery Team tidak valid" } }
+                val snapshotEntry = item.getString("snapshotEntry").also { require(TEAM_RECOVERY_SNAPSHOT_ENTRY.matches(it)) { "Snapshot recovery Team tidak valid" } }
+                val keyEntry = item.getString("keyEntry").also { require(TEAM_RECOVERY_KEY_ENTRY.matches(it)) { "Envelope recovery Team tidak valid" } }
+                require(expectedFiles.add(snapshotEntry) && expectedFiles.add(keyEntry)) { "Entry recovery Team ganda" }
+                val snapshot = requireNotNull(extracted.teamRecoveryFiles[snapshotEntry]) { "Snapshot recovery Team tidak ditemukan" }
+                val key = requireNotNull(extracted.teamRecoveryFiles[keyEntry]) { "Envelope recovery Team tidak ditemukan" }
+                require(key.length() == TEAM_KEY_BYTES.toLong()) { "Ukuran envelope recovery Team tidak valid" }
+                add(ExtractedTeamRecovery(teamId, folderId, localRole, liveFileId, generation, head, owner, keyFingerprint, snapshotEntry, keyEntry, snapshot, key))
+            }
+        }.also { require(expectedFiles == extracted.teamRecoveryFiles.keys) { "Entry recovery Team tidak lengkap" } }
     }
 
     private fun migrateAndValidateCandidate(candidate: File) {
@@ -808,56 +1195,6 @@ class BackupManager @Inject constructor(
                     """.trimIndent(),
                     arrayOf(
                         finalPath,
-                        stored.byteSize,
-                        stored.sha256,
-                        stored.nonce,
-                        stored.encryptionVersion,
-                        attachment.storageId,
-                    ),
-                )
-            }
-        }
-    }
-
-    private fun installReceiptPayloadsDirect(
-        candidate: File,
-        attachments: Map<String, ExtractedAttachment>,
-    ) {
-        val db = SQLiteDatabase.openDatabase(candidate.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
-        db.use { sqlite ->
-            val receiptCount = scalar(sqlite, "SELECT COUNT(*) FROM receipts")
-            require(receiptCount >= attachments.size.toLong()) {
-                "Jumlah metadata lampiran melebihi jumlah receipt"
-            }
-            if (receiptCount > attachments.size.toLong()) {
-                val placeholders = attachments.values.joinToString(",") { "?" }
-                val params = attachments.values.map { it.storageId }.toTypedArray()
-                sqlite.execSQL(
-                    """
-                        UPDATE receipts
-                        SET localPath = NULL
-                        WHERE localPath IS NOT NULL AND storageId NOT IN ($placeholders)
-                    """.trimIndent(),
-                    params,
-                )
-            }
-            attachments.values.forEach { attachment ->
-                val exists = sqlite.rawQuery(
-                    "SELECT COUNT(*) FROM receipts WHERE storageId = ?",
-                    arrayOf(attachment.storageId),
-                ).use { cursor -> cursor.moveToFirst() && cursor.getLong(0) == 1L }
-                require(exists) { "Lampiran tidak memiliki metadata yang cocok" }
-                val finalFile = attachmentStore.destination(attachment.storageId)
-                finalFile.parentFile?.mkdirs()
-                val stored = attachment.file.inputStream().use { input -> attachmentStore.encryptTo(input, finalFile) }
-                sqlite.execSQL(
-                    """
-                        UPDATE receipts
-                        SET localPath = ?, byteSize = ?, sha256 = ?, encryptionNonce = ?, encryptionVersion = ?
-                        WHERE storageId = ?
-                    """.trimIndent(),
-                    arrayOf(
-                        finalFile.absolutePath,
                         stored.byteSize,
                         stored.sha256,
                         stored.nonce,
@@ -1037,6 +1374,8 @@ class BackupManager @Inject constructor(
         return digest.digest().toHex()
     }
 
+    private fun sha256(value: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(value).toHex()
+
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
     private fun DataInputStream.readExact(size: Int): ByteArray = ByteArray(size).also(::readFully)
@@ -1107,7 +1446,56 @@ class BackupManager @Inject constructor(
         val checksumIndex: String?,
         val database: File,
         val attachments: Map<String, ExtractedAttachment>,
+        val teamRecoveryIndex: JSONObject?,
+        val teamRecoveryIndexBytes: ByteArray?,
+        val teamRecoveryFiles: Map<String, File>,
     )
+
+    private data class TeamRecoveryExport(
+        val teamId: String,
+        val folderId: String,
+        val localRole: String,
+        val liveFileId: String?,
+        val generation: Long,
+        val headSnapshotId: String?,
+        val ownerSubjectHash: String,
+        val keyFingerprint: String,
+        val snapshotEntry: String,
+        val keyEntry: String,
+        val snapshot: File,
+        val snapshotSha256: String,
+        val key: ByteArray,
+        val keySha256: String,
+    ) {
+        fun toJson(): JSONObject = JSONObject()
+            .put("teamId", teamId)
+            .put("folderId", folderId)
+            .put("localRole", localRole)
+            .put("liveFileId", liveFileId ?: JSONObject.NULL)
+            .put("generation", generation)
+            .put("headSnapshotId", headSnapshotId ?: JSONObject.NULL)
+            .put("ownerSubjectHash", ownerSubjectHash)
+            .put("keyFingerprint", keyFingerprint)
+            .put("snapshotEntry", snapshotEntry)
+            .put("keyEntry", keyEntry)
+    }
+
+    private data class ExtractedTeamRecovery(
+        val teamId: String,
+        val folderId: String,
+        val localRole: String,
+        val liveFileId: String?,
+        val generation: Long,
+        val headSnapshotId: String?,
+        val ownerSubjectHash: String,
+        val keyFingerprint: String,
+        val snapshotEntry: String,
+        val keyEntry: String,
+        val snapshot: File,
+        val key: File,
+    )
+
+    private data class PendingTeamKey(val teamId: String, val key: ByteArray)
 
     private data class DriveRestoreMetadata(
         val datasetId: String,
@@ -1120,93 +1508,33 @@ class BackupManager @Inject constructor(
 
     private data class FileStats(val bytes: Long, val sha256: String)
 
-    private fun recreateAppendOnlyTriggers(db: androidx.sqlite.db.SupportSQLiteDatabase) {
-        val immutableTables = listOf(
-            "activity_events", "cash_journal_lines", "budget_journal_lines",
-            "transaction_splits", "audit_snapshots", "ledger_lines",
-            "journal_seals", "evidence_keys", "team_invitation_uses", "team_event_proofs",
-        )
-        immutableTables.forEach { table ->
-            listOf("update", "delete").forEach { operation ->
-                db.execSQL("""
-                    CREATE TRIGGER IF NOT EXISTS append_only_${table}_$operation
-                    BEFORE $operation ON $table
-                    BEGIN
-                        SELECT RAISE(ABORT, 'Catatan audit KRON bersifat append-only');
-                    END
-                """.trimIndent())
-            }
-        }
-        db.execSQL("""
-            CREATE TRIGGER IF NOT EXISTS append_only_receipts_update
-            BEFORE UPDATE ON receipts
-            WHEN NEW.eventId != OLD.eventId OR NEW.storageId != OLD.storageId
-               OR NEW.displayName != OLD.displayName OR NEW.mimeType != OLD.mimeType
-               OR NEW.byteSize != OLD.byteSize OR NEW.sha256 != OLD.sha256
-               OR NEW.createdAt != OLD.createdAt
-               OR COALESCE(NEW.capturedAt, -1) != COALESCE(OLD.capturedAt, -1)
-               OR COALESCE(NEW.latitude, 999) != COALESCE(OLD.latitude, 999)
-               OR COALESCE(NEW.longitude, 999) != COALESCE(OLD.longitude, 999)
-               OR NEW.origin != OLD.origin
-               OR COALESCE(NEW.evidenceEventId, '') != COALESCE(OLD.evidenceEventId, '')
-            BEGIN
-                SELECT RAISE(ABORT, 'Metadata bukti KRON bersifat append-only');
-            END
-        """.trimIndent())
-        db.execSQL("""
-            CREATE TRIGGER IF NOT EXISTS append_only_receipts_delete
-            BEFORE DELETE ON receipts
-            BEGIN
-                SELECT RAISE(ABORT, 'Bukti KRON bersifat append-only');
-            END
-        """.trimIndent())
-    }
-
-    private fun recreateSyncWriteGuardTriggers(db: androidx.sqlite.db.SupportSQLiteDatabase) {
-        val guardedTables = listOf(
-            "accounts", "categories", "portfolios",
-            "budget_periods", "allocations",
-            "portfolio_allocation_templates", "activity_events",
-            "recurring_rules", "receipts",
-            "cash_journal_lines", "budget_journal_lines",
-            "transaction_splits", "recurring_occurrences",
-            "audit_snapshots", "ledger_accounts",
-            "ledger_lines", "journal_seals", "evidence_keys",
-            "team_workspaces", "team_members", "team_invitation_uses", "team_event_proofs",
-        )
-        guardedTables.forEach { table ->
-            for (op in listOf("INSERT", "UPDATE", "DELETE")) {
-                db.execSQL("""
-                    CREATE TRIGGER IF NOT EXISTS sync_write_guard_${table}_${op.lowercase()}
-                    BEFORE $op ON $table
-                    WHEN EXISTS(
-                        SELECT 1 FROM sync_state
-                        WHERE id = 1 AND status IN ('SYNCING','RESTART_REQUIRED')
-                    )
-                    BEGIN
-                        SELECT RAISE(ABORT, 'KRON sedang menyinkronkan atau menunggu restart');
-                    END
-                """.trimIndent())
-            }
-        }
-    }
-
     private fun readConflictDataset(
         snapshotId: String?,
+        accountId: Long? = null,
+        privateOnly: Boolean = false,
         query: (String) -> Cursor,
     ): ConflictDataset {
+        val eventScope = when {
+            accountId != null -> "WHERE e.accountId=$accountId"
+            privateOnly -> "WHERE e.accountId IN (SELECT id FROM accounts WHERE sharingMode<>'TEAM')"
+            else -> ""
+        }
         val events = query(
             """
             SELECT e.id,e.type,e.title,e.note,e.source,e.effectiveEpochDay,e.createdAt,
                    COALESCE((SELECT name FROM accounts WHERE id=e.accountId),'Akun'),
                    EXISTS(SELECT 1 FROM activity_events r WHERE r.type='REVERSAL' AND r.relatedEventId=e.id),
                    (SELECT COUNT(*) FROM receipts x WHERE x.eventId=e.id OR x.evidenceEventId=e.id),
-                   COALESCE(s.actor,''),COALESCE(s.deviceId,''),COALESCE(s.recordedAtUtc,e.createdAt),
-                   COALESCE(s.payloadHash,''),COALESCE(s.signatureBase64,''),
+                   COALESCE(tp.actor,s.actor,''),COALESCE(tp.deviceId,s.deviceId,''),
+                   COALESCE(tp.recordedAtUtc,s.recordedAtUtc,e.createdAt),
+                   COALESCE(tp.payloadHash,s.payloadHash,''),
+                   COALESCE(tp.signatureBase64,s.signatureBase64,''),
                    COALESCE((SELECT SUM(amount) FROM cash_journal_lines c WHERE c.eventId=e.id AND c.accountId=e.accountId),0),
                    COALESCE((SELECT SUM(amount) FROM budget_journal_lines b WHERE b.eventId=e.id AND b.accountId=e.accountId),0)
             FROM activity_events e
             LEFT JOIN journal_seals s ON s.eventId=e.id
+            LEFT JOIN team_event_proofs tp ON tp.eventId=e.id
+            $eventScope
             ORDER BY e.effectiveEpochDay,e.createdAt,e.id
             """.trimIndent(),
         ).use { cursor ->
@@ -1238,14 +1566,41 @@ class BackupManager @Inject constructor(
                 }
             }
         }
+        val aid = accountId?.toString()
+        val privateAccounts = "SELECT id FROM accounts WHERE sharingMode<>'TEAM'"
+        val accountWhere = when {
+            aid != null -> " WHERE id=$aid"
+            privateOnly -> " WHERE sharingMode<>'TEAM'"
+            else -> ""
+        }
+        val categoryScope = when {
+            aid != null -> " AND accountId=$aid"
+            privateOnly -> " AND (accountId IS NULL OR accountId IN ($privateAccounts))"
+            else -> ""
+        }
+        val directAccountScope = when {
+            aid != null -> " AND accountId=$aid"
+            privateOnly -> " AND accountId IN ($privateAccounts)"
+            else -> ""
+        }
+        val joinedAccountScope = when {
+            aid != null -> " AND pf.accountId=$aid"
+            privateOnly -> " AND pf.accountId IN ($privateAccounts)"
+            else -> ""
+        }
+        val portfolioAccountScope = when {
+            aid != null -> " AND p.accountId=$aid"
+            privateOnly -> " AND p.accountId IN ($privateAccounts)"
+            else -> ""
+        }
         val mutableQueries = listOf(
-            "SELECT 'account',COALESCE(teamId,'private-account:'||id),name,revision,updatedAt,COALESCE(lastWriterId,''),name||'|'||isArchived||'|'||sharingMode FROM accounts",
-            "SELECT 'category',syncId,name,revision,updatedAt,COALESCE(lastWriterId,''),name||'|'||direction||'|'||color||'|'||icon||'|'||isArchived FROM categories WHERE syncId IS NOT NULL",
-            "SELECT 'portfolio',syncId,name,revision,updatedAt,COALESCE(lastWriterId,''),name||'|'||cadence||'|'||intervalCount||'|'||plannedIncome||'|'||rolloverEnabled||'|'||fundingPriority||'|'||startEpochDay||'|'||endMode||'|'||COALESCE(endValue,'')||'|'||isPaused||'|'||isArchived FROM portfolios WHERE syncId IS NOT NULL",
-            "SELECT 'period',p.syncId,pf.name||' '||p.startEpochDay,p.revision,p.updatedAt,COALESCE(p.lastWriterId,''),pf.syncId||'|'||p.startEpochDay||'|'||p.endEpochDay||'|'||p.status FROM budget_periods p JOIN portfolios pf ON pf.id=p.portfolioId WHERE p.syncId IS NOT NULL",
-            "SELECT 'allocation',a.syncId,c.name||' '||a.fundingChannel,a.revision,a.updatedAt,COALESCE(a.lastWriterId,''),p.syncId||'|'||c.syncId||'|'||a.fundingChannel||'|'||a.plannedAmount FROM allocations a JOIN budget_periods p ON p.id=a.periodId JOIN categories c ON c.id=a.categoryId WHERE a.syncId IS NOT NULL",
-            "SELECT 'template',t.syncId,c.name,t.revision,t.updatedAt,COALESCE(t.lastWriterId,''),p.syncId||'|'||c.syncId||'|'||t.plannedAmount||'|'||t.cashPercentage FROM portfolio_allocation_templates t JOIN portfolios p ON p.id=t.portfolioId JOIN categories c ON c.id=t.categoryId WHERE t.syncId IS NOT NULL",
-            "SELECT 'rule',r.syncId,r.title,r.revision,r.updatedAt,COALESCE(r.lastWriterId,''),r.title||'|'||r.direction||'|'||r.amount||'|'||r.fundingChannel||'|'||COALESCE(c.syncId,'')||'|'||COALESCE(a.syncId,'')||'|'||r.cadence||'|'||r.intervalCount||'|'||r.anchorMonth||'|'||r.anchorDay||'|'||r.startEpochDay||'|'||r.nextEpochDay||'|'||COALESCE(r.endEpochDay,'')||'|'||COALESCE(r.remainingOccurrences,'')||'|'||r.isPaused FROM recurring_rules r LEFT JOIN categories c ON c.id=r.categoryId LEFT JOIN allocations a ON a.id=r.allocationId WHERE r.syncId IS NOT NULL",
+            "SELECT 'account',COALESCE(teamId,'private-account:'||id),name,revision,updatedAt,COALESCE(lastWriterId,''),name||'|'||isArchived||'|'||sharingMode FROM accounts$accountWhere",
+            "SELECT 'category',syncId,name,revision,updatedAt,COALESCE(lastWriterId,''),name||'|'||direction||'|'||color||'|'||icon||'|'||isArchived FROM categories WHERE syncId IS NOT NULL$categoryScope",
+            "SELECT 'portfolio',syncId,name,revision,updatedAt,COALESCE(lastWriterId,''),name||'|'||cadence||'|'||intervalCount||'|'||plannedIncome||'|'||rolloverEnabled||'|'||fundingPriority||'|'||startEpochDay||'|'||endMode||'|'||COALESCE(endValue,'')||'|'||isPaused||'|'||isArchived FROM portfolios WHERE syncId IS NOT NULL$directAccountScope",
+            "SELECT 'period',p.syncId,pf.name||' '||p.startEpochDay,p.revision,p.updatedAt,COALESCE(p.lastWriterId,''),pf.syncId||'|'||p.startEpochDay||'|'||p.endEpochDay||'|'||p.status FROM budget_periods p JOIN portfolios pf ON pf.id=p.portfolioId WHERE p.syncId IS NOT NULL$joinedAccountScope",
+            "SELECT 'allocation',a.syncId,c.name||' '||a.fundingChannel,a.revision,a.updatedAt,COALESCE(a.lastWriterId,''),p.syncId||'|'||c.syncId||'|'||a.fundingChannel||'|'||a.plannedAmount FROM allocations a JOIN budget_periods p ON p.id=a.periodId JOIN portfolios pf ON pf.id=p.portfolioId JOIN categories c ON c.id=a.categoryId WHERE a.syncId IS NOT NULL$joinedAccountScope",
+            "SELECT 'template',t.syncId,c.name,t.revision,t.updatedAt,COALESCE(t.lastWriterId,''),p.syncId||'|'||c.syncId||'|'||t.plannedAmount||'|'||t.cashPercentage FROM portfolio_allocation_templates t JOIN portfolios p ON p.id=t.portfolioId JOIN categories c ON c.id=t.categoryId WHERE t.syncId IS NOT NULL$portfolioAccountScope",
+            "SELECT 'rule',r.syncId,r.title,r.revision,r.updatedAt,COALESCE(r.lastWriterId,''),r.title||'|'||r.direction||'|'||r.amount||'|'||r.fundingChannel||'|'||COALESCE(c.syncId,'')||'|'||COALESCE(a.syncId,'')||'|'||r.cadence||'|'||r.intervalCount||'|'||r.anchorMonth||'|'||r.anchorDay||'|'||r.startEpochDay||'|'||r.nextEpochDay||'|'||COALESCE(r.endEpochDay,'')||'|'||COALESCE(r.remainingOccurrences,'')||'|'||r.isPaused FROM recurring_rules r LEFT JOIN categories c ON c.id=r.categoryId LEFT JOIN allocations a ON a.id=r.allocationId WHERE r.syncId IS NOT NULL${directAccountScope.replace("accountId", "r.accountId")}",
         )
         val mutable = buildList {
             mutableQueries.forEach { sql ->
@@ -1273,6 +1628,50 @@ class BackupManager @Inject constructor(
         .digest(value.toByteArray(Charsets.UTF_8))
         .joinToString("") { "%02x".format(it) }
 
+    private data class LocalTeam(
+        val accountId: Long,
+        val active: Boolean,
+        val teamId: String,
+        val folderId: String,
+        val role: String,
+        val liveFileId: String?,
+        val headSnapshotId: String?,
+        val generation: Long,
+        val status: String,
+    )
+
+    private data class TeamRecoveryEnvelope(
+        val teamId: String,
+        val folderId: String,
+        val generation: Long,
+        val headSnapshotId: String?,
+        val keyBase64: String,
+    ) {
+        fun toJson(): JSONObject = JSONObject()
+            .put("teamId", teamId)
+            .put("folderId", folderId)
+            .put("generation", generation)
+            .put("headSnapshotId", headSnapshotId ?: JSONObject.NULL)
+            .put("key", keyBase64)
+
+        companion object {
+            fun fromJson(json: JSONObject): TeamRecoveryEnvelope {
+                val teamId = json.getString("teamId")
+                val folderId = json.getString("folderId")
+                require(teamId.isNotBlank() && folderId.isNotBlank()) { "Metadata recovery Team tidak valid" }
+                val generation = json.getLong("generation")
+                require(generation >= 0) { "Generation recovery Team tidak valid" }
+                return TeamRecoveryEnvelope(
+                    teamId = teamId,
+                    folderId = folderId,
+                    generation = generation,
+                    headSnapshotId = json.optString("headSnapshotId").takeIf { it.isNotBlank() && it != "null" },
+                    keyBase64 = json.getString("key"),
+                )
+            }
+        }
+    }
+
     companion object {
         private const val CURRENT_FORMAT = 2
         private const val LEGACY_FORMAT = 1
@@ -1290,6 +1689,10 @@ class BackupManager @Inject constructor(
         private const val MANIFEST_ENTRY = "manifest.json"
         private const val CHECKSUM_ENTRY = "checksums.tsv"
         private const val ATTACHMENT_PREFIX = "attachments/"
+        private const val TEAM_RECOVERY_PREFIX = "team-recovery/"
+        private const val TEAM_RECOVERY_INDEX_ENTRY = "team-recovery/index.json"
+        private const val TEAM_RECOVERY_VERSION = 1
+        private const val TEAM_KEY_BYTES = 32
         private const val READY_FILE = "ready.json"
         private const val TRANSACTION_FILE = "swap.json"
         private const val PREPARED_MARKER = "prepared"
@@ -1308,11 +1711,15 @@ class BackupManager @Inject constructor(
         private const val MAX_SYNC_PAYLOAD_BYTES = 100L * 1024 * 1024
         private const val LEGACY_MAX_ENCRYPTED_BYTES = 250 * 1024 * 1024
         private const val MAX_ATTACHMENT_COUNT = 500
+        private const val MAX_TEAM_RECOVERY_ENTRIES = 32
+        private const val MAX_TEAM_RECOVERY_INDEX_BYTES = 64L * 1024
         private val MAGIC_V1 = "KRONBKP1".toByteArray(Charsets.US_ASCII)
         private val MAGIC_V2 = "KRONBKP2".toByteArray(Charsets.US_ASCII)
         private val MAGIC_V3 = "KRONBKP3".toByteArray(Charsets.US_ASCII)
         private val STORAGE_ID = Regex("[A-Za-z0-9_-]{8,128}")
         private val ATTACHMENT_ENTRY = Regex("attachments/([A-Za-z0-9_-]{8,128})\\.bin")
+        private val TEAM_RECOVERY_SNAPSHOT_ENTRY = Regex("team-recovery/[0-9a-f]{64}\\.sqlite")
+        private val TEAM_RECOVERY_KEY_ENTRY = Regex("team-recovery/[0-9a-f]{64}\\.key")
         private val SHA256 = Regex("[0-9a-f]{64}")
 
         fun applyPendingRestore(context: Context) {

@@ -45,7 +45,14 @@ class TeamDriveScopeProbe internal constructor(
 
     suspend fun connect(): DriveConnectResult = authorization.connect()
 
+    suspend fun connectOwner(account: GoogleAccountIdentity): DriveConnectResult =
+        authorization.connectAccount(account)
+
     suspend fun getAccessToken(interactive: Boolean = true): DriveAccessTokenResult = authorization.accessToken(interactive)
+
+    suspend fun currentAccount(): GoogleAccountIdentity? = authorization.currentAccount()
+
+    suspend fun disconnect() = authorization.disconnect()
 
     suspend fun selectMemberAccount(): TeamScopeProbeResult = try {
         val account = accountSelector.selectAccount()
@@ -128,6 +135,54 @@ class TeamDriveScopeProbe internal constructor(
         }
     }
 
+    suspend fun openTeamSnapshotPicker(code: String): TeamScopeProbeResult {
+        val account = authorization.currentAccount()
+            ?: return TeamScopeProbeResult.Failed("Hubungkan akun Google Member terlebih dahulu")
+        return try {
+            val invitation = TeamInvitationCodec.decode(code)
+            try {
+                require(TeamInvitationCodec.emailMatches(invitation, account.email)) {
+                    "Kode akses Team bukan untuk akun Google ini"
+                }
+                val fileId = requireNotNull(invitation.liveFileId) {
+                    "Kode akses lama tidak didukung untuk drive.file. Minta Owner membuat undangan baru."
+                }
+                when (val result = authorizationBridge.openDriveFilePicker(account, fileId)) {
+                    is DrivePickerStartResult.UserActionRequired -> TeamScopeProbeResult.PickerActionRequired(result.resolutionId)
+                    is DrivePickerStartResult.Failed -> TeamScopeProbeResult.Failed(result.message)
+                }
+            } finally {
+                invitation.clear()
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: IllegalArgumentException) {
+            TeamScopeProbeResult.Failed(error.message ?: "Kode akses Team tidak valid")
+        }
+    }
+
+    /** Reopens the one Team snapshot already selected during join. */
+    suspend fun openExistingTeamSnapshotPicker(fileId: String): TeamScopeProbeResult {
+        val account = authorization.currentAccount()
+            ?: return TeamScopeProbeResult.Failed("Hubungkan akun Google Member terlebih dahulu")
+        return try {
+            when (val result = authorizationBridge.openDriveFilePicker(account, fileId)) {
+                is DrivePickerStartResult.UserActionRequired -> TeamScopeProbeResult.PickerActionRequired(result.resolutionId)
+                is DrivePickerStartResult.Failed -> TeamScopeProbeResult.Failed(result.message)
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: IllegalArgumentException) {
+            TeamScopeProbeResult.Failed(error.message ?: "File Team tidak valid")
+        }
+    }
+
+    fun completeTeamSnapshotPicker(
+        resolutionId: String,
+        resultCode: Int,
+        data: Intent?,
+    ): DrivePickerCompletionResult = authorizationBridge.completeDriveFilePicker(resolutionId, resultCode, data)
+
     suspend fun completeMemberWorkspacePicker(
         resolutionId: String,
         resultCode: Int,
@@ -138,7 +193,7 @@ class TeamDriveScopeProbe internal constructor(
         is DrivePickerCompletionResult.Failed -> TeamScopeProbeResult.Failed(result.message)
         is DrivePickerCompletionResult.Granted -> try {
             requireMember(result.account)
-            validateMemberWorkspace(result.accessToken, result.folderId)
+            validateMemberWorkspace(result.accessToken, result.fileId)
         } catch (error: IllegalStateException) {
             TeamScopeProbeResult.Failed(error.message ?: "Workspace Team tidak dapat diverifikasi")
         } catch (_: Exception) {

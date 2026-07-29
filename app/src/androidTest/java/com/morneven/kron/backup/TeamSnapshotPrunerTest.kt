@@ -57,6 +57,31 @@ class TeamSnapshotPrunerTest {
         assertTrue(runCatching { TeamSnapshotPruner.prune(file, TeamSnapshotScope(1, TEAM_ID, 7)) }.isFailure)
     }
 
+    @Test
+    fun privateSnapshotPrunesTeamRowsDespiteCopiedSyncGuard() {
+        val name = "private-snapshot-prune.db"
+        createFixture(name, crossAccountCash = false)
+        val file = ApplicationProvider.getApplicationContext<Context>().getDatabasePath(name)
+        SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            db.execSQL("UPDATE sync_state SET status='SYNCING' WHERE id=1")
+            db.execSQL(
+                """CREATE TRIGGER copied_sync_guard BEFORE DELETE ON activity_events
+                   WHEN EXISTS(SELECT 1 FROM sync_state WHERE status='SYNCING')
+                   BEGIN SELECT RAISE(ABORT, 'guard copied from live database'); END""",
+            )
+        }
+
+        PrivateSnapshotPruner.prune(file)
+
+        SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+            assertEquals(1, scalar(db, "SELECT COUNT(*) FROM accounts"))
+            assertEquals(1, scalar(db, "SELECT COUNT(*) FROM activity_events"))
+            assertEquals(0, scalar(db, "SELECT COUNT(*) FROM team_workspaces"))
+            assertEquals(0, scalar(db, "SELECT COUNT(*) FROM team_event_proofs"))
+            assertFalse(db.rawQuery("PRAGMA foreign_key_check", null).use { it.moveToFirst() })
+        }
+    }
+
     private fun createFixture(name: String, crossAccountCash: Boolean) {
         helper.createDatabase(name, KronDatabase.SCHEMA_VERSION).apply {
             execSQL("INSERT INTO accounts(id,name,isActive,isArchived,archivedAt,createdAt,sharingMode,teamId,revision,updatedAt,lastWriterId) VALUES(1,'Team',1,0,NULL,1,'TEAM',?,0,1,NULL)", arrayOf(TEAM_ID))

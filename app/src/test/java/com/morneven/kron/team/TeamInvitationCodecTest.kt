@@ -29,4 +29,26 @@ class TeamInvitationCodecTest {
         assertTrue(runCatching { TeamInvitationCodec.decode(code, decoded.expiresAtEpochMillis) }.isFailure)
         assertEquals("TeamInvitation(redacted)", decoded.toString())
     }
+
+    @Test
+    fun stableFileCodeCarriesOnlyTheSelectedSnapshotReference() {
+        val invitation = TeamInvitationCodec.create(
+            teamId = "team-1",
+            folderId = "folder_1",
+            targetEmail = "member@example.com",
+            role = TeamRole.VIEWER,
+            ownerKeyFingerprint = "b".repeat(64),
+            nowEpochMillis = 1_000_000L,
+            inviteId = "invite-2",
+            liveFileId = "team-live-file",
+        )
+        val decoded = TeamInvitationCodec.decode(TeamInvitationCodec.encode(invitation, byteArrayOf(7, 8, 9)), 1_000_001L)
+        try {
+            assertEquals("team-live-file", decoded.liveFileId)
+            assertTrue(decoded.embeddedEnvelopeCopy()!!.contentEquals(byteArrayOf(7, 8, 9)))
+        } finally {
+            invitation.clear()
+            decoded.clear()
+        }
+    }
 }

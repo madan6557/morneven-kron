@@ -30,16 +30,19 @@ class TeamJoinPolicyTest {
     }
 
     @Test
-    fun invitationMetadataMustMatchExactlyAndBeUnique() {
+    fun invitationNameMustMatchAndCanRetryDuplicateUpload() {
         val invitation = invitation(TeamRole.EDITOR)
         try {
             val valid = invitationFile(invitation)
-            assertEquals(valid, TeamJoinPolicy.invitationFile(listOf(valid), invitation))
-            assertTrue(runCatching { TeamJoinPolicy.invitationFile(listOf(valid, valid.copy(fileId = "duplicate")), invitation) }.isFailure)
+            assertEquals(listOf(valid), TeamJoinPolicy.invitationCandidates(listOf(valid), invitation))
+            assertEquals(
+                listOf(valid.copy(fileId = "duplicate"), valid),
+                TeamJoinPolicy.invitationCandidates(listOf(valid, valid.copy(fileId = "duplicate")), invitation),
+            )
             assertTrue(
                 runCatching {
-                    TeamJoinPolicy.invitationFile(
-                        listOf(valid.copy(appProperties = valid.appProperties + ("role" to TeamRole.VIEWER))),
+                    TeamJoinPolicy.invitationCandidates(
+                        listOf(valid.copy(name = "invitation-lain.kronteam")),
                         invitation,
                     )
                 }.isFailure,
@@ -65,7 +68,7 @@ class TeamJoinPolicyTest {
 
     @Test
     fun preflightResultNeverPrintsIdentifiers() {
-        val result = TeamJoinPreflightResult(TEAM_ID, FOLDER_ID, TeamRole.EDITOR, "head", 1)
+        val result = TeamJoinPreflightResult(TEAM_ID, FOLDER_ID, TeamRole.EDITOR, "head", 1, "invite-file")
         assertEquals("TeamJoinPreflightResult(redacted)", result.toString())
     }
 
@@ -89,7 +92,7 @@ class TeamJoinPolicyTest {
         val inviteHash = TeamInvitationCodec.sha256(invitation.inviteId.toByteArray())
         return TeamDriveFile(
             fileId = "invitation-file",
-            name = "invitation.kronteam",
+            name = "invitation-$inviteHash.kronteam",
             sizeBytes = 100,
             appProperties = mapOf(
                 "product" to "KRON",

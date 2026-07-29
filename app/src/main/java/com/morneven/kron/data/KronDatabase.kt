@@ -39,7 +39,7 @@ import com.morneven.kron.security.SqlCipherLibrary
         TeamInvitationUseEntity::class,
         TeamEventProofEntity::class,
     ],
-    version = 15,
+    version = 16,
     exportSchema = true,
 )
 abstract class KronDatabase : RoomDatabase() {
@@ -1044,6 +1044,18 @@ abstract class KronDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_15_16: Migration = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE team_workspaces ADD COLUMN liveFileId TEXT")
+                check(db.query("PRAGMA foreign_key_check").use { !it.moveToFirst() }) {
+                    "Relasi database tidak valid setelah migrasi file Team"
+                }
+                check(db.query("PRAGMA integrity_check").use { it.moveToFirst() && it.getString(0).equals("ok", true) }) {
+                    "Database tidak utuh setelah migrasi file Team"
+                }
+            }
+        }
+
         private val ALL_MIGRATIONS = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
@@ -1059,6 +1071,7 @@ abstract class KronDatabase : RoomDatabase() {
             MIGRATION_12_13,
             MIGRATION_13_14,
             MIGRATION_14_15,
+            MIGRATION_15_16,
         )
 
         private fun addTeamSyncColumns(
@@ -1162,12 +1175,29 @@ abstract class KronDatabase : RoomDatabase() {
                 "recurring_rules",
                 "receipts",
             )
+            val privateScopes = mapOf(
+                "accounts" to "{row}.sharingMode<>'TEAM'",
+                "categories" to "({row}.accountId IS NULL OR EXISTS(SELECT 1 FROM accounts a WHERE a.id={row}.accountId AND a.sharingMode<>'TEAM'))",
+                "portfolios" to "EXISTS(SELECT 1 FROM accounts a WHERE a.id={row}.accountId AND a.sharingMode<>'TEAM')",
+                "budget_periods" to "EXISTS(SELECT 1 FROM portfolios p JOIN accounts a ON a.id=p.accountId WHERE p.id={row}.portfolioId AND a.sharingMode<>'TEAM')",
+                "allocations" to "EXISTS(SELECT 1 FROM budget_periods p JOIN portfolios f ON f.id=p.portfolioId JOIN accounts a ON a.id=f.accountId WHERE p.id={row}.periodId AND a.sharingMode<>'TEAM')",
+                "portfolio_allocation_templates" to "EXISTS(SELECT 1 FROM portfolios p JOIN accounts a ON a.id=p.accountId WHERE p.id={row}.portfolioId AND a.sharingMode<>'TEAM')",
+                "activity_events" to "EXISTS(SELECT 1 FROM accounts a WHERE a.id={row}.accountId AND a.sharingMode<>'TEAM')",
+                "recurring_rules" to "EXISTS(SELECT 1 FROM accounts a WHERE a.id={row}.accountId AND a.sharingMode<>'TEAM')",
+                "receipts" to "EXISTS(SELECT 1 FROM activity_events e JOIN accounts a ON a.id=e.accountId WHERE e.id={row}.eventId AND a.sharingMode<>'TEAM')",
+            )
             generationTables.filter { db.hasTable(it) }.forEach { table ->
                 listOf("INSERT", "UPDATE", "DELETE").forEach { operation ->
                     val suffix = operation.lowercase()
+                    val rows = if (operation == "UPDATE") listOf("OLD", "NEW") else listOf(if (operation == "DELETE") "OLD" else "NEW")
+                    val privateScope = rows.joinToString(" OR ") { row ->
+                        "(${privateScopes.getValue(table).replace("{row}", row)})"
+                    }
+                    db.execSQL("DROP TRIGGER IF EXISTS sync_generation_${table}_$suffix")
                     db.execSQL("""
-                        CREATE TRIGGER IF NOT EXISTS sync_generation_${table}_$suffix
+                        CREATE TRIGGER sync_generation_${table}_$suffix
                         AFTER $operation ON $table
+                        WHEN $privateScope
                         BEGIN
                             UPDATE sync_state
                             SET localGeneration = localGeneration + 1,
@@ -1188,11 +1218,18 @@ abstract class KronDatabase : RoomDatabase() {
                 "ledger_lines",
                 "journal_seals",
                 "evidence_keys",
+            )
+            val removedTeamGuards = listOf(
                 "team_workspaces",
                 "team_members",
                 "team_invitation_uses",
                 "team_event_proofs",
             )
+            (guardedTables + removedTeamGuards).filter { db.hasTable(it) }.forEach { table ->
+                listOf("insert", "update", "delete").forEach { operation ->
+                    db.execSQL("DROP TRIGGER IF EXISTS sync_write_guard_${table}_$operation")
+                }
+            }
             guardedTables.filter { db.hasTable(it) }.forEach { table ->
                 listOf("INSERT", "UPDATE", "DELETE").forEach { operation ->
                     val suffix = operation.lowercase()
@@ -1454,6 +1491,6 @@ abstract class KronDatabase : RoomDatabase() {
         }
 
         const val DATABASE_NAME = "kron-v4.db"
-        const val SCHEMA_VERSION = 15
+        const val SCHEMA_VERSION = 16
     }
 }

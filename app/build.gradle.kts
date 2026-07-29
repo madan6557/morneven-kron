@@ -32,14 +32,14 @@ android {
         applicationId = "com.morneven.kron"
         minSdk = 26
         targetSdk = 37
-        versionCode = 84
-        versionName = "1.6.0"
+        versionCode = 85
+        versionName = "1.6.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${googleWebClientId.replace("\"", "\\\"")}\"")
         buildConfigField("String", "PRIVACY_POLICY_URL", "\"${privacyPolicyUrl.replace("\"", "\\\"")}\"")
         buildConfigField("boolean", "DRIVE_SYNC_CONFIGURED", (googleWebClientId.isNotBlank() && privacyPolicyUrl.isNotBlank()).toString())
-        buildConfigField("boolean", "TEAM_ACCOUNT_ENABLED", "false")
+        buildConfigField("boolean", "TEAM_ACCOUNT_ENABLED", "true")
         buildConfigField("boolean", "ONE_TIME_VIEW_ENABLED", "false")
     }
 
@@ -58,16 +58,12 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
-            buildConfigField("boolean", "TEAM_ACCOUNT_ENABLED", "true")
-            buildConfigField("boolean", "ONE_TIME_VIEW_ENABLED", "true")
         }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             isDebuggable = false
             if (signingFile.exists()) signingConfig = signingConfigs.getByName("release")
-            buildConfigField("boolean", "TEAM_ACCOUNT_ENABLED", "true")
-            buildConfigField("boolean", "ONE_TIME_VIEW_ENABLED", "true")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

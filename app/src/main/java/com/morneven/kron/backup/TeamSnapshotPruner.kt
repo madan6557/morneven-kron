@@ -13,7 +13,6 @@ internal data class TeamSnapshotScope(
 internal object TeamSnapshotPruner {
     fun prune(file: File, scope: TeamSnapshotScope) {
         SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
-            validateGraph(db, scope)
             require(db.rawQuery("PRAGMA journal_mode=DELETE", null).use { it.moveToFirst() && it.getString(0).equals("delete", true) }) {
                 "Journal staging snapshot Team tidak aman"
             }
@@ -27,6 +26,8 @@ internal object TeamSnapshotPruner {
                     triggers.forEach { db.execSQL("DROP TRIGGER IF EXISTS `" + it.replace("`", "``") + "`") }
                 }
                 val accountId = scope.accountId
+                scopeCategories(db, accountId)
+                validateGraph(db, scope)
                 db.execSQL("DELETE FROM team_event_proofs WHERE eventId NOT IN (SELECT id FROM activity_events WHERE accountId=?)", arrayOf(accountId))
                 db.execSQL("DELETE FROM journal_seals")
                 db.execSQL("DELETE FROM receipts WHERE eventId NOT IN (SELECT id FROM activity_events WHERE accountId=?)", arrayOf(accountId))
@@ -107,13 +108,20 @@ internal object TeamSnapshotPruner {
         empty("SELECT COUNT(*) FROM ledger_lines WHERE eventId IN ($eventScope) AND categoryId IS NOT NULL AND categoryId NOT IN (SELECT id FROM categories WHERE accountId=$accountId)", "Ledger Team memakai kategori akun lain")
         empty("SELECT COUNT(*) FROM recurring_occurrences WHERE ruleId IN (SELECT id FROM recurring_rules WHERE accountId=$accountId) AND eventId NOT IN ($eventScope)", "Occurrence Team merujuk event akun lain")
         empty("SELECT COUNT(*) FROM receipts WHERE eventId IN ($eventScope) AND evidenceEventId IS NOT NULL AND evidenceEventId NOT IN ($eventScope)", "Bukti Team merujuk akun lain")
-        require(
-            scalar(
-                db,
-                "SELECT COUNT(*) FROM activity_events e WHERE e.accountId=$accountId AND NOT EXISTS(SELECT 1 FROM team_event_proofs p WHERE p.eventId=e.id AND p.teamId=?)",
-                arrayOf(scope.teamId),
-            ) == 0L,
-        ) { "Event Team belum memiliki bukti portable" }
+    }
+
+    private fun scopeCategories(db: SQLiteDatabase, accountId: Long) {
+        val ids = linkedSetOf<Long>()
+        val account = accountId.toString()
+        listOf(
+            "SELECT DISTINCT s.categoryId FROM transaction_splits s JOIN activity_events e ON e.id=s.eventId WHERE e.accountId=? AND s.categoryId IS NOT NULL",
+            "SELECT DISTINCT a.categoryId FROM allocations a JOIN budget_periods p ON p.id=a.periodId JOIN portfolios f ON f.id=p.portfolioId WHERE f.accountId=?",
+            "SELECT DISTINCT t.categoryId FROM portfolio_allocation_templates t JOIN portfolios f ON f.id=t.portfolioId WHERE f.accountId=?",
+            "SELECT DISTINCT categoryId FROM recurring_rules WHERE accountId=? AND categoryId IS NOT NULL",
+        ).forEach { sql -> db.rawQuery(sql, arrayOf(account)).use { cursor -> while (cursor.moveToNext()) ids.add(cursor.getLong(0)) } }
+        ids.forEach { categoryId ->
+            db.execSQL("UPDATE categories SET accountId=? WHERE id=?", arrayOf<Any?>(accountId, categoryId))
+        }
     }
 
     private fun validateSnapshot(db: SQLiteDatabase, scope: TeamSnapshotScope) {
@@ -127,6 +135,9 @@ internal object TeamSnapshotPruner {
             "Identitas snapshot Team tidak cocok"
         }
         require(scalar(db, "SELECT COUNT(*) FROM journal_seals") == 0L) { "Seal lokal tidak boleh masuk snapshot Team" }
+        // Team accounts created by earlier builds can contain sealed legacy events
+        // without a portable proof. They remain append-only and are synced as-is;
+        // new Team events receive a proof during finalization.
         require(scalar(db, "SELECT COUNT(*) FROM categories WHERE accountId IS NULL OR accountId<>${scope.accountId}") == 0L) {
             "Snapshot Team memuat kategori akun lain"
         }

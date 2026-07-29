@@ -479,4 +479,28 @@ class KronMigrationTest {
             close()
         }
     }
+
+    @Test
+    fun migrationFifteenToSixteenAddsOnlyStableTeamFileReference() {
+        val name = "kron-production-15-to-16.db"
+        migrationHelper.createDatabase(name, 15).apply {
+            execSQL("INSERT INTO accounts(id,name,isActive,isArchived,createdAt,sharingMode,teamId,revision,updatedAt) VALUES(1,'Team',1,0,1,'TEAM','team-16',0,1)")
+            execSQL("INSERT INTO team_workspaces(accountId,teamId,folderId,localRole,ownerSubjectHash,headSnapshotId,generation,status,canRead,canWrite,canShare,updatedAt) VALUES(1,'team-16','folder-16','OWNER','owner','head-15',4,'SYNCED',1,1,1,1)")
+            close()
+        }
+        migrationHelper.runMigrationsAndValidate(name, 16, true, KronDatabase.MIGRATION_15_16).apply {
+            query("SELECT teamId,folderId,headSnapshotId,generation,liveFileId FROM team_workspaces WHERE accountId=1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("team-16", cursor.getString(0))
+                assertEquals("folder-16", cursor.getString(1))
+                assertEquals("head-15", cursor.getString(2))
+                assertEquals(4L, cursor.getLong(3))
+                assertTrue(cursor.isNull(4))
+            }
+            execSQL("UPDATE team_workspaces SET liveFileId='stable-file-16' WHERE accountId=1")
+            query("PRAGMA foreign_key_check").use { cursor -> assertFalse(cursor.moveToFirst()) }
+            query("PRAGMA integrity_check").use { cursor -> assertTrue(cursor.moveToFirst()); assertEquals("ok", cursor.getString(0)) }
+            close()
+        }
+    }
 }

@@ -57,6 +57,15 @@ class TeamKeyStore @Inject constructor(
         }
     }
 
+    suspend fun createAndStore(teamId: String) {
+        val key = ByteArray(TEAM_KEY_BYTES).also(SecureRandom()::nextBytes)
+        try {
+            store(teamId, key)
+        } finally {
+            key.fill(0)
+        }
+    }
+
     suspend fun acquire(teamId: String): ByteArray? = withContext(Dispatchers.IO) {
         mutex.withLock {
             val file = keyFile(teamId)

@@ -77,6 +77,23 @@ class TeamDriveRestClientTest {
     }
 
     @Test
+    fun uploadSnapshotWithStableFilePatchesThatFile() = runBlocking {
+        lateinit var connection: FakeHttpConnection
+        val client = TeamDriveRestClient(
+            endpoint = "https://drive.test",
+            connectionFactory = DriveHttpConnectionFactory { url ->
+                FakeHttpConnection(url, fileJson("file-1", "snapshot", snapshotProperties(manifest().payloadSha256), 3).toByteArray())
+                    .also { connection = it }
+            },
+        )
+
+        client.uploadSnapshot("token", "folder-1", "team-1", manifest(), byteArrayOf(1, 2, 3), "file-1")
+
+        assertEquals("PATCH", connection.requestMethod)
+        assertTrue(connection.url.toString().contains("/file-1?uploadType=multipart"))
+    }
+
+    @Test
     fun uploadInvitationStoresOnlyHashesAndVerifiesMetadata() = runBlocking {
         val invitation = TeamInvitationCodec.create(
             teamId = "team-1",
@@ -167,6 +184,7 @@ class TeamDriveRestClientTest {
         override fun connect() = Unit
         override fun disconnect() = Unit
         override fun usingProxy(): Boolean = false
+        override fun setRequestMethod(method: String) { this.method = method }
         override fun getResponseCode(): Int = HTTP_OK
         override fun getInputStream() = ByteArrayInputStream(response)
         override fun getOutputStream() = requestBytes

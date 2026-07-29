@@ -73,7 +73,7 @@ class AuthorizationClientDriveSession(
     private var cachedGrant: CachedGrant? = null
 
     init {
-        require(requestedScopes == setOf(DRIVE_APPDATA_SCOPE) || requestedScopes == setOf(DRIVE_FILE_SCOPE)) {
+        require(requestedScopes in setOf(setOf(DRIVE_APPDATA_SCOPE), setOf(DRIVE_FILE_SCOPE))) {
             "Scope Google Drive tidak didukung"
         }
     }
@@ -101,6 +101,9 @@ class AuthorizationClientDriveSession(
             ?: return DriveConnectResult.Failed("Akun Google belum terhubung", retryable = false)
         return acceptConnectionResult(account, authorize(account, interactive = true))
     }
+
+    suspend fun connectAccount(account: GoogleAccountIdentity): DriveConnectResult =
+        acceptConnectionResult(account, authorize(account, interactive = true))
 
     /** Kept for source compatibility. Connections always begin with Credential Manager. */
     suspend fun acceptConnectionResult(

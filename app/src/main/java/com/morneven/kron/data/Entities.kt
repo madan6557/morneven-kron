@@ -591,6 +591,8 @@ data class TeamWorkspaceEntity(
     val folderId: String,
     val localRole: String,
     val ownerSubjectHash: String,
+    /** One shared Drive file selected with drive.file. It is not a folder listing. */
+    val liveFileId: String? = null,
     val headSnapshotId: String? = null,
     @ColumnInfo(defaultValue = "0") val generation: Long = 0,
     @ColumnInfo(defaultValue = "'LOCAL_ONLY'") val status: String = TeamWorkspaceStatus.LOCAL_ONLY,

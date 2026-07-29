@@ -357,6 +357,28 @@ class DatabaseEncryptionManager @Inject constructor(
         }
     }
 
+    fun encryptPortableDatabaseUsingCurrentMode(plaintext: File, current: File, target: File) {
+        deleteDatabaseFiles(target)
+        validatePlaintextDatabase(plaintext)
+        if (canOpenPlaintext(current)) {
+            copyDatabaseFiles(plaintext, target)
+            validatePlaintextDatabase(target)
+            return
+        }
+        val mode = resolveKnownMode(current)
+            ?: throw DatabaseKeyUnavailableException("Mode kunci database KRON tidak dapat diverifikasi")
+        val root = keyManager.loadExistingDatabasePassphrase()
+            ?: throw DatabaseKeyUnavailableException("Kunci perangkat KRON tidak tersedia")
+        val targetKey = keyBytes(root, mode)
+        try {
+            exportToEncrypted(plaintext, ByteArray(0), target, root, mode)
+            validateEncrypted(target, targetKey)
+        } finally {
+            targetKey.fill(0)
+            root.fill(0)
+        }
+    }
+
     private fun encryptedUserVersion(database: File, mode: DatabaseKeyMode): Int? {
         val root = runCatching { keyManager.loadExistingDatabasePassphrase() }.getOrNull() ?: return null
         val key = keyBytes(root, mode)
@@ -601,6 +623,7 @@ class DatabaseEncryptionManager @Inject constructor(
         File(database.parentFile, ".${database.name}.pre-1.5.0")
 
     private fun recoveryCopies(database: File): List<File> = schemaRecoveryCopies(database) + listOf(
+        File(database.parentFile, ".${database.name}.swap-old"),
         preUpgradeCopy(database),
         File(database.parentFile, ".${database.name}.pre-1.4.7"),
     )

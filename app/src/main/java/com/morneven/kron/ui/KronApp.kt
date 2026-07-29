@@ -25,6 +25,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -41,6 +42,8 @@ import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
@@ -50,6 +53,7 @@ import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Fingerprint
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
@@ -58,6 +62,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -87,6 +92,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -142,6 +149,7 @@ import com.morneven.kron.sync.ConflictPreview
 import com.morneven.kron.sync.ConflictPreviewResult
 import com.morneven.kron.sync.DriveConnectResult
 import com.morneven.kron.sync.DriveAccessTokenResult
+import com.morneven.kron.sync.DrivePickerCompletionResult
 import com.morneven.kron.team.TeamJoinPreflightResult
 import com.morneven.kron.sync.DriveSyncRuntime
 import com.morneven.kron.sync.GoogleAccountIdentity
@@ -335,6 +343,13 @@ private fun MainScaffold(
     var dialogReceiptUri by remember { mutableStateOf<Uri?>(null) }
     var dialogCameraFile by remember { mutableStateOf<java.io.File?>(null) }
     val manualRestoreReady by viewModel.isManualRestoreReady.collectAsState()
+    val teamConflictAccount by viewModel.teamConflictAccount.collectAsState()
+    val teamConflictPreview by viewModel.teamConflictPreview.collectAsState()
+    val teamConflictError by viewModel.teamConflictError.collectAsState()
+    val teamSyncing by viewModel.teamSyncing.collectAsState()
+    val teamSyncDetail by viewModel.teamSyncDetail.collectAsState()
+    val teamSyncFailed by viewModel.teamSyncFailed.collectAsState()
+    val teamWaitingNetwork by viewModel.teamWaitingNetwork.collectAsState()
     val evidenceHealth by viewModel.evidenceHealth.collectAsState()
     val evidenceVerification by viewModel.evidenceVerification.collectAsState()
     val pendingDriveSubject by viewModel.pendingDriveSubjectId.collectAsState()
@@ -371,17 +386,24 @@ private fun MainScaffold(
     var showTeamScopeProbe by rememberSaveable { mutableStateOf(false) }
     var teamProbeMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var teamProbeBusy by remember { mutableStateOf(false) }
+    var teamTokenBusy by remember { mutableStateOf(false) }
+    var recoveredTeamSyncAttempts by remember { mutableStateOf(emptySet<Long>()) }
+    var teamGoogleAccountLabel by rememberSaveable { mutableStateOf<String?>(null) }
     var showConvertToTeamConfirm by rememberSaveable { mutableStateOf(false) }
     var showConvertToPrivateConfirm by rememberSaveable { mutableStateOf(false) }
     var convertBusy by remember { mutableStateOf(false) }
     var pendingTeamAuthorization by remember { mutableStateOf<DriveConnectResult.UserActionRequired?>(null) }
     var pendingTeamPickerResolution by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingTeamJoinPickerResolution by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingTeamSyncPickerResolution by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingTeamSyncPickerAccountId by rememberSaveable { mutableStateOf<Long?>(null) }
     var showLeaveTeamConfirm by rememberSaveable { mutableStateOf(false) }
     var showCreateInvite by rememberSaveable { mutableStateOf(false) }
     var showJoinDialog by rememberSaveable { mutableStateOf(false) }
     var joinCode by rememberSaveable { mutableStateOf("") }
     var joinBusy by remember { mutableStateOf(false) }
     var joinPreflightResult by rememberSaveable { mutableStateOf<TeamJoinPreflightResult?>(null) }
+    var joinAccessToken by remember { mutableStateOf<String?>(null) }
     var showCollaboratorDialog by rememberSaveable { mutableStateOf(false) }
     var collaboratorBusy by remember { mutableStateOf(false) }
     var collaboratorConfirmRemove by remember { mutableStateOf<TeamMemberEntity?>(null) }
@@ -403,9 +425,29 @@ private fun MainScaffold(
         mutableStateOf(driveSyncRuntime?.isWifiOnly() ?: false)
     }
     val scope = rememberCoroutineScope()
+    LaunchedEffect(state.recoveredTeamAccounts, teamDriveScopeProbe) {
+        val account = state.recoveredTeamAccounts.firstOrNull { it.id !in recoveredTeamSyncAttempts } ?: return@LaunchedEffect
+        recoveredTeamSyncAttempts = recoveredTeamSyncAttempts + account.id
+        val token = teamDriveScopeProbe?.getAccessToken(interactive = false)
+        if (token is DriveAccessTokenResult.Granted) {
+            viewModel.syncTeamSnapshot(
+                accessToken = token.accessToken,
+                accountId = account.id,
+                onRestartRequired = {
+                    restartRequired = true
+                    WorkManager.getInstance(activity).cancelUniqueWork(AutomationWorker.UNIQUE_WORK_NAME)
+                },
+            )
+        }
+    }
+    LaunchedEffect(state.activeAccount?.id, teamDriveScopeProbe) {
+        teamGoogleAccountLabel = if (state.activeAccount?.sharingMode == AccountSharingMode.TEAM) {
+            teamDriveScopeProbe?.currentAccount()?.email
+        } else null
+    }
     val screenshotProtected = !state.screenshotAllowed && (
         state.valuesVisible || dialog != null || auditId != null || showEvidenceCenter ||
-            passwordMode != null || cloudConflict != null
+            passwordMode != null || cloudConflict != null || teamConflictAccount != null
         )
     DisposableEffect(activity, screenshotProtected) {
         if (screenshotProtected) activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -500,8 +542,10 @@ private fun MainScaffold(
     fun handleTeamConnectResult(result: DriveConnectResult) {
         teamProbeBusy = false
         when (result) {
-            is DriveConnectResult.Connected -> teamProbeMessage =
-                "Akun Google terhubung untuk probe Team. Lanjutkan langkah berikutnya."
+            is DriveConnectResult.Connected -> {
+                teamGoogleAccountLabel = result.account.email
+                teamProbeMessage = "Akun Google terhubung untuk Team."
+            }
             is DriveConnectResult.UserActionRequired -> pendingTeamAuthorization = result
             is DriveConnectResult.Failed -> teamProbeMessage = result.message
         }
@@ -667,6 +711,51 @@ private fun MainScaffold(
     val teamPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult(),
     ) { result ->
+        val joinResolutionId = pendingTeamJoinPickerResolution
+        pendingTeamJoinPickerResolution = null
+        if (joinResolutionId != null && teamDriveScopeProbe != null) {
+            scope.launch {
+                when (val completion = teamDriveScopeProbe.completeTeamSnapshotPicker(joinResolutionId, result.resultCode, result.data)) {
+                    is DrivePickerCompletionResult.Granted -> viewModel.verifyJoinCode(
+                        accessToken = completion.accessToken,
+                        googleAccount = completion.account,
+                        code = joinCode.trim(),
+                        onResult = { verified ->
+                            joinAccessToken = completion.accessToken
+                            joinPreflightResult = verified
+                            joinBusy = false
+                        },
+                        onFailure = { joinBusy = false },
+                    )
+                    is DrivePickerCompletionResult.Failed -> {
+                        joinBusy = false
+                        viewModel.showMessage(completion.message)
+                    }
+                }
+            }
+            return@rememberLauncherForActivityResult
+        }
+        val syncResolutionId = pendingTeamSyncPickerResolution
+        val syncAccountId = pendingTeamSyncPickerAccountId
+        pendingTeamSyncPickerResolution = null
+        pendingTeamSyncPickerAccountId = null
+        if (syncResolutionId != null && syncAccountId != null && teamDriveScopeProbe != null) {
+            scope.launch {
+                when (val completion = teamDriveScopeProbe.completeTeamSnapshotPicker(syncResolutionId, result.resultCode, result.data)) {
+                    is DrivePickerCompletionResult.Granted -> viewModel.syncTeamSnapshot(
+                        accessToken = completion.accessToken,
+                        accountId = syncAccountId,
+                        onRestartRequired = {
+                            restartRequired = true
+                            WorkManager.getInstance(activity).cancelUniqueWork(AutomationWorker.UNIQUE_WORK_NAME)
+                        },
+                        allowFileAccessRetry = false,
+                    )
+                    is DrivePickerCompletionResult.Failed -> viewModel.showMessage(completion.message)
+                }
+            }
+            return@rememberLauncherForActivityResult
+        }
         val resolutionId = pendingTeamPickerResolution
         pendingTeamPickerResolution = null
         if (resolutionId != null && teamDriveScopeProbe != null) {
@@ -692,6 +781,30 @@ private fun MainScaffold(
                 probe.cancelAuthorization(resolutionId)
                 teamProbeBusy = false
                 teamProbeMessage = "Permintaan Google Picker sudah tidak berlaku."
+            }
+    }
+    LaunchedEffect(pendingTeamJoinPickerResolution) {
+        val resolutionId = pendingTeamJoinPickerResolution ?: return@LaunchedEffect
+        val probe = teamDriveScopeProbe ?: return@LaunchedEffect
+        runCatching { probe.authorizationRequest(resolutionId) }
+            .onSuccess(teamPickerLauncher::launch)
+            .onFailure {
+                pendingTeamJoinPickerResolution = null
+                probe.cancelAuthorization(resolutionId)
+                joinBusy = false
+                viewModel.showMessage("Google Picker Team sudah tidak berlaku")
+            }
+    }
+    LaunchedEffect(pendingTeamSyncPickerResolution) {
+        val resolutionId = pendingTeamSyncPickerResolution ?: return@LaunchedEffect
+        val probe = teamDriveScopeProbe ?: return@LaunchedEffect
+        runCatching { probe.authorizationRequest(resolutionId) }
+            .onSuccess(teamPickerLauncher::launch)
+            .onFailure {
+                pendingTeamSyncPickerResolution = null
+                pendingTeamSyncPickerAccountId = null
+                probe.cancelAuthorization(resolutionId)
+                viewModel.showMessage("Izin file Team sudah tidak berlaku")
             }
     }
     val accountSwitchLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -878,14 +991,95 @@ private fun MainScaffold(
                         if (driveSyncRuntime == null) viewModel.showMessage("Konfigurasi OAuth Drive belum tersedia")
                         else passwordMode = "DRIVE_CONNECT"
                     },
-                    onSyncNow = {
-                        driveSyncRuntime?.let { runtime -> scope.launch { handleSyncResult(runtime.syncNow()) } }
-                    },
+                     onSyncNow = if (state.activeAccount?.sharingMode != AccountSharingMode.TEAM) {
+                         {
+                             driveSyncRuntime?.let { runtime -> scope.launch { handleSyncResult(runtime.syncNow()) } }
+                         }
+                     } else null,
+                     onSyncTeam = if (state.activeAccount?.sharingMode == AccountSharingMode.TEAM) {
+                         {
+                             scope.launch {
+                                 if (teamTokenBusy) return@launch
+                                 teamTokenBusy = true
+                                 try {
+                                 driveSyncRuntime?.teamNetworkBlockMessage()?.let {
+                                     viewModel.markTeamWaitingNetwork(it)
+                                     return@launch
+                                 }
+                                 val privateAccount = driveSyncRuntime?.currentAccount()
+                                 if (privateAccount == null) {
+                                     viewModel.showMessage("Hubungkan Sync Private terlebih dahulu")
+                                 } else when (val connection = teamDriveScopeProbe?.connectOwner(privateAccount)) {
+                                     is DriveConnectResult.Connected -> {
+                                         when (val token = teamDriveScopeProbe.getAccessToken(interactive = true)) {
+                                             is DriveAccessTokenResult.Granted -> {
+                                                 teamGoogleAccountLabel = token.account.email
+                                                 viewModel.syncTeamSnapshot(
+                                                     accessToken = token.accessToken,
+                                                     accountId = state.activeAccount!!.id,
+                                                     onRestartRequired = {
+                                                         restartRequired = true
+                                                         WorkManager.getInstance(activity).cancelUniqueWork(AutomationWorker.UNIQUE_WORK_NAME)
+                                                     },
+                                                     onFileAccessRequired = {
+                                                         val fileId = state.teamWorkspace?.liveFileId
+                                                         if (fileId == null) {
+                                                             viewModel.showMessage("File snapshot Team belum tersedia")
+                                                         } else {
+                                                             scope.launch {
+                                                                 when (val picker = teamDriveScopeProbe.openExistingTeamSnapshotPicker(fileId)) {
+                                                                     is TeamScopeProbeResult.PickerActionRequired -> {
+                                                                         pendingTeamSyncPickerAccountId = state.activeAccount!!.id
+                                                                         pendingTeamSyncPickerResolution = picker.resolutionId
+                                                                     }
+                                                                     is TeamScopeProbeResult.Failed -> viewModel.showMessage(picker.message)
+                                                                     else -> viewModel.showMessage("Google Picker Team tidak tersedia")
+                                                                 }
+                                                             }
+                                                         }
+                                                     },
+                                                 )
+                                             }
+                                             else -> viewModel.showMessage("Izin workspace Team belum tersedia")
+                                         }
+                                     }
+                                     is DriveConnectResult.UserActionRequired -> pendingTeamAuthorization = connection
+                                     is DriveConnectResult.Failed -> viewModel.showMessage(connection.message)
+                                     null -> viewModel.showMessage("Sinkronisasi Team tidak tersedia")
+                                 }
+                                 } finally {
+                                     teamTokenBusy = false
+                                 }
+                             }
+                         }
+                     } else null,
+                    teamSyncing = teamSyncing || teamTokenBusy,
+                    teamSyncDetail = teamSyncDetail,
+                    teamSyncFailed = teamSyncFailed,
+                    teamWaitingNetwork = teamWaitingNetwork,
+                    teamGoogleAccountLabel = teamGoogleAccountLabel,
                     onDisconnectCloud = {
-                        driveSyncRuntime?.let { runtime -> scope.launch { runtime.disconnect(); viewModel.showMessage("Google Drive diputuskan") } }
+                        scope.launch {
+                            if (state.activeAccount?.sharingMode == AccountSharingMode.TEAM) {
+                                teamDriveScopeProbe?.disconnect()
+                                teamGoogleAccountLabel = null
+                            } else {
+                                driveSyncRuntime?.disconnect()
+                            }
+                            viewModel.showMessage("Google Drive diputuskan")
+                        }
                     },
                     onChangeCloudAccount = {
-                        driveSyncRuntime?.let {
+                        if (state.activeAccount?.sharingMode == AccountSharingMode.TEAM && teamDriveScopeProbe != null) {
+                            scope.launch {
+                                val privateAccount = driveSyncRuntime?.currentAccount()
+                                if (privateAccount == null) {
+                                    viewModel.showMessage("Akun Team selalu memakai akun Google Sync Private")
+                                } else {
+                                    handleTeamConnectResult(teamDriveScopeProbe.connectOwner(privateAccount))
+                                }
+                            }
+                        } else if (driveSyncRuntime != null) {
                             passwordMode = "DRIVE_CONNECT"
                         }
                     },
@@ -1027,7 +1221,8 @@ private fun MainScaffold(
             onDismissRequest = { if (!convertBusy) showConvertToTeamConfirm = false },
             title = { Text("Konversi ke Team Account") },
             text = {
-                Text("Akun ${state.activeAccount!!.name} akan dikonversi ke Team Account. " +
+                Text("Akun KRON: ${state.activeAccount!!.name}\nAkun Google: ${cloudBackupState.accountLabel ?: "belum terhubung"}\n\n" +
+                    "Akun ini akan dikonversi ke Team Account. " +
                     "Workspace Team akan dibuat di Google Drive. " +
                     "Backup database akan dibuat otomatis sebelum konversi. Lanjutkan?")
             },
@@ -1037,11 +1232,25 @@ private fun MainScaffold(
                     onClick = {
                         convertBusy = true
                         scope.launch {
-                            val tr = teamDriveScopeProbe.getAccessToken(interactive = true)
-                            if (tr is DriveAccessTokenResult.Granted) {
-                                viewModel.convertPrivateToTeam(tr.accessToken, tr.account, state.activeAccount!!.id)
+                            val owner = driveSyncRuntime?.currentAccount()
+                            if (owner == null) {
+                                viewModel.showMessage("Hubungkan Drive Sync terlebih dahulu")
                             } else {
-                                viewModel.showMessage("Akses Google Drive diperlukan untuk konversi")
+                                when (val consent = teamDriveScopeProbe.connectOwner(owner)) {
+                                    is DriveConnectResult.Connected -> {
+                                        val token = teamDriveScopeProbe.getAccessToken(interactive = false)
+                                        if (token is DriveAccessTokenResult.Granted) {
+                                            viewModel.convertPrivateToTeam(token.accessToken, token.account, state.activeAccount!!.id)
+                                        } else {
+                                            viewModel.showMessage("Izin Google Drive belum selesai")
+                                        }
+                                    }
+                                    is DriveConnectResult.UserActionRequired -> {
+                                        pendingTeamAuthorization = consent
+                                        viewModel.showMessage("Berikan izin Google Drive untuk Team, lalu tekan konversi lagi")
+                                    }
+                                    is DriveConnectResult.Failed -> viewModel.showMessage(consent.message)
+                                }
                             }
                             convertBusy = false
                             showConvertToTeamConfirm = false
@@ -1059,7 +1268,8 @@ private fun MainScaffold(
             onDismissRequest = { if (!convertBusy) showConvertToPrivateConfirm = false },
             title = { Text("Kembali ke Private") },
             text = {
-                Text("Akun ${state.activeAccount!!.name} akan dikembalikan ke akun Private. " +
+                Text("Akun KRON: ${state.activeAccount!!.name}\nAkun Google: ${cloudBackupState.accountLabel ?: "tidak tersedia"}\n\n" +
+                    "Akun ini akan dikembalikan ke akun Private. " +
                     "Data Team (workspace, collaborator) akan dihapus. " +
                     "Backup database akan dibuat otomatis. Lanjutkan?")
             },
@@ -1184,21 +1394,32 @@ private fun MainScaffold(
         )
     }
     if (showCreateInvite) {
+        val clipboard = LocalClipboardManager.current
         var inviteEmail by rememberSaveable { mutableStateOf("") }
         var inviteRole by rememberSaveable { mutableStateOf("EDITOR") }
         var inviteBusy by remember { mutableStateOf(false) }
         var inviteCode by rememberSaveable { mutableStateOf<String?>(null) }
+        var inviteCopied by rememberSaveable { mutableStateOf(false) }
+        val inviteEmailValid = inviteEmail.trim().let { it.length in 3..320 && '@' in it && !it.any(Char::isWhitespace) }
         AlertDialog(
-            onDismissRequest = { if (!inviteBusy) showCreateInvite = false },
+            onDismissRequest = { if (!inviteBusy) { inviteCode = null; inviteEmail = ""; showCreateInvite = false } },
             title = { Text("Buat Kode Akses") },
             text = {
                 if (inviteCode != null) {
-                    Column {
+                    Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
                         Text("Kode akses berhasil dibuat:", style = MaterialTheme.typography.bodyMedium)
                         Spacer(Modifier.height(8.dp))
-                        Text(inviteCode!!, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(8.dp).background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small).padding(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SelectionContainer(Modifier.weight(1f)) {
+                                Text(inviteCode!!, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(8.dp).background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small).padding(8.dp))
+                            }
+                            IconButton(onClick = { clipboard.setText(AnnotatedString(inviteCode!!)); inviteCopied = true }) {
+                                Icon(Icons.Outlined.ContentCopy, contentDescription = "Salin kode akses")
+                            }
+                        }
                         Spacer(Modifier.height(4.dp))
                         Text("Bagikan kode ini kepada calon collaborator. Kode hanya berlaku 24 jam.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (inviteCopied) Text("Kode berhasil disalin", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
                     }
                 } else {
                     Column {
@@ -1207,6 +1428,8 @@ private fun MainScaffold(
                             onValueChange = { inviteEmail = it },
                             label = { Text("Email Google") },
                             singleLine = true,
+                            isError = inviteEmail.isNotBlank() && !inviteEmailValid,
+                            supportingText = { Text(if (inviteEmailValid || inviteEmail.isBlank()) "Kode hanya berlaku untuk email ini." else "Masukkan email Google yang valid.") },
                             enabled = !inviteBusy,
                             modifier = Modifier.fillMaxWidth(),
                         )
@@ -1221,14 +1444,22 @@ private fun MainScaffold(
             },
             confirmButton = {
                 if (inviteCode != null) {
-                    TextButton(onClick = { showCreateInvite = false }) { Text("Selesai") }
+                    TextButton(onClick = { inviteCode = null; inviteEmail = ""; showCreateInvite = false }) { Text("Selesai") }
                 } else {
                     TextButton(
                         onClick = {
                             inviteBusy = true
                             scope.launch {
                                 val tokenResult = teamDriveScopeProbe?.let { probe ->
-                                    probe.getAccessToken(interactive = true)
+                                    val owner = driveSyncRuntime?.currentAccount()
+                                    if (owner != null) {
+                                        when (probe.connectOwner(owner)) {
+                                            is DriveConnectResult.Connected -> probe.getAccessToken(interactive = false)
+                                            else -> DriveAccessTokenResult.Failed("Izin Google Drive Team belum selesai", true)
+                                        }
+                                    } else {
+                                        DriveAccessTokenResult.Failed("Hubungkan Drive Sync Owner terlebih dahulu", false)
+                                    }
                                 }
                                 when (tokenResult) {
                                     is DriveAccessTokenResult.Granted -> {
@@ -1252,25 +1483,28 @@ private fun MainScaffold(
                                 }
                             }
                         },
-                        enabled = inviteEmail.isNotBlank() && !inviteBusy,
-                    ) { Text("Buat") }
+                        enabled = inviteEmailValid && !inviteBusy,
+                    ) {
+                        if (inviteBusy) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        else Text("Buat")
+                    }
                 }
             },
             dismissButton = {
                 if (!inviteBusy) {
-                    TextButton(onClick = { showCreateInvite = false }) { Text("Batal") }
+                    TextButton(onClick = { inviteCode = null; inviteEmail = ""; showCreateInvite = false }) { Text("Batal") }
                 }
             },
         )
     }
     if (showJoinDialog) {
         AlertDialog(
-            onDismissRequest = { if (!joinBusy) { showJoinDialog = false; joinPreflightResult = null } },
+            onDismissRequest = { if (!joinBusy) { showJoinDialog = false; joinCode = ""; joinPreflightResult = null } },
             title = { Text(if (joinPreflightResult != null) "Kode valid" else "Masukkan Kode Akses") },
             text = {
                 val result = joinPreflightResult
                 if (result != null) {
-                    Column {
+                    Column(modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
                         Text("Kode akses Team valid. Detail workspace:")
                         Spacer(Modifier.height(8.dp))
                         Text("Role: ${result.role.lowercase().replaceFirstChar(Char::uppercase)}")
@@ -1283,10 +1517,12 @@ private fun MainScaffold(
                         Spacer(Modifier.height(8.dp))
                         OutlinedTextField(
                             value = joinCode,
-                            onValueChange = { joinCode = it.uppercase() },
+                            onValueChange = { joinCode = it },
                             label = { Text("Kode akses") },
                             placeholder = { Text("KRONTEAM1.") },
-                            singleLine = true,
+                            singleLine = false,
+                            minLines = 3,
+                            maxLines = 6,
                             enabled = !joinBusy,
                             modifier = Modifier.fillMaxWidth(),
                         )
@@ -1306,17 +1542,22 @@ private fun MainScaffold(
                         TextButton(onClick = {
                             joinBusy = true
                             scope.launch {
-                                val tr = teamDriveScopeProbe?.getAccessToken(interactive = true)
-                                if (tr is DriveAccessTokenResult.Granted) {
+                                val token = joinAccessToken
+                                if (token != null) {
                                     state.activeAccount?.let { acct ->
-                                        viewModel.joinTeam(tr.accessToken, tr.account, joinCode, acct.id, preflight)
+                                        viewModel.joinTeam(token, joinCode.trim(), preflight) {
+                                            restartRequired = true
+                                            WorkManager.getInstance(activity).cancelUniqueWork(AutomationWorker.UNIQUE_WORK_NAME)
+                                        }
                                     }
                                 } else {
                                     viewModel.showMessage("Token Google Drive tidak tersedia")
                                 }
                                 joinBusy = false
                                 showJoinDialog = false
+                                joinCode = ""
                                 joinPreflightResult = null
+                                joinAccessToken = null
                             }
                         }) { Text("Gabung") }
                     }
@@ -1325,17 +1566,38 @@ private fun MainScaffold(
                         onClick = {
                             joinBusy = true
                             scope.launch {
-                                val tr = teamDriveScopeProbe?.getAccessToken(interactive = true)
-                                when (tr) {
-                                    is DriveAccessTokenResult.Granted -> {
-                                        viewModel.verifyJoinCode(tr.accessToken, tr.account, joinCode) { result ->
-                                            joinPreflightResult = result
-                                            joinBusy = false
+                                val probe = teamDriveScopeProbe ?: run {
+                                    joinBusy = false
+                                    viewModel.showMessage("Pemilih akun Google tidak tersedia")
+                                    return@launch
+                                }
+                                val privateAccount = driveSyncRuntime?.currentAccount() ?: run {
+                                    joinBusy = false
+                                    viewModel.showMessage("Hubungkan Sync Private dengan akun Google Member terlebih dahulu")
+                                    return@launch
+                                }
+                                when (val connection = probe.connectOwner(privateAccount)) {
+                                    is DriveConnectResult.Connected -> {
+                                        when (val picker = probe.openTeamSnapshotPicker(joinCode.trim())) {
+                                            is TeamScopeProbeResult.PickerActionRequired -> pendingTeamJoinPickerResolution = picker.resolutionId
+                                            is TeamScopeProbeResult.Failed -> {
+                                                joinBusy = false
+                                                viewModel.showMessage(picker.message)
+                                            }
+                                            else -> {
+                                                joinBusy = false
+                                                viewModel.showMessage("Google Picker Team tidak tersedia")
+                                            }
                                         }
                                     }
-                                    else -> {
+                                    is DriveConnectResult.UserActionRequired -> {
+                                        pendingTeamAuthorization = connection
                                         joinBusy = false
-                                        viewModel.showMessage("Token Google Drive tidak tersedia")
+                                        viewModel.showMessage("Berikan izin Drive untuk akun yang dipakai Sync Private, lalu tekan Verifikasi lagi")
+                                    }
+                                    is DriveConnectResult.Failed -> {
+                                        joinBusy = false
+                                        viewModel.showMessage(connection.message)
                                     }
                                 }
                             }
@@ -1346,9 +1608,9 @@ private fun MainScaffold(
             },
             dismissButton = {
                 if (joinPreflightResult != null) {
-                    TextButton(onClick = { showJoinDialog = false; joinPreflightResult = null }) { Text("Tutup") }
+                    TextButton(onClick = { showJoinDialog = false; joinCode = ""; joinPreflightResult = null; joinAccessToken = null }) { Text("Tutup") }
                 } else {
-                    TextButton(onClick = { showJoinDialog = false }) { Text("Batal") }
+                    TextButton(onClick = { showJoinDialog = false; joinCode = ""; joinAccessToken = null }) { Text("Batal") }
                 }
             },
         )
@@ -1404,7 +1666,7 @@ private fun MainScaffold(
                 if (state.teamMembers.isEmpty()) {
                     Text("Belum ada collaborator. Gunakan 'Buat kode akses' untuk menambahkan member.")
                 } else {
-                    Column {
+                    Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
                         state.teamMembers.forEach { member ->
                             MemberRow(
                                 member = member,
@@ -1827,24 +2089,53 @@ private fun MainScaffold(
             },
         )
     }
-    if (restartRequired) {
-        AlertDialog(
-            onDismissRequest = {},
-            title = { Text("Buka ulang KRON") },
-            text = {
-                Text("Data restore sudah lolos validasi. KRON harus ditutup sebelum database dan lampiran diganti secara aman. Jangan catat transaksi baru sebelum membuka ulang aplikasi.")
-            },
-            confirmButton = {
-                Button(onClick = {
-                    runBlocking {
-                        driveSyncRuntime?.clearRestartRequired()
+    teamConflictAccount?.let { accountId ->
+        LaunchedEffect(accountId) {
+            when (val token = teamDriveScopeProbe?.getAccessToken(interactive = false)) {
+                is DriveAccessTokenResult.Granted -> viewModel.loadTeamConflict(token.accessToken, accountId)
+                else -> viewModel.failTeamConflict("Otorisasi Google Drive Team perlu diperbarui.")
+            }
+        }
+        TeamConflictCenterDialog(
+            preview = teamConflictPreview?.preview,
+            error = teamConflictError,
+            valuesVisible = state.valuesVisible,
+            viewer = state.teamWorkspace?.localRole == TeamRole.VIEWER,
+            onDismiss = viewModel::dismissTeamConflict,
+            onReload = {
+                scope.launch {
+                    when (val token = teamDriveScopeProbe?.getAccessToken(interactive = true)) {
+                        is DriveAccessTokenResult.Granted -> viewModel.loadTeamConflict(token.accessToken, accountId)
+                        else -> viewModel.failTeamConflict("Izin Google Drive Team belum tersedia.")
                     }
-                    activity.finishAffinity()
-                    Process.killProcess(Process.myPid())
-                }) { Text("Tutup KRON") }
+                }
             },
-            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+            onUseTeam = {
+                teamConflictPreview?.remoteSnapshotId?.let { remoteId ->
+                    scope.launch {
+                        when (val token = teamDriveScopeProbe?.getAccessToken(interactive = true)) {
+                            is DriveAccessTokenResult.Granted -> viewModel.resolveTeamUseRemote(
+                                token.accessToken, accountId, remoteId,
+                            ) {
+                                restartRequired = true
+                                WorkManager.getInstance(activity).cancelUniqueWork(AutomationWorker.UNIQUE_WORK_NAME)
+                            }
+                            else -> viewModel.failTeamConflict("Izin Google Drive Team belum tersedia.")
+                        }
+                    }
+                }
+            },
         )
+    }
+    LaunchedEffect(restartRequired) {
+        if (!restartRequired) return@LaunchedEffect
+        driveSyncRuntime?.clearRestartRequired()
+        activity.packageManager.getLaunchIntentForPackage(activity.packageName)?.let { launch ->
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            activity.startActivity(launch)
+        }
+        activity.finishAffinity()
+        Process.killProcess(Process.myPid())
     }
     if (showCameraCapture) {
         Dialog(
@@ -2298,6 +2589,145 @@ private fun TeamScopeProbeDialog(
 }
 
 @Composable
+private fun TeamConflictCenterDialog(
+    preview: ConflictPreview?,
+    error: String?,
+    valuesVisible: Boolean,
+    viewer: Boolean,
+    onDismiss: () -> Unit,
+    onReload: () -> Unit,
+    onUseTeam: () -> Unit,
+) {
+    var filter by rememberSaveable { mutableStateOf("ALL") }
+    var showAdvanced by rememberSaveable { mutableStateOf(false) }
+    val filtered = preview?.items.orEmpty().filter { filter == "ALL" || it.status.name == filter }
+    val safeRemoteApply = preview != null && preview.integrityProblemCount == 0 &&
+        preview.deviceOnlyCount == 0 && !preview.requiresChoices
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(modifier = Modifier.fillMaxSize().systemBarsPadding(), color = MaterialTheme.colorScheme.background) {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Pusat Konflik Team", style = MaterialTheme.typography.headlineSmall)
+                        Text(
+                            "Tidak ada data yang diubah sebelum hasil review lolos validasi staging.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) { Text("Tutup") }
+                }
+                when {
+                    preview == null && error == null -> Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        CircularProgressIndicator(Modifier.size(24.dp))
+                        Text("Memvalidasi snapshot Team di staging...")
+                    }
+                    error != null -> HudCard(accent = MaterialTheme.colorScheme.error.copy(alpha = 0.6f)) {
+                        Text("Konflik belum dapat ditampilkan", style = MaterialTheme.typography.titleMedium)
+                        Text(error, color = MaterialTheme.colorScheme.error)
+                        Button(onClick = onReload, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                            Text("Muat ulang")
+                        }
+                    }
+                    preview != null -> {
+                        HudCard {
+                            Text(
+                                "${preview.deviceOnlyCount} perangkat, ${preview.driveOnlyCount} Team, " +
+                                    "${preview.identicalCount} identik, ${preview.differentCount} berbeda",
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            if (preview.integrityProblemCount > 0) {
+                                Text(
+                                    "${preview.integrityProblemCount} masalah integritas. Semua tindakan perubahan dikunci.",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                        Row(
+                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            listOf(
+                                "ALL" to "Semua (${preview.items.size})",
+                                ConflictItemStatus.DEVICE_ONLY.name to "Perangkat (${preview.deviceOnlyCount})",
+                                ConflictItemStatus.DRIVE_ONLY.name to "Team (${preview.driveOnlyCount})",
+                                ConflictItemStatus.IDENTICAL.name to "Identik (${preview.identicalCount})",
+                                ConflictItemStatus.DIFFERENT.name to "Berbeda (${preview.differentCount})",
+                                ConflictItemStatus.INTEGRITY_PROBLEM.name to "Integritas (${preview.integrityProblemCount})",
+                            ).forEach { (value, label) ->
+                                FilterChip(
+                                    selected = filter == value,
+                                    onClick = { filter = value },
+                                    label = { Text(label) },
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                )
+                            }
+                        }
+                        LazyColumn(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            items(filtered, key = { it.key }) { item ->
+                                HudCard {
+                                    Text(item.label, style = MaterialTheme.typography.titleMedium)
+                                    Text(
+                                        conflictStatusLabel(item.status),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (item.status == ConflictItemStatus.INTEGRITY_PROBLEM) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary,
+                                    )
+                                    item.device?.let { ConflictEventDetails("Perangkat", it, valuesVisible) }
+                                    item.drive?.let { ConflictEventDetails("Team", it, valuesVisible) }
+                                    item.deviceMutable?.let { ConflictMutableDetails("Perangkat", it) }
+                                    item.driveMutable?.let { ConflictMutableDetails("Team", it) }
+                                }
+                            }
+                            if (filtered.isEmpty()) item { Text("Tidak ada item pada filter ini.") }
+                        }
+                        HorizontalDivider()
+                        Button(
+                            onClick = onUseTeam,
+                            enabled = safeRemoteApply,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) { Text(if (viewer) "Pulihkan aman dari Team" else "Terapkan pembaruan aman") }
+                        if (!safeRemoteApply && preview.integrityProblemCount == 0) {
+                            Text(
+                                "Konflik dua sisi perlu ditinjau. Tindakan overwrite tersedia di bagian lanjutan.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        TextButton(
+                            onClick = { showAdvanced = !showAdvanced },
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) { Text(if (showAdvanced) "Sembunyikan tindakan lanjutan" else "Tampilkan tindakan lanjutan") }
+                        if (showAdvanced) {
+                            Text(
+                                if (viewer) "Viewer hanya dapat memulihkan snapshot tervalidasi dari Team."
+                                else "Gunakan Team mengganti graph akun Team saja. Akun Privat tetap utuh.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Button(
+                                onClick = onUseTeam,
+                                enabled = preview.integrityProblemCount == 0,
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                            ) { Text("Gunakan Team") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ConflictCenterDialog(
     conflict: SyncConflict,
     preview: ConflictPreview?,
@@ -2378,12 +2808,12 @@ private fun ConflictCenterDialog(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             listOf(
-                                "ALL" to "Semua",
-                                ConflictItemStatus.DEVICE_ONLY.name to "Perangkat",
-                                ConflictItemStatus.DRIVE_ONLY.name to "Drive",
-                                ConflictItemStatus.IDENTICAL.name to "Identik",
-                                ConflictItemStatus.DIFFERENT.name to "Berbeda",
-                                ConflictItemStatus.INTEGRITY_PROBLEM.name to "Integritas",
+                                "ALL" to "Semua (${preview.items.size})",
+                                ConflictItemStatus.DEVICE_ONLY.name to "Perangkat (${preview.deviceOnlyCount})",
+                                ConflictItemStatus.DRIVE_ONLY.name to "Drive (${preview.driveOnlyCount})",
+                                ConflictItemStatus.IDENTICAL.name to "Identik (${preview.identicalCount})",
+                                ConflictItemStatus.DIFFERENT.name to "Berbeda (${preview.differentCount})",
+                                ConflictItemStatus.INTEGRITY_PROBLEM.name to "Integritas (${preview.integrityProblemCount})",
                             ).forEach { (value, label) ->
                                 FilterChip(
                                     selected = filter == value,
@@ -2393,11 +2823,11 @@ private fun ConflictCenterDialog(
                                 )
                             }
                         }
-                        Column(
-                            modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+                        LazyColumn(
+                            modifier = Modifier.weight(1f),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            filtered.forEach { item ->
+                            items(filtered, key = { it.key }) { item ->
                                 HudCard {
                                     Text(item.label, style = MaterialTheme.typography.titleMedium)
                                     Text(
@@ -2415,7 +2845,7 @@ private fun ConflictCenterDialog(
                                     item.driveMutable?.let { ConflictMutableDetails("Drive", it) }
                                 }
                             }
-                            if (filtered.isEmpty()) Text("Tidak ada item pada filter ini.")
+                            if (filtered.isEmpty()) item { Text("Tidak ada item pada filter ini.") }
                         }
                         HorizontalDivider()
                         Text(

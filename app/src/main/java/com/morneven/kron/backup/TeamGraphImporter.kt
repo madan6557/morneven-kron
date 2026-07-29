@@ -8,11 +8,14 @@ import java.io.File
 internal data class TeamImportMetadata(
     val teamId: String,
     val folderId: String,
+    val liveFileId: String? = null,
     val localRole: String,
-    val headSnapshotId: String,
+    val headSnapshotId: String?,
     val generation: Long,
-    val inviteIdHash: String,
+    val inviteIdHash: String?,
     val importedAt: Long,
+    val activateImported: Boolean = true,
+    val workspaceStatus: String = "SYNCED",
 )
 
 internal object TeamGraphImporter {
@@ -20,13 +23,15 @@ internal object TeamGraphImporter {
         require(target.isFile && source.isFile && target.canonicalFile != source.canonicalFile) {
             "Database import Team tidak valid"
         }
-        require(metadata.teamId.isNotBlank() && metadata.folderId.isNotBlank() && metadata.headSnapshotId.isNotBlank()) {
+        require(metadata.teamId.isNotBlank() && metadata.folderId.isNotBlank()) {
             "Metadata import Team tidak valid"
         }
-        require(metadata.localRole == TeamRole.EDITOR || metadata.localRole == TeamRole.VIEWER) {
+        require(metadata.localRole in setOf(TeamRole.OWNER, TeamRole.EDITOR, TeamRole.VIEWER)) {
             "Role import Team tidak valid"
         }
-        require(metadata.generation >= 0 && metadata.importedAt > 0 && metadata.inviteIdHash.matches(Regex("[0-9a-f]{64}"))) {
+        require(metadata.generation >= 0 && metadata.importedAt > 0 &&
+            (metadata.inviteIdHash == null || metadata.inviteIdHash.matches(Regex("[0-9a-f]{64}")))
+        ) {
             "Metadata import Team tidak valid"
         }
         val sourceScope = TeamSnapshotPruner.validateImported(source, metadata.teamId)
@@ -99,12 +104,14 @@ internal object TeamGraphImporter {
             null,
             "Riwayat undangan Team bertabrakan",
         )
-        requireZero(
-            db,
-            "SELECT COUNT(*) FROM team_invitation_uses WHERE inviteIdHash=?",
-            arrayOf(metadata.inviteIdHash),
-            "Kode akses Team sudah pernah digunakan",
-        )
+        metadata.inviteIdHash?.let { inviteIdHash ->
+            requireZero(
+                db,
+                "SELECT COUNT(*) FROM team_invitation_uses WHERE inviteIdHash=?",
+                arrayOf(inviteIdHash),
+                "Kode akses Team sudah pernah digunakan",
+            )
+        }
         requireZero(
             db,
             "SELECT COUNT(*) FROM team_source.team_event_proofs s JOIN team_event_proofs t ON t.chainId=s.chainId AND t.sequence=s.sequence",
@@ -128,11 +135,12 @@ internal object TeamGraphImporter {
     }
 
     private fun insertGraph(db: SQLiteDatabase, sourceAccountId: Long, metadata: TeamImportMetadata): Long {
+        if (metadata.activateImported) db.execSQL("UPDATE accounts SET isActive=0")
         db.execSQL(
             """INSERT INTO accounts(name,isActive,isArchived,archivedAt,createdAt,sharingMode,teamId,revision,updatedAt,lastWriterId)
-               SELECT name,0,0,NULL,createdAt,'TEAM',teamId,revision,updatedAt,lastWriterId
+               SELECT name,?,0,NULL,createdAt,'TEAM',teamId,revision,updatedAt,lastWriterId
                FROM team_source.accounts WHERE id=?""",
-            arrayOf(sourceAccountId),
+            arrayOf(if (metadata.activateImported) 1 else 0, sourceAccountId),
         )
         val accountId = scalar(db, "SELECT last_insert_rowid()")
         require(accountId > 0) { "Akun hasil import Team tidak terbentuk" }
@@ -234,21 +242,26 @@ internal object TeamGraphImporter {
             """INSERT INTO team_invitation_uses(inviteIdHash,teamId,usedAt)
                SELECT inviteIdHash,teamId,usedAt FROM team_source.team_invitation_uses""",
         )
+        metadata.inviteIdHash?.let { inviteIdHash ->
+            db.execSQL(
+                "INSERT INTO team_invitation_uses(inviteIdHash,teamId,usedAt) VALUES(?,?,?)",
+                arrayOf<Any?>(inviteIdHash, metadata.teamId, metadata.importedAt),
+            )
+        }
         db.execSQL(
-            "INSERT INTO team_invitation_uses(inviteIdHash,teamId,usedAt) VALUES(?,?,?)",
-            arrayOf<Any?>(metadata.inviteIdHash, metadata.teamId, metadata.importedAt),
-        )
-        db.execSQL(
-            """INSERT INTO team_workspaces(accountId,teamId,folderId,localRole,ownerSubjectHash,headSnapshotId,generation,status,canRead,canWrite,canShare,capabilitiesVerifiedAt,archivedAt,updatedAt)
-               SELECT ?,teamId,?, ?,ownerSubjectHash,?,?,'SYNCED',1,?,0,?,NULL,?
+            """INSERT INTO team_workspaces(accountId,teamId,folderId,localRole,ownerSubjectHash,liveFileId,headSnapshotId,generation,status,canRead,canWrite,canShare,capabilitiesVerifiedAt,archivedAt,updatedAt)
+               SELECT ?,teamId,?, ?,ownerSubjectHash,?,?,?, ?,1,?,?,?,NULL,?
                FROM team_source.team_workspaces WHERE accountId=?""",
             arrayOf<Any?>(
                 accountId,
                 metadata.folderId,
                 metadata.localRole,
+                metadata.liveFileId,
                 metadata.headSnapshotId,
                 metadata.generation,
-                if (metadata.localRole == TeamRole.EDITOR) 1 else 0,
+                metadata.workspaceStatus,
+                if (metadata.localRole == TeamRole.VIEWER) 0 else 1,
+                if (metadata.localRole == TeamRole.OWNER) 1 else 0,
                 metadata.importedAt,
                 metadata.importedAt,
                 sourceAccountId,

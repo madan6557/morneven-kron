@@ -51,6 +51,9 @@ interface KronDao {
     @Query("SELECT COUNT(*) FROM accounts WHERE sharingMode = 'TEAM'") suspend fun teamAccountCount(): Int
     @Query("SELECT * FROM accounts WHERE isArchived = 0 ORDER BY createdAt") fun observeAccounts(): Flow<List<AccountEntity>>
     @Query("SELECT * FROM accounts WHERE isArchived = 1 ORDER BY archivedAt DESC, createdAt") fun observeArchivedAccounts(): Flow<List<AccountEntity>>
+    @Query("""SELECT a.* FROM accounts a JOIN team_workspaces w ON w.accountId=a.id
+        WHERE a.isArchived=0 AND a.sharingMode='TEAM' AND w.status='LOCAL_ONLY' ORDER BY a.createdAt""")
+    fun observeRecoveredTeamAccounts(): Flow<List<AccountEntity>>
     @Query("SELECT * FROM categories WHERE isArchived = 0 ORDER BY direction, name") fun observeCategories(): Flow<List<CategoryEntity>>
     @Query("SELECT * FROM categories WHERE isArchived = 0 AND (accountId IS NULL OR accountId = :accountId) ORDER BY direction, name")
     fun observeCategoriesForAccount(accountId: Long): Flow<List<CategoryEntity>>
@@ -93,6 +96,27 @@ interface KronDao {
         expectedHead: String?,
         status: String,
         updatedAt: Long,
+    ): Int
+
+    @Query("""UPDATE team_workspaces SET liveFileId=:fileId, updatedAt=:updatedAt
+        WHERE accountId=:accountId AND teamId=:teamId AND liveFileId IS NULL""")
+    suspend fun setTeamLiveFileId(
+        accountId: Long,
+        teamId: String,
+        fileId: String,
+        updatedAt: Long,
+    ): Int
+
+    @Query("""UPDATE team_workspaces SET localRole=:role,canRead=:canRead,canWrite=:canWrite,canShare=:canShare,
+        capabilitiesVerifiedAt=:verifiedAt,updatedAt=:verifiedAt WHERE accountId=:accountId AND teamId=:teamId""")
+    suspend fun updateTeamCapabilities(
+        accountId: Long,
+        teamId: String,
+        role: String,
+        canRead: Boolean,
+        canWrite: Boolean,
+        canShare: Boolean,
+        verifiedAt: Long,
     ): Int
 
     @Query("SELECT * FROM portfolios WHERE isArchived = 0 AND accountId = :accountId ORDER BY fundingPriority, createdAt")
@@ -325,10 +349,14 @@ interface KronDao {
     @Query("SELECT * FROM receipts ORDER BY id") suspend fun allReceipts(): List<ReceiptEntity>
     @Query("SELECT r.* FROM receipts r JOIN activity_events e ON e.id = r.eventId WHERE e.accountId = :accountId ORDER BY r.id")
     suspend fun receiptsForAccount(accountId: Long): List<ReceiptEntity>
+    @Query("SELECT r.* FROM receipts r JOIN activity_events e ON e.id = r.eventId JOIN accounts a ON a.id = e.accountId WHERE a.sharingMode = 'PRIVATE' ORDER BY r.id")
+    suspend fun receiptsForPrivateAccounts(): List<ReceiptEntity>
     @Query("SELECT r.* FROM receipts r JOIN activity_events e ON e.id = r.eventId WHERE r.localPath IS NOT NULL AND EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id AND rv.createdAt <= :maxCreatedAt)") suspend fun receiptsForReversedEvents(maxCreatedAt: Long): List<ReceiptEntity>
     @Query("UPDATE receipts SET localPath = NULL WHERE id = :id") suspend fun clearReceiptLocalPath(id: Long)
     @Query("SELECT * FROM receipts WHERE evidenceEventId = :eventId OR (evidenceEventId IS NULL AND eventId = :eventId) ORDER BY id") suspend fun receiptsForEvent(eventId: String): List<ReceiptEntity>
     @Query("SELECT * FROM sync_state WHERE id = 1") suspend fun syncState(): SyncStateEntity?
+    @Query("UPDATE sync_state SET localGeneration = localGeneration + 1, updatedAt = :updatedAt WHERE id = 1")
+    suspend fun markPrivateRecoveryChanged(updatedAt: Long): Int
     @Query("SELECT * FROM categories ORDER BY id") suspend fun allCategories(): List<CategoryEntity>
     @Query("SELECT * FROM categories WHERE accountId IS NULL OR accountId = :accountId ORDER BY id") suspend fun categoriesForAccount(accountId: Long): List<CategoryEntity>
     @Query("SELECT * FROM categories WHERE id = :id LIMIT 1") suspend fun categoryById(id: Long): CategoryEntity?

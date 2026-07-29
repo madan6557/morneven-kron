@@ -7,6 +7,7 @@ import com.morneven.kron.data.KronDatabase
 import com.morneven.kron.data.TeamRole
 import com.morneven.kron.data.TeamWorkspaceStatus
 import dagger.hilt.android.qualifiers.ApplicationContext
+import androidx.room.withTransaction
 import java.io.File
 import java.util.UUID
 import javax.inject.Inject
@@ -24,6 +25,7 @@ data class ConversionRequest(
     val ownerSubjectHash: String,
     val ownerEmail: String,
     val ownerDisplayName: String? = null,
+    val liveFileId: String? = null,
     val headSnapshotId: String? = null,
 )
 
@@ -44,51 +46,22 @@ class TeamConversionManager @Inject constructor(
         validatePrivateAccounts(accountIds)
         val now = System.currentTimeMillis()
         val backupPath = createPreConversionBackup()
-        val stagingDb = File(context.cacheDir, "team-convert-${UUID.randomUUID()}.db")
-        try {
-            copyLiveToStaging(stagingDb)
-            SQLiteDatabase.openDatabase(stagingDb.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
-                db.execSQL("PRAGMA foreign_keys=ON")
-                db.beginTransaction()
-                try {
-                    for (accountId in accountIds) {
-                        val a = accountId.toString()
-                        db.execSQL(
-                            "UPDATE accounts SET sharingMode=?, teamId=?, updatedAt=? WHERE id=?",
-                            arrayOf<Any?>(AccountSharingMode.TEAM, request.teamId, now, a),
-                        )
-                        db.execSQL(
-                            "INSERT OR REPLACE INTO team_workspaces VALUES(?,?,?,?,?,?,0,?,1,?,0,?,NULL,?)",
-                            arrayOf<Any?>(
-                                a, request.teamId, request.folderId, request.localRole,
-                                request.ownerSubjectHash, request.headSnapshotId ?: "",
-                                TeamWorkspaceStatus.LOCAL_ONLY,
-                                if (request.localRole == TeamRole.EDITOR || request.localRole == TeamRole.OWNER) 1 else 0,
-                                now, now,
-                            ),
-                        )
-                        db.execSQL(
-                            "INSERT OR REPLACE INTO team_members VALUES(?,?,?,?,?,'ACTIVE',?)",
-                            arrayOf<Any?>(
-                                "owner:${request.teamId}:${request.ownerEmail}",
-                                a, request.ownerEmail, request.ownerDisplayName ?: "",
-                                request.localRole, now,
-                            ),
-                        )
-                    }
-                    validateConversionState(db, accountIds)
-                    db.setTransactionSuccessful()
-                } finally {
-                    db.endTransaction()
-                }
+        database.withTransaction {
+            val db = database.openHelper.writableDatabase
+            for (accountId in accountIds) {
+                val a = accountId.toString()
+                db.execSQL("UPDATE accounts SET sharingMode=?, teamId=?, updatedAt=? WHERE id=?", arrayOf<Any?>(AccountSharingMode.TEAM, request.teamId, now, a))
+                db.execSQL(
+                    "INSERT OR REPLACE INTO team_workspaces (accountId,teamId,folderId,localRole,ownerSubjectHash,liveFileId,headSnapshotId,generation,status,canRead,canWrite,canShare,capabilitiesVerifiedAt,archivedAt,updatedAt) VALUES(?,?,?,?,?,?,?,0,?,?,?,?,?,NULL,?)",
+                    arrayOf<Any?>(a, request.teamId, request.folderId, request.localRole, request.ownerSubjectHash, request.liveFileId, request.headSnapshotId, TeamWorkspaceStatus.SYNCED, 1, if (request.localRole == TeamRole.EDITOR || request.localRole == TeamRole.OWNER) 1 else 0, if (request.localRole == TeamRole.OWNER) 1 else 0, now, now),
+                )
+                db.execSQL(
+                    "INSERT OR REPLACE INTO team_members VALUES(?,?,?,?,?,'ACTIVE',?)",
+                    arrayOf<Any?>("owner:${request.teamId}:${request.ownerEmail}", a, request.ownerEmail, request.ownerDisplayName ?: "", request.localRole, now),
+                )
             }
-            applyStagingToLive(stagingDb, accountIds)
-            return ConversionResult(accountIds, backupPath)
-        } finally {
-            stagingDb.delete()
-            File(stagingDb.path + "-wal").delete()
-            File(stagingDb.path + "-shm").delete()
         }
+        return ConversionResult(accountIds, backupPath)
     }
 
     suspend fun convertTeamToPrivate(accountIds: List<Long>): ConversionResult {
@@ -96,40 +69,25 @@ class TeamConversionManager @Inject constructor(
         validateTeamAccounts(accountIds)
         val now = System.currentTimeMillis()
         val backupPath = createPreConversionBackup()
-        val stagingDb = File(context.cacheDir, "team-downgrade-${UUID.randomUUID()}.db")
-        try {
-            copyLiveToStaging(stagingDb)
-            SQLiteDatabase.openDatabase(stagingDb.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
-                db.execSQL("PRAGMA foreign_keys=ON")
-                db.beginTransaction()
-                try {
-                    for (accountId in accountIds) {
-                        val a = accountId.toString()
-                        db.execSQL(
-                            "UPDATE accounts SET sharingMode=?, teamId=NULL, updatedAt=? WHERE id=?",
-                            arrayOf<Any?>(AccountSharingMode.PRIVATE, now, a),
-                        )
-                        db.execSQL("DELETE FROM team_workspaces WHERE accountId=?", arrayOf<Any?>(a))
-                        db.execSQL("DELETE FROM team_members WHERE accountId=?", arrayOf<Any?>(a))
-                    }
-                    db.setTransactionSuccessful()
-                } finally {
-                    db.endTransaction()
-                }
+        database.withTransaction {
+            val db = database.openHelper.writableDatabase
+            for (accountId in accountIds) {
+                val a = accountId.toString()
+                db.execSQL(
+                    "UPDATE accounts SET sharingMode=?, teamId=NULL, updatedAt=? WHERE id=?",
+                    arrayOf<Any?>(AccountSharingMode.PRIVATE, now, a),
+                )
+                db.execSQL("DELETE FROM team_workspaces WHERE accountId=?", arrayOf<Any?>(a))
+                db.execSQL("DELETE FROM team_members WHERE accountId=?", arrayOf<Any?>(a))
             }
-            applyStagingToLive(stagingDb, accountIds)
-            return ConversionResult(accountIds, backupPath)
-        } finally {
-            stagingDb.delete()
-            File(stagingDb.path + "-wal").delete()
-            File(stagingDb.path + "-shm").delete()
         }
+        return ConversionResult(accountIds, backupPath)
     }
 
     private fun validatePrivateAccounts(accountIds: List<Long>) {
-        val liveWritable = database.openHelper.writableDatabase as android.database.sqlite.SQLiteDatabase
+        val liveWritable = database.openHelper.writableDatabase
         for (aid in accountIds) {
-            val row = liveWritable.rawQuery(
+            val row = liveWritable.query(
                 "SELECT sharingMode, teamId FROM accounts WHERE id=?",
                 arrayOf(aid.toString()),
             ).use { cursor ->
@@ -142,9 +100,9 @@ class TeamConversionManager @Inject constructor(
     }
 
     private fun validateTeamAccounts(accountIds: List<Long>) {
-        val liveWritable = database.openHelper.writableDatabase as android.database.sqlite.SQLiteDatabase
+        val liveWritable = database.openHelper.writableDatabase
         for (aid in accountIds) {
-            val sharingMode = liveWritable.rawQuery(
+            val sharingMode = liveWritable.query(
                 "SELECT sharingMode FROM accounts WHERE id=?",
                 arrayOf(aid.toString()),
             ).use { cursor ->

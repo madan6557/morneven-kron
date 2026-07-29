@@ -177,7 +177,7 @@ class PlayServicesAuthorizationClientBridge(
         requestedScopes: Set<String>,
         interactive: Boolean,
     ): AuthorizationClientResult {
-        require(requestedScopes == setOf(DRIVE_APPDATA_SCOPE) || requestedScopes == setOf(DRIVE_FILE_SCOPE)) {
+        require(requestedScopes in setOf(setOf(DRIVE_APPDATA_SCOPE), setOf(DRIVE_FILE_SCOPE))) {
             "Scope Google Drive tidak didukung"
         }
         val builder = AuthorizationRequest.builder()
@@ -219,6 +219,7 @@ class PlayServicesAuthorizationClientBridge(
             .addResourceParameter(AuthorizationRequest.ResourceParameter.PICKER_ALLOW_MULTIPLE, "false")
             .addResourceParameter(AuthorizationRequest.ResourceParameter.PICKER_ALLOW_FOLDER_SELECTION, "true")
             .addResourceParameter(AuthorizationRequest.ResourceParameter.PICKER_MIMETYPES, DRIVE_FOLDER_MIME_TYPE)
+            .addResourceParameter(AuthorizationRequest.ResourceParameter.PICKER_FILE_IDS, folderId)
             .build()
         return try {
             val result = client.authorize(request).awaitTask()
@@ -229,7 +230,8 @@ class PlayServicesAuthorizationClientBridge(
                 pickerResolutions[resolutionId] = PendingDrivePicker(
                     pendingIntent = requireNotNull(result.pendingIntent),
                     account = account,
-                    expectedFolderId = folderId,
+                    expectedFileId = folderId,
+                    label = "folder Team",
                 )
                 DrivePickerStartResult.UserActionRequired(resolutionId)
             }
@@ -245,24 +247,73 @@ class PlayServicesAuthorizationClientBridge(
         resultCode: Int,
         resultData: Intent?,
     ): DrivePickerCompletionResult {
+        return completeDrivePicker(resolutionId, resultCode, resultData)
+    }
+
+    suspend fun openDriveFilePicker(
+        account: GoogleAccountIdentity,
+        fileId: String,
+    ): DrivePickerStartResult {
+        require(fileId.length in 1..512 && fileId.all { it.isLetterOrDigit() || it in "-_." }) {
+            "File snapshot Team tidak valid"
+        }
+        val request = AuthorizationRequest.builder()
+            .setRequestedScopes(listOf(Scope(DRIVE_FILE_SCOPE)))
+            .setAccount(Account(account.email, GOOGLE_ACCOUNT_TYPE))
+            .setOptOutIncludingGrantedScopes(true)
+            .setPrompt(AuthorizationRequest.Prompt.CONSENT)
+            .addResourceParameter(AuthorizationRequest.ResourceParameter.PICKER_OAUTH_TRIGGER, "true")
+            .addResourceParameter(AuthorizationRequest.ResourceParameter.PICKER_ALLOW_MULTIPLE, "false")
+            .addResourceParameter(AuthorizationRequest.ResourceParameter.PICKER_ALLOW_FOLDER_SELECTION, "false")
+            .addResourceParameter(AuthorizationRequest.ResourceParameter.PICKER_FILE_IDS, fileId)
+            .build()
+        return try {
+            val result = client.authorize(request).awaitTask()
+            if (!result.hasResolution()) DrivePickerStartResult.Failed("Google Picker tidak menampilkan file Team")
+            else {
+                val resolutionId = UUID.randomUUID().toString()
+                pickerResolutions[resolutionId] = PendingDrivePicker(
+                    pendingIntent = requireNotNull(result.pendingIntent), account = account,
+                    expectedFileId = fileId, label = "file Team",
+                )
+                DrivePickerStartResult.UserActionRequired(resolutionId)
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            DrivePickerStartResult.Failed("Google Picker tidak dapat dibuka")
+        }
+    }
+
+    fun completeDriveFilePicker(
+        resolutionId: String,
+        resultCode: Int,
+        resultData: Intent?,
+    ): DrivePickerCompletionResult = completeDrivePicker(resolutionId, resultCode, resultData)
+
+    private fun completeDrivePicker(
+        resolutionId: String,
+        resultCode: Int,
+        resultData: Intent?,
+    ): DrivePickerCompletionResult {
         val pending = pickerResolutions.remove(resolutionId)
             ?: return DrivePickerCompletionResult.Failed("Permintaan Google Picker sudah tidak berlaku")
         if (resultCode != Activity.RESULT_OK || resultData == null) {
-            return DrivePickerCompletionResult.Failed("Pemilihan folder Team dibatalkan")
+            return DrivePickerCompletionResult.Failed("Pemilihan ${pending.label} dibatalkan")
         }
         return runCatching {
             val result = client.getAuthorizationResultFromIntent(resultData)
             require(result.grantedScopes.contains(DRIVE_FILE_SCOPE)) { "Scope drive.file tidak diberikan" }
             require(
-                pickedDriveFolderMatches(
+                pickedDriveFileMatches(
                     result.tokenResponseParams?.getString(PICKED_FILE_IDS),
-                    pending.expectedFolderId,
+                    pending.expectedFileId,
                 ),
-            ) { "Folder yang dipilih tidak cocok dengan kode Team" }
+            ) { "File yang dipilih tidak cocok dengan kode Team" }
             val token = requireNotNull(result.accessToken?.takeIf(String::isNotBlank)) {
                 "Access token Google Picker kosong"
             }
-            DrivePickerCompletionResult.Granted(pending.account, token, pending.expectedFolderId)
+            DrivePickerCompletionResult.Granted(pending.account, token, pending.expectedFileId)
         }.getOrElse { error ->
             DrivePickerCompletionResult.Failed(error.message ?: "Hasil Google Picker tidak valid")
         }
@@ -299,7 +350,7 @@ class PlayServicesAuthorizationClientBridge(
     }
 
     override suspend fun revokeAccess(account: GoogleAccountIdentity, scopes: Set<String>) {
-        require(scopes == setOf(DRIVE_APPDATA_SCOPE) || scopes == setOf(DRIVE_FILE_SCOPE)) {
+        require(scopes in setOf(setOf(DRIVE_APPDATA_SCOPE), setOf(DRIVE_FILE_SCOPE))) {
             "Scope Google Drive tidak didukung"
         }
         RevokeAccessRequest.builder()
@@ -338,7 +389,8 @@ class PlayServicesAuthorizationClientBridge(
     private data class PendingDrivePicker(
         val pendingIntent: PendingIntent,
         val account: GoogleAccountIdentity,
-        val expectedFolderId: String,
+        val expectedFileId: String,
+        val label: String,
     )
 
     private suspend fun <T> Task<T>.awaitTask(): T = suspendCancellableCoroutine { continuation ->
@@ -365,11 +417,14 @@ sealed interface DrivePickerCompletionResult {
     data class Granted(
         val account: GoogleAccountIdentity,
         val accessToken: String,
-        val folderId: String,
+        val fileId: String,
     ) : DrivePickerCompletionResult
 
     data class Failed(val message: String) : DrivePickerCompletionResult
 }
 
+internal fun pickedDriveFileMatches(rawPickedIds: String?, expectedFileId: String): Boolean =
+    rawPickedIds?.split(',')?.map(String::trim)?.filter(String::isNotBlank) == listOf(expectedFileId)
+
 internal fun pickedDriveFolderMatches(rawPickedIds: String?, expectedFolderId: String): Boolean =
-    rawPickedIds?.split(',')?.map(String::trim)?.filter(String::isNotBlank) == listOf(expectedFolderId)
+    pickedDriveFileMatches(rawPickedIds, expectedFolderId)

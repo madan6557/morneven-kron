@@ -93,6 +93,7 @@ class KronRepository @Inject constructor(
 
     val accounts = dao.observeAccounts()
     val archivedAccounts = dao.observeArchivedAccounts()
+    val recoveredTeamAccounts = dao.observeRecoveredTeamAccounts()
     val accountBalances = dao.observeAccountBalances()
     val syncState = SyncStateBridge.syncState
 

@@ -34,18 +34,20 @@ import com.morneven.kron.data.TeamCapability
 import com.morneven.kron.data.TeamMemberEntity
 import com.morneven.kron.data.TeamRole
 import com.morneven.kron.data.TeamWorkspaceEntity
+import com.morneven.kron.sync.DriveApiException
 import com.morneven.kron.team.ConversionRequest
 import com.morneven.kron.team.TeamConversionManager
 import com.morneven.kron.team.TeamInvitationCodec
 import com.morneven.kron.team.TeamInvitationEnvelopeCrypto
 import com.morneven.kron.team.TeamDriveRestClient
 import com.morneven.kron.team.TeamInvitationManager
-import com.morneven.kron.team.TeamJoinPolicy
 import com.morneven.kron.team.TeamJoinPreflight
 import com.morneven.kron.team.TeamJoinPreflightResult
 import com.morneven.kron.team.TeamKeyStore
 import com.morneven.kron.team.TeamSnapshotCoordinator
 import com.morneven.kron.team.TeamSnapshotConflictException
+import com.morneven.kron.team.TeamSyncResult
+import com.morneven.kron.team.TeamConflictPreview
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.morneven.kron.preferences.PrivacyPreferences
@@ -83,6 +85,7 @@ import kotlinx.coroutines.launch
 
 data class KronUiState(
     val accounts: List<AccountEntity> = emptyList(),
+    val recoveredTeamAccounts: List<AccountEntity> = emptyList(),
     val archivedAccounts: List<AccountEntity> = emptyList(),
     val accountBalances: List<AccountBalanceRow> = emptyList(),
     val categories: List<CategoryEntity> = emptyList(),
@@ -142,6 +145,7 @@ private data class LedgerSlice(
 
 private data class MetadataSlice(
     val accounts: List<AccountEntity>,
+    val recoveredTeamAccounts: List<AccountEntity> = emptyList(),
     val archivedAccounts: List<AccountEntity> = emptyList(),
     val categories: List<CategoryEntity>,
     val portfolios: List<PortfolioEntity>,
@@ -163,6 +167,9 @@ private data class PreferenceSlice(
     val budgetAlertsEnabled: Boolean = false,
     val screenshotAllowed: Boolean = false,
 )
+
+internal fun teamFilePickerRequired(error: Throwable): Boolean =
+    error is DriveApiException && error.statusCode in setOf(403, 404)
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @HiltViewModel
@@ -188,6 +195,20 @@ class MainViewModel @Inject constructor(
 ) : ViewModel() {
     private val driveSyncAccountStore: SelectedGoogleAccountStore = PreferencesSelectedGoogleAccountStore(context)
     private val message = MutableStateFlow<String?>(null)
+    private val mutableTeamConflictAccount = MutableStateFlow<Long?>(null)
+    val teamConflictAccount: StateFlow<Long?> = mutableTeamConflictAccount
+    private val mutableTeamConflictPreview = MutableStateFlow<TeamConflictPreview?>(null)
+    val teamConflictPreview: StateFlow<TeamConflictPreview?> = mutableTeamConflictPreview
+    private val mutableTeamConflictError = MutableStateFlow<String?>(null)
+    val teamConflictError: StateFlow<String?> = mutableTeamConflictError
+    private val mutableTeamSyncing = MutableStateFlow(false)
+    val teamSyncing: StateFlow<Boolean> = mutableTeamSyncing
+    private val mutableTeamSyncDetail = MutableStateFlow<String?>(null)
+    val teamSyncDetail: StateFlow<String?> = mutableTeamSyncDetail
+    private val mutableTeamSyncFailed = MutableStateFlow(false)
+    val teamSyncFailed: StateFlow<Boolean> = mutableTeamSyncFailed
+    private val mutableTeamWaitingNetwork = MutableStateFlow(false)
+    val teamWaitingNetwork: StateFlow<Boolean> = mutableTeamWaitingNetwork
     private val sessionVisibility = MutableStateFlow<Boolean?>(null)
     private val manualRestoreReady = MutableStateFlow(false)
     private val evidenceHealthState = MutableStateFlow<EvidenceHealth?>(null)
@@ -252,6 +273,8 @@ class MainViewModel @Inject constructor(
             )
         }.combine(repository.archivedAccounts) { metadata, archivedAccounts ->
             metadata.copy(archivedAccounts = archivedAccounts)
+        }.combine(repository.recoveredTeamAccounts) { metadata, recoveredTeamAccounts ->
+            metadata.copy(recoveredTeamAccounts = recoveredTeamAccounts)
         }.combine(repository.archivedPortfolios) { metadata, archivedPortfolios ->
             metadata.copy(archivedPortfolios = archivedPortfolios)
         }.combine(repository.teamWorkspace) { metadata, workspace ->
@@ -294,6 +317,7 @@ class MainViewModel @Inject constructor(
     val uiState: StateFlow<KronUiState> = combine(ledger, metadata, cashflow, preferenceState, message) { ledger, metadata, cashflow, prefs, message ->
         KronUiState(
             accounts = metadata.accounts,
+            recoveredTeamAccounts = metadata.recoveredTeamAccounts,
             archivedAccounts = metadata.archivedAccounts,
             accountBalances = ledger.balances,
             categories = metadata.categories,
@@ -570,11 +594,112 @@ class MainViewModel @Inject constructor(
         teamInvitationManager.removeMember(accessToken, account, accountId, permissionId)
     }
 
-    fun publishTeamSnapshot(
+    fun publishTeamSnapshot(accessToken: String, accountId: Long) = viewModelScope.launch {
+        runCatching { teamSnapshotCoordinator.publish(accessToken, accountId) }
+            .onSuccess { message.value = "Snapshot Team berhasil diunggah" }
+            .onFailure {
+                if (it is CancellationException) throw it
+                if (it is TeamSnapshotConflictException) mutableTeamConflictAccount.value = accountId
+                else message.value = it.message ?: "Sinkronisasi Team gagal"
+            }
+    }
+
+    fun syncTeamSnapshot(
         accessToken: String,
         accountId: Long,
-    ) = runAction("Snapshot Team berhasil diunggah") {
-        teamSnapshotCoordinator.publish(accessToken, accountId)
+        onRestartRequired: () -> Unit,
+        onFileAccessRequired: (() -> Unit)? = null,
+        allowFileAccessRetry: Boolean = true,
+    ) = viewModelScope.launch {
+        if (mutableTeamSyncing.value) return@launch
+        mutableTeamSyncing.value = true
+        mutableTeamSyncDetail.value = null
+        mutableTeamSyncFailed.value = false
+        mutableTeamWaitingNetwork.value = false
+        try {
+            when (val result = teamSnapshotCoordinator.sync(accessToken, accountId)) {
+                TeamSyncResult.NoChanges -> {
+                    mutableTeamSyncDetail.value = "Data perangkat dan Team sudah sama."
+                    message.value = "Team sudah tersinkron"
+                }
+                TeamSyncResult.NoData -> {
+                    mutableTeamSyncDetail.value = "Owner belum mengunggah snapshot Team."
+                    message.value = "Belum ada data Team yang dapat diambil"
+                }
+                is TeamSyncResult.Uploaded -> {
+                    mutableTeamSyncDetail.value = "Perubahan Team berhasil dikirim."
+                    message.value = "Team berhasil disinkronkan"
+                }
+                is TeamSyncResult.RestartRequired -> {
+                    mutableTeamSyncDetail.value = "Pembaruan Team sudah divalidasi dan siap diterapkan."
+                    onRestartRequired()
+                }
+                is TeamSyncResult.Conflict -> {
+                    mutableTeamConflictAccount.value = result.accountId
+                    mutableTeamSyncDetail.value = "Data perangkat dan Team sama-sama berubah."
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            if (allowFileAccessRetry && teamFilePickerRequired(error) && onFileAccessRequired != null) {
+                mutableTeamSyncDetail.value = "Akses ke file Team perlu dikonfirmasi sekali lagi."
+                onFileAccessRequired()
+            } else {
+                mutableTeamSyncFailed.value = true
+                mutableTeamSyncDetail.value = error.message ?: "Sinkronisasi Team gagal"
+                message.value = mutableTeamSyncDetail.value
+            }
+        } finally {
+            mutableTeamSyncing.value = false
+        }
+    }
+
+    fun markTeamWaitingNetwork(detail: String) {
+        mutableTeamWaitingNetwork.value = true
+        mutableTeamSyncFailed.value = false
+        mutableTeamSyncDetail.value = detail
+    }
+
+    fun loadTeamConflict(accessToken: String, accountId: Long) = viewModelScope.launch {
+        mutableTeamConflictPreview.value = null
+        mutableTeamConflictError.value = null
+        try {
+            mutableTeamConflictPreview.value = teamSnapshotCoordinator.previewConflict(accessToken, accountId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            mutableTeamConflictError.value = error.message ?: "Preview konflik Team tidak tersedia"
+        }
+    }
+
+    fun failTeamConflict(message: String) {
+        mutableTeamConflictPreview.value = null
+        mutableTeamConflictError.value = message
+    }
+
+    fun resolveTeamUseRemote(
+        accessToken: String,
+        accountId: Long,
+        remoteSnapshotId: String,
+        onRestartRequired: () -> Unit,
+    ) = viewModelScope.launch {
+        try {
+            teamSnapshotCoordinator.resolveUseTeam(accessToken, accountId, remoteSnapshotId)
+            mutableTeamConflictAccount.value = null
+            mutableTeamConflictPreview.value = null
+            onRestartRequired()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            mutableTeamConflictError.value = error.message ?: "Resolusi konflik Team gagal"
+        }
+    }
+
+    fun dismissTeamConflict() {
+        mutableTeamConflictAccount.value = null
+        mutableTeamConflictPreview.value = null
+        mutableTeamConflictError.value = null
     }
 
     fun verifyJoinCode(
@@ -582,6 +707,7 @@ class MainViewModel @Inject constructor(
         googleAccount: GoogleAccountIdentity,
         code: String,
         onResult: (TeamJoinPreflightResult) -> Unit,
+        onFailure: () -> Unit,
     ) = viewModelScope.launch {
         runCatching {
             teamJoinPreflight.verifyReadOnly(accessToken, googleAccount, code)
@@ -590,6 +716,7 @@ class MainViewModel @Inject constructor(
             .onFailure {
                 if (it is CancellationException) throw it
                 message.value = it.message ?: "Kode akses tidak valid"
+                onFailure()
             }
     }
 
@@ -597,27 +724,43 @@ class MainViewModel @Inject constructor(
         accessToken: String,
         account: GoogleAccountIdentity,
         accountId: Long,
-    ) = runAction("Akun berhasil dikonversi ke Team") {
-        val driveSyncAccount = driveSyncAccountStore.read()
-            ?: error("Hubungkan Google Drive (Drive Sync) terlebih dahulu sebelum membuat Team")
-        require(driveSyncAccount.subjectId == account.subjectId) {
-            "Owner Team harus menggunakan akun Google yang sama dengan Drive Sync"
+    ) = viewModelScope.launch {
+        var converted = false
+        try {
+            val driveSyncAccount = driveSyncAccountStore.read()
+                ?: error("Hubungkan Google Drive (Drive Sync) terlebih dahulu sebelum membuat Team")
+            require(driveSyncAccount.subjectId == account.subjectId) {
+                "Owner Team harus menggunakan akun Google yang sama dengan Drive Sync"
+            }
+            val teamId = java.util.UUID.randomUUID().toString()
+            val workspace = teamDriveClient.createWorkspace(accessToken, teamId)
+            val subjectHash = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(account.subjectId.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+            teamConversionManager.convertPrivateToTeam(
+                listOf(accountId),
+                ConversionRequest(
+                    teamId = teamId,
+                    folderId = workspace.folderId,
+                    localRole = TeamRole.OWNER,
+                    ownerSubjectHash = subjectHash,
+                    ownerEmail = account.email,
+                    ownerDisplayName = account.displayName,
+                ),
+            )
+            converted = true
+            teamKeyStore.createAndStore(teamId)
+            teamSnapshotCoordinator.publish(accessToken, accountId)
+            message.value = "Akun Team dan snapshot awal siap"
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            message.value = if (converted) {
+                "Akun sudah menjadi Team, tetapi snapshot awal gagal. Tekan Sinkronkan Team sebelum membuat undangan."
+            } else {
+                error.message ?: "Konversi ke Team gagal"
+            }
         }
-        val teamId = java.util.UUID.randomUUID().toString()
-        val workspace = teamDriveClient.createWorkspace(accessToken, teamId)
-        val subjectHash = java.security.MessageDigest.getInstance("SHA-256")
-            .digest(account.subjectId.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
-        val request = ConversionRequest(
-            teamId = teamId,
-            folderId = workspace.folderId,
-            localRole = TeamRole.OWNER,
-            ownerSubjectHash = subjectHash,
-            ownerEmail = account.email,
-            ownerDisplayName = account.displayName,
-        )
-        val result = teamConversionManager.convertPrivateToTeam(listOf(accountId), request)
-        message.value = "Akun dikonversi ke Team. Backup pra-konversi: ${result.preConversionBackupPath}"
     }
 
     fun convertTeamToPrivate(accountId: Long) =
@@ -630,21 +773,54 @@ class MainViewModel @Inject constructor(
 
     fun joinTeam(
         accessToken: String,
-        googleAccount: GoogleAccountIdentity,
         code: String,
-        accountId: Long,
         preflightResult: TeamJoinPreflightResult,
-    ) = runAction("Berhasil bergabung ke Team") {
+        onStaged: () -> Unit,
+    ) = viewModelScope.launch {
         val invitation = TeamInvitationCodec.decode(code)
-        val files = teamDriveClient.listFiles(accessToken, preflightResult.folderId, preflightResult.teamId)
-        val envelopeFile = TeamJoinPolicy.invitationFile(files, invitation)
-        val envelope = teamDriveClient.download(accessToken, envelopeFile.fileId)
-        val opened = TeamInvitationEnvelopeCrypto.open(invitation, envelope, signingKeys)
+        var invitationEnvelope = ByteArray(0)
+        var snapshotEnvelope = ByteArray(0)
+        var payload = ByteArray(0)
+        var teamKey = ByteArray(0)
+        var storedKey = false
         try {
-            teamKeyStore.store(preflightResult.teamId, opened.teamKey)
-            repository.joinTeam(accountId, invitation.inviteId, preflightResult.teamId, preflightResult.role)
+            invitationEnvelope = requireNotNull(invitation.embeddedEnvelopeCopy()) { "Envelope kode akses Team tidak tersedia" }
+            val opened = TeamInvitationEnvelopeCrypto.open(invitation, invitationEnvelope, signingKeys)
+            teamKey = opened.teamKey
+            val head = teamDriveClient.stableSnapshot(accessToken, preflightResult.liveFileId, preflightResult.teamId)
+            require(head.manifest.snapshotId == preflightResult.headSnapshotId) {
+                "Snapshot Team berubah. Verifikasi kembali kode akses."
+            }
+            snapshotEnvelope = teamDriveClient.download(accessToken, head.fileId)
+            val snapshot = com.morneven.kron.team.TeamSnapshotCryptor().decrypt(snapshotEnvelope, teamKey)
+            payload = snapshot.payload
+            require(snapshot.manifest == head.manifest) { "Metadata snapshot Team tidak cocok" }
+            teamKeyStore.store(preflightResult.teamId, teamKey)
+            storedKey = true
+            backupManager.stageNewTeamAccountForRestart(
+                payload = payload,
+                teamId = preflightResult.teamId,
+                folderId = preflightResult.folderId,
+                liveFileId = preflightResult.liveFileId,
+                role = preflightResult.role,
+                headSnapshotId = preflightResult.headSnapshotId,
+                generation = preflightResult.generation,
+                inviteIdHash = TeamInvitationCodec.sha256(invitation.inviteId.toByteArray(Charsets.UTF_8)),
+            )
+            message.value = "Akun Team siap. Buka ulang KRON untuk mengaktifkannya."
+            onStaged()
+        } catch (cancelled: CancellationException) {
+            if (storedKey) teamKeyStore.clear(preflightResult.teamId)
+            throw cancelled
+        } catch (error: Throwable) {
+            if (storedKey) teamKeyStore.clear(preflightResult.teamId)
+            message.value = error.message ?: "Gagal bergabung ke Team"
         } finally {
-            opened.teamKey.fill(0)
+            invitation.clear()
+            invitationEnvelope.fill(0)
+            snapshotEnvelope.fill(0)
+            payload.fill(0)
+            teamKey.fill(0)
         }
     }
 

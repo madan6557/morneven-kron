@@ -199,24 +199,73 @@ class TeamDriveRestClient(
         teamId: String,
         manifest: DriveSnapshotManifest,
         encryptedEnvelope: ByteArray,
+        stableFileId: String? = null,
     ): RemoteDriveSnapshot {
         require(manifest.protocolVersion == 2 && manifest.datasetId == teamId) {
             "Manifest snapshot Team tidak cocok"
         }
         require(manifest.snapshotId.matches(Regex("[A-Za-z0-9_.-]{1,100}"))) { "Snapshot ID Team tidak valid" }
-        val file = uploadImmutable(
-            accessToken = accessToken,
-            folderId = folderId,
-            name = "snapshot-${manifest.generation}-${manifest.snapshotId}.kronteam",
-            kind = "snapshot",
-            teamId = teamId,
-            bytes = encryptedEnvelope,
-            extraProperties = manifest.teamProperties(),
-        )
+        val name = "team-live-$teamId.kronteam"
+        val file = if (stableFileId == null) {
+            uploadImmutable(
+                accessToken = accessToken,
+                folderId = folderId,
+                name = name,
+                kind = "snapshot",
+                teamId = teamId,
+                bytes = encryptedEnvelope,
+                extraProperties = manifest.teamProperties(),
+            )
+        } else {
+            replaceSnapshot(accessToken, stableFileId, name, teamId, manifest.teamProperties(), encryptedEnvelope)
+        }
         require(file.sizeBytes == encryptedEnvelope.size.toLong() && file.snapshotManifest(teamId) == manifest) {
             "Metadata file snapshot Team tidak cocok"
         }
         return file.toRemoteSnapshot(manifest)
+    }
+
+    suspend fun stableSnapshot(accessToken: String, fileId: String, teamId: String): RemoteDriveSnapshot = withContext(Dispatchers.IO) {
+        requireIdentifier(fileId, "File snapshot Team")
+        val response = request(
+            accessToken,
+            URL("$endpoint/drive/v3/files/${path(fileId)}?fields=id,name,size,appProperties"),
+            "GET",
+        )
+        val file = parseFile(response)
+        require(file.fileId == fileId && file.isSnapshot(teamId)) { "File snapshot Team tidak cocok" }
+        file.toRemoteSnapshot(file.snapshotManifest(teamId))
+    }
+
+    private suspend fun replaceSnapshot(
+        accessToken: String,
+        fileId: String,
+        name: String,
+        teamId: String,
+        properties: Map<String, String>,
+        bytes: ByteArray,
+    ): TeamDriveFile = withContext(Dispatchers.IO) {
+        requireIdentifier(fileId, "File snapshot Team")
+        val fullProperties = mapOf("product" to "KRON", "teamId" to teamId, "kind" to "snapshot") + properties
+        val metadata = buildFileMetadata(name, null, fullProperties).toByteArray(Charsets.UTF_8)
+        val boundary = "kron-${UUID.randomUUID()}"
+        val prefix = ("--$boundary\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n").toByteArray() +
+            metadata + ("\r\n--$boundary\r\nContent-Type: application/octet-stream\r\n\r\n").toByteArray()
+        val suffix = "\r\n--$boundary--\r\n".toByteArray()
+        val connection = connectionFactory.open(URL("$endpoint/upload/drive/v3/files/${path(fileId)}?uploadType=multipart&fields=id,name,size,appProperties")).apply {
+            requestMethod = "PATCH"
+            configure(accessToken)
+            doOutput = true
+            setRequestProperty("Content-Type", "multipart/related; boundary=$boundary")
+            setFixedLengthStreamingMode(prefix.size.toLong() + bytes.size + suffix.size)
+        }
+        try {
+            connection.outputStream.use { output -> output.write(prefix); output.write(bytes); output.write(suffix) }
+            validate(connection)
+            parseFile(connection.inputStream.readLimited(MAX_RESPONSE_BYTES).toString(Charsets.UTF_8))
+        } finally {
+            connection.disconnect()
+        }
     }
 
     suspend fun uploadInvitation(
@@ -252,7 +301,7 @@ class TeamDriveRestClient(
     suspend fun listFiles(accessToken: String, folderId: String, teamId: String): List<TeamDriveFile> = withContext(Dispatchers.IO) {
         requireIdentifier(folderId, "Folder ID")
         requireIdentifier(teamId, "Team ID")
-        val query = encode("'$folderId' in parents and trashed = false and appProperties has { key='teamId' and value='$teamId' }")
+        val query = encode("'$folderId' in parents and trashed = false")
         val fields = encode("nextPageToken,files(id,name,size,appProperties)")
         val result = mutableListOf<TeamDriveFile>()
         var pageToken: String? = null
@@ -268,7 +317,30 @@ class TeamDriveRestClient(
             result += DriveJson.arrayObjects(response, "files").map(::parseFile)
             pageToken = DriveJson.optionalString(response, "nextPageToken")?.takeIf(String::isNotBlank)
         } while (pageToken != null)
-        result
+        result.filter { it.appProperties["teamId"] == teamId }
+    }
+
+    suspend fun listInvitationFiles(accessToken: String, folderId: String, inviteId: String): List<TeamDriveFile> = withContext(Dispatchers.IO) {
+        requireIdentifier(folderId, "Folder ID")
+        requireIdentifier(inviteId, "Invite ID")
+        val expectedName = "invitation-${TeamInvitationCodec.sha256(inviteId.toByteArray(Charsets.UTF_8))}.kronteam"
+        val query = encode("'$folderId' in parents and trashed = false")
+        val fields = encode("nextPageToken,files(id,name,size)")
+        val result = mutableListOf<TeamDriveFile>()
+        var pageToken: String? = null
+        var pages = 0
+        do {
+            require(pages++ < MAX_LIST_PAGES) { "Daftar file Team melewati batas aman" }
+            val url = buildString {
+                append(endpoint).append("/drive/v3/files?q=").append(query)
+                append("&fields=").append(fields).append("&pageSize=1000")
+                pageToken?.let { append("&pageToken=").append(encode(it)) }
+            }
+            val response = request(accessToken, URL(url), "GET")
+            result += DriveJson.arrayObjects(response, "files").map(::parseFileWithoutProperties)
+            pageToken = DriveJson.optionalString(response, "nextPageToken")?.takeIf(String::isNotBlank)
+        } while (pageToken != null)
+        result.filter { it.name == expectedName && it.sizeBytes > 0 }
     }
 
     suspend fun listSnapshots(accessToken: String, folderId: String, teamId: String): List<RemoteDriveSnapshot> =
@@ -382,9 +454,16 @@ class TeamDriveRestClient(
         )
     }
 
-    private fun buildFileMetadata(name: String, folderId: String, properties: Map<String, String>): String = buildString {
+    private fun parseFileWithoutProperties(value: String): TeamDriveFile = TeamDriveFile(
+        fileId = DriveJson.string(value, "id"),
+        name = DriveJson.string(value, "name"),
+        sizeBytes = DriveJson.optionalStringOrNumber(value, "size")?.toLongOrNull() ?: 0,
+        appProperties = emptyMap(),
+    )
+
+    private fun buildFileMetadata(name: String, folderId: String?, properties: Map<String, String>): String = buildString {
         append("{\"name\":\"").append(SnapshotManifestCodec.escape(name)).append("\",")
-        append("\"parents\":[\"").append(SnapshotManifestCodec.escape(folderId)).append("\"],")
+        folderId?.let { append("\"parents\":[\"").append(SnapshotManifestCodec.escape(it)).append("\"],") }
         append("\"appProperties\":{")
         properties.toSortedMap().entries.forEachIndexed { index, (key, value) ->
             if (index > 0) append(',')

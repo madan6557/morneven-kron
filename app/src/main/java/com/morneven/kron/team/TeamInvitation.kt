@@ -26,21 +26,30 @@ class TeamInvitation internal constructor(
     val role: String,
     val expiresAtEpochMillis: Long,
     val ownerKeyFingerprint: String,
+    val liveFileId: String? = null,
+    embeddedEnvelope: ByteArray? = null,
 ) {
     private val secretBytes = secret.copyOf()
+    private val embeddedEnvelopeBytes = embeddedEnvelope?.copyOf()
 
     internal fun secretCopy(): ByteArray = secretBytes.copyOf()
 
-    internal fun clear() = secretBytes.fill(0)
+    internal fun embeddedEnvelopeCopy(): ByteArray? = embeddedEnvelopeBytes?.copyOf()
+
+    internal fun clear() {
+        secretBytes.fill(0)
+        embeddedEnvelopeBytes?.fill(0)
+    }
 
     override fun toString(): String = "TeamInvitation(redacted)"
 }
 
 object TeamInvitationCodec {
     private const val PREFIX = "KRONTEAM1."
-    private const val VERSION = 1
+    private const val VERSION_LEGACY = 1
+    private const val VERSION_STABLE_FILE = 2
     private const val SECRET_BYTES = 32
-    private const val MAX_CODE_CHARS = 4096
+    private const val MAX_CODE_CHARS = 16 * 1024
     private const val INVITATION_LIFETIME_MILLIS = 24 * 60 * 60 * 1000L
     private val secureRandom = SecureRandom()
 
@@ -50,6 +59,7 @@ object TeamInvitationCodec {
         targetEmail: String,
         role: String,
         ownerKeyFingerprint: String,
+        liveFileId: String? = null,
         nowEpochMillis: Long = System.currentTimeMillis(),
         inviteId: String = UUID.randomUUID().toString(),
     ): TeamInvitation {
@@ -57,6 +67,7 @@ object TeamInvitationCodec {
         requireIdentifier(teamId, "Team ID")
         requireIdentifier(folderId, "Folder ID")
         requireIdentifier(inviteId, "Invite ID")
+        liveFileId?.let { requireIdentifier(it, "File snapshot Team") }
         require(isSha256(ownerKeyFingerprint)) { "Fingerprint Owner tidak valid" }
         val secret = ByteArray(SECRET_BYTES).also(secureRandom::nextBytes)
         return TeamInvitation(
@@ -68,15 +79,18 @@ object TeamInvitationCodec {
             role = role,
             expiresAtEpochMillis = Math.addExact(nowEpochMillis, INVITATION_LIFETIME_MILLIS),
             ownerKeyFingerprint = ownerKeyFingerprint,
+            liveFileId = liveFileId,
         ).also { secret.fill(0) }
     }
 
-    fun encode(invitation: TeamInvitation): String {
+    fun encode(invitation: TeamInvitation, embeddedEnvelope: ByteArray? = invitation.embeddedEnvelopeCopy()): String {
         val secret = invitation.secretCopy()
+        val envelope = embeddedEnvelope?.copyOf()
         return try {
             val payload = ByteArrayOutputStream().use { bytes ->
                 DataOutputStream(bytes).use { output ->
-                    output.writeInt(VERSION)
+                    val stableFileId = invitation.liveFileId
+                    output.writeInt(if (stableFileId == null) VERSION_LEGACY else VERSION_STABLE_FILE)
                     output.writeUTF(invitation.teamId)
                     output.writeUTF(invitation.folderId)
                     output.writeUTF(invitation.inviteId)
@@ -86,12 +100,20 @@ object TeamInvitationCodec {
                     output.writeUTF(invitation.role)
                     output.writeLong(invitation.expiresAtEpochMillis)
                     output.writeUTF(invitation.ownerKeyFingerprint)
+                    if (stableFileId != null) {
+                        val requiredEnvelope = requireNotNull(envelope) { "Envelope undangan tidak valid" }
+                        require(requiredEnvelope.isNotEmpty() && requiredEnvelope.size <= 64 * 1024) { "Envelope undangan tidak valid" }
+                        output.writeUTF(stableFileId)
+                        output.writeInt(requiredEnvelope.size)
+                        output.write(requiredEnvelope)
+                    }
                 }
                 bytes.toByteArray()
             }
             PREFIX + Base64.getUrlEncoder().withoutPadding().encodeToString(payload)
         } finally {
             secret.fill(0)
+            envelope?.fill(0)
         }
     }
 
@@ -104,7 +126,8 @@ object TeamInvitationCodec {
             .getOrElse { throw IllegalArgumentException("Format kode akses Team tidak valid") }
         return try {
             DataInputStream(ByteArrayInputStream(payload)).use { input ->
-                require(input.readInt() == VERSION) { "Versi kode akses Team tidak didukung" }
+                val version = input.readInt()
+                require(version == VERSION_LEGACY || version == VERSION_STABLE_FILE) { "Versi kode akses Team tidak didukung" }
                 val teamId = input.readUTF().also { requireIdentifier(it, "Team ID") }
                 val folderId = input.readUTF().also { requireIdentifier(it, "Folder ID") }
                 val inviteId = input.readUTF().also { requireIdentifier(it, "Invite ID") }
@@ -121,8 +144,18 @@ object TeamInvitationCodec {
                         "Masa berlaku kode akses Team tidak valid"
                     }
                     val fingerprint = input.readUTF().also { require(isSha256(it)) { "Fingerprint Owner tidak valid" } }
+                    val liveFileId = if (version == VERSION_STABLE_FILE) {
+                        input.readUTF().also { requireIdentifier(it, "File snapshot Team") }
+                    } else null
+                    val envelope = if (version == VERSION_STABLE_FILE) {
+                        val size = input.readInt()
+                        require(size in 1..64 * 1024) { "Envelope undangan tidak valid" }
+                        ByteArray(size).also(input::readFully)
+                    } else null
                     require(input.read() == -1) { "Kode akses Team memiliki data tambahan" }
-                    TeamInvitation(teamId, folderId, inviteId, secret, emailHash, role, expiry, fingerprint)
+                    TeamInvitation(teamId, folderId, inviteId, secret, emailHash, role, expiry, fingerprint, liveFileId, envelope).also {
+                        envelope?.fill(0)
+                    }
                 } finally {
                     secret.fill(0)
                 }
@@ -270,14 +303,15 @@ object TeamInvitationEnvelopeCrypto {
     }
 
     private fun metadata(invitation: TeamInvitation): ByteArray = buildString {
-        append("KRONTEAM-ENVELOPE-1\n")
+        append("KRONTEAM-ENVELOPE-").append(if (invitation.liveFileId == null) 1 else 2).append('\n')
         append(invitation.teamId).append('\n')
         append(invitation.folderId).append('\n')
         append(invitation.inviteId).append('\n')
         append(invitation.targetEmailHash).append('\n')
         append(invitation.role).append('\n')
         append(invitation.expiresAtEpochMillis).append('\n')
-        append(invitation.ownerKeyFingerprint)
+        append(invitation.ownerKeyFingerprint).append('\n')
+        append(invitation.liveFileId.orEmpty())
     }.toByteArray(Charsets.UTF_8)
 
     private fun hkdf(secret: ByteArray, salt: ByteArray): ByteArray {

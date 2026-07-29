@@ -35,7 +35,8 @@ class TeamGraphImporterTest {
             assertNotEquals(1L, accountId)
             assertEquals(2, scalar(db, "SELECT COUNT(*) FROM accounts"))
             assertEquals(PRIVATE_MARKER, text(db, "SELECT name FROM accounts WHERE id=1"))
-            assertEquals(0, scalar(db, "SELECT isActive FROM accounts WHERE id=$accountId"))
+            assertEquals(1, scalar(db, "SELECT isActive FROM accounts WHERE id=$accountId"))
+            assertEquals(0, scalar(db, "SELECT isActive FROM accounts WHERE id=1"))
             assertEquals(1, scalar(db, "SELECT COUNT(*) FROM categories WHERE accountId=$accountId AND syncId='team-category'"))
             val allocationId = scalar(db, "SELECT id FROM allocations WHERE syncId='team-allocation'")
             assertNotEquals(1L, allocationId)
@@ -59,6 +60,50 @@ class TeamGraphImporterTest {
             assertEquals("snapshot-7", text(db, "SELECT headSnapshotId FROM team_workspaces WHERE accountId=$accountId"))
             assertFalse(db.rawQuery("PRAGMA foreign_key_check", null).use { it.moveToFirst() })
             assertEquals("ok", text(db, "PRAGMA integrity_check").lowercase())
+        }
+    }
+
+    @Test
+    fun refreshesRemoteMutableDataWithoutTouchingPrivateAccount() {
+        val target = createTarget("team-refresh-target.db")
+        val source = createSource("team-refresh-source.db")
+        val accountId = TeamGraphImporter.merge(target, source, metadata())
+        SQLiteDatabase.openDatabase(source.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            db.execSQL("UPDATE categories SET name='Remote category',revision=1,updatedAt=2 WHERE syncId='team-category'")
+            db.execSQL("UPDATE team_workspaces SET generation=8")
+        }
+
+        TeamGraphRefresher.refresh(target, source, "team-1", "folder-1", TeamRole.EDITOR, "snapshot-8", 8)
+
+        SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+            assertEquals("Remote category", text(db, "SELECT name FROM categories WHERE accountId=$accountId AND syncId='team-category'"))
+            assertEquals(PRIVATE_MARKER, text(db, "SELECT name FROM accounts WHERE id=1"))
+            assertEquals(8, scalar(db, "SELECT generation FROM team_workspaces WHERE accountId=$accountId"))
+            assertEquals("snapshot-8", text(db, "SELECT headSnapshotId FROM team_workspaces WHERE accountId=$accountId"))
+            assertFalse(db.rawQuery("PRAGMA foreign_key_check", null).use { it.moveToFirst() })
+        }
+    }
+
+    @Test
+    fun preservationImportKeepsPrivateAccountActiveAndAddsNoInvitationUse() {
+        val target = createTarget("team-preserve-target.db")
+        val source = createSource("team-preserve-source.db")
+
+        val accountId = TeamGraphImporter.merge(
+            target,
+            source,
+            metadata().copy(
+                localRole = TeamRole.OWNER,
+                inviteIdHash = null,
+                activateImported = false,
+            ),
+        )
+
+        SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+            assertEquals(1, scalar(db, "SELECT isActive FROM accounts WHERE id=1"))
+            assertEquals(0, scalar(db, "SELECT isActive FROM accounts WHERE id=$accountId"))
+            assertEquals(0, scalar(db, "SELECT COUNT(*) FROM team_invitation_uses WHERE inviteIdHash='${INVITE_HASH}'"))
+            assertEquals(TeamRole.OWNER, text(db, "SELECT localRole FROM team_workspaces WHERE accountId=$accountId"))
         }
     }
 
