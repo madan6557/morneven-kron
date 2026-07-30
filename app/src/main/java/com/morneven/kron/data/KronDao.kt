@@ -65,6 +65,18 @@ interface KronDao {
     @Query("SELECT * FROM sync_state WHERE id = 1") fun observeSyncState(): Flow<SyncStateEntity?>
     @Query("SELECT * FROM team_workspaces WHERE accountId = :accountId LIMIT 1")
     fun observeTeamWorkspace(accountId: Long): Flow<TeamWorkspaceEntity?>
+    @Query("""SELECT w.* FROM team_workspaces w JOIN accounts a ON a.id=w.accountId
+        WHERE a.isArchived=0 AND a.sharingMode='TEAM'
+          AND w.status NOT IN ('CONFLICT','REVOKED','ARCHIVED','APPLY_PENDING')
+          AND w.canRead=1 AND w.capabilitiesVerifiedAt IS NOT NULL
+        ORDER BY w.updatedAt,w.accountId""")
+    fun observeAutoSyncTeamWorkspaces(): Flow<List<TeamWorkspaceEntity>>
+    @Query("""SELECT w.* FROM team_workspaces w JOIN accounts a ON a.id=w.accountId
+        WHERE a.isArchived=0 AND a.sharingMode='TEAM'
+          AND w.status NOT IN ('CONFLICT','REVOKED','ARCHIVED','APPLY_PENDING')
+          AND w.canRead=1 AND w.capabilitiesVerifiedAt IS NOT NULL
+        ORDER BY w.updatedAt,w.accountId""")
+    suspend fun autoSyncTeamWorkspaces(): List<TeamWorkspaceEntity>
     @Query("SELECT * FROM team_members WHERE accountId = :accountId ORDER BY role, displayName, email")
     fun observeTeamMembers(accountId: Long): Flow<List<TeamMemberEntity>>
 
@@ -94,6 +106,15 @@ interface KronDao {
         teamId: String,
         generation: Long,
         expectedHead: String?,
+        status: String,
+        updatedAt: Long,
+    ): Int
+
+    @Query("""UPDATE team_workspaces SET status=:status,updatedAt=:updatedAt
+        WHERE accountId=:accountId AND teamId=:teamId""")
+    suspend fun markTeamWorkspaceStatus(
+        accountId: Long,
+        teamId: String,
         status: String,
         updatedAt: Long,
     ): Int
@@ -219,7 +240,11 @@ interface KronDao {
                    WHEN EXISTS(SELECT 1 FROM ledger_lines l WHERE l.eventId = e.id AND l.legacyBackfill = 1)
                      OR EXISTS(SELECT 1 FROM journal_seals s WHERE s.eventId = e.id AND s.legacyBackfill = 1) THEN 'Legacy'
                    ELSE 'Valid'
-               END AS auditStatus
+               END AS auditStatus,
+               COALESCE((SELECT actor FROM team_event_proofs p WHERE p.eventId=e.id),
+                        (SELECT actor FROM journal_seals s WHERE s.eventId=e.id),'Tidak tersedia') AS actor,
+               COALESCE((SELECT deviceId FROM team_event_proofs p WHERE p.eventId=e.id),
+                        (SELECT deviceId FROM journal_seals s WHERE s.eventId=e.id),'Tidak tersedia') AS deviceId
         FROM activity_events e
         ORDER BY e.effectiveEpochDay DESC, e.createdAt DESC
     """)
@@ -242,7 +267,11 @@ interface KronDao {
                    WHEN EXISTS(SELECT 1 FROM ledger_lines l WHERE l.eventId = e.id AND l.legacyBackfill = 1)
                      OR EXISTS(SELECT 1 FROM journal_seals s WHERE s.eventId = e.id AND s.legacyBackfill = 1) THEN 'Legacy'
                    ELSE 'Valid'
-               END AS auditStatus
+               END AS auditStatus,
+               COALESCE((SELECT actor FROM team_event_proofs p WHERE p.eventId=e.id),
+                        (SELECT actor FROM journal_seals s WHERE s.eventId=e.id),'Tidak tersedia') AS actor,
+               COALESCE((SELECT deviceId FROM team_event_proofs p WHERE p.eventId=e.id),
+                        (SELECT deviceId FROM journal_seals s WHERE s.eventId=e.id),'Tidak tersedia') AS deviceId
         FROM activity_events e
         WHERE e.accountId = :accountId
         ORDER BY e.effectiveEpochDay DESC, e.createdAt DESC
@@ -292,6 +321,7 @@ interface KronDao {
     @Query("SELECT * FROM accounts WHERE id = :id") suspend fun accountById(id: Long): AccountEntity?
     @Query("SELECT * FROM team_workspaces WHERE accountId = :accountId LIMIT 1") suspend fun teamWorkspace(accountId: Long): TeamWorkspaceEntity?
     @Query("SELECT * FROM team_workspaces WHERE teamId = :teamId LIMIT 1") suspend fun teamWorkspaceByTeamId(teamId: String): TeamWorkspaceEntity?
+    @Query("SELECT teamId FROM team_workspaces") suspend fun allTeamWorkspaceIds(): List<String>
     @Query("SELECT * FROM team_members WHERE accountId = :accountId ORDER BY role, displayName, email") suspend fun teamMembers(accountId: Long): List<TeamMemberEntity>
     @Query("DELETE FROM team_members WHERE accountId = :accountId") suspend fun clearTeamMembers(accountId: Long)
     @Query("DELETE FROM team_members WHERE accountId = :accountId AND permissionId = :permissionId")

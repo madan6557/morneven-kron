@@ -9,5 +9,9 @@ object DatabaseAccessGate {
         processReady.set(true)
     }
 
+    fun markNotReady() {
+        processReady.set(false)
+    }
+
     fun isReady(): Boolean = processReady.get()
 }

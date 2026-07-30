@@ -12,6 +12,7 @@ import com.morneven.kron.data.ActivityEventEntity
 import com.morneven.kron.data.KronDatabase
 import com.morneven.kron.data.LedgerSide
 import com.morneven.kron.security.EncryptedAttachmentStore
+import com.morneven.kron.security.DatabaseRuntime
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -66,11 +67,12 @@ data class EvidenceHealth(
 @Singleton
 class EvidencePackageManager @Inject constructor(
     @param:ApplicationContext private val context: Context,
-    private val database: KronDatabase,
+    private val databaseRuntime: DatabaseRuntime,
     private val attachmentStore: EncryptedAttachmentStore,
     private val postingEngine: LedgerPostingEngine,
     private val signingKeys: EvidenceSigningKeyManager,
 ) {
+    private val database get() = databaseRuntime.current()
     private val dao get() = database.kronDao()
 
     suspend fun health(): EvidenceHealth = withContext(Dispatchers.IO) {

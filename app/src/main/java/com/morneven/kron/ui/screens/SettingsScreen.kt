@@ -39,6 +39,7 @@ import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -382,7 +383,13 @@ fun SettingsScreen(
                 teamSyncing -> CloudSyncStatus.SYNCING
                 teamWaitingNetwork -> CloudSyncStatus.WAITING_NETWORK
                 teamSyncFailed -> CloudSyncStatus.FAILED
+                state.teamWorkspace?.status == "SYNCING" -> CloudSyncStatus.SYNCING
+                state.teamWorkspace?.status == "MERGE_PENDING" -> CloudSyncStatus.SYNCING
+                state.teamWorkspace?.status == "WAITING_NETWORK" -> CloudSyncStatus.WAITING_NETWORK
+                state.teamWorkspace?.status == "FAILED" -> CloudSyncStatus.FAILED
                 state.teamWorkspace?.status == "CONFLICT" -> CloudSyncStatus.CONFLICT
+                state.teamWorkspace?.status == "APPLY_PENDING" -> CloudSyncStatus.RESTART_REQUIRED
+                state.teamWorkspace?.status == "AUTH_REQUIRED" -> CloudSyncStatus.NEEDS_AUTHORIZATION
                 state.teamWorkspace?.status == "REVOKED" -> CloudSyncStatus.FAILED
                 state.teamWorkspace?.status == "SYNCED" -> CloudSyncStatus.SYNCED
                 else -> CloudSyncStatus.NOT_CONNECTED
@@ -394,15 +401,19 @@ fun SettingsScreen(
                     accountLabel = if (teamMode) teamGoogleAccountLabel else cloudBackupState.accountLabel,
                     kronAccountName = state.activeAccount?.name,
                     teamRole = state.teamWorkspace?.localRole,
-                    lastSyncedAt = if (teamMode) state.teamWorkspace?.updatedAt else cloudBackupState.lastSyncedAt,
+                    lastSyncedAt = if (teamMode && teamStatus == CloudSyncStatus.SYNCED) state.teamWorkspace?.updatedAt else cloudBackupState.lastSyncedAt,
                     wifiOnly = cloudBackupState.wifiOnly,
-                    detail = if (teamMode) teamSyncDetail else cloudBackupState.detail,
+                    detail = if (teamMode) {
+                        teamSyncDetail ?: if (state.teamWorkspace?.status == "REVOKED") {
+                            "Snapshot Team telah dihapus oleh Owner atau akses Anda telah dicabut. Data lokal dipertahankan."
+                        } else null
+                    } else cloudBackupState.detail,
                 ),
                 onConnect = onConnectCloud,
-                onSyncNow = if (teamMode) onSyncTeam else onSyncNow,
+                onSyncNow = if (teamMode && state.teamWorkspace?.status != "REVOKED") onSyncTeam else onSyncNow,
                 onDisconnect = onDisconnectCloud,
                 onChangeAccount = onChangeCloudAccount,
-                onWifiOnly = onWifiOnly,
+                onWifiOnly = onWifiOnly.takeUnless { teamMode },
                 onClearDriveData = onClearDriveData.takeUnless { teamMode },
             )
         }
@@ -625,17 +636,17 @@ private fun AccountCarousel(
                     }
                     IconButton(
                         onClick = { entity?.let(onArchiveAccount) },
-                        enabled = entity != null && !readOnly && !account.isActive && account.cashBalance == 0L && account.eBudgetBalance == 0L,
+                        enabled = entity != null && !readOnly && !account.isActive && entity.sharingMode == AccountSharingMode.PRIVATE,
                     ) {
-                        Icon(Icons.Outlined.Archive, contentDescription = "Arsipkan akun ${account.name}")
+                        Icon(Icons.Outlined.Archive, contentDescription = "Hapus akun ${account.name} dari daftar aktif")
                     }
                 }
                 AccountChannelBalance("CASH", account.cashBalance, state.valuesVisible)
                 Spacer(Modifier.height(8.dp))
                 AccountChannelBalance("EBUDGET", account.eBudgetBalance, state.valuesVisible)
-                if (!account.isActive && (account.cashBalance != 0L || account.eBudgetBalance != 0L)) {
+                if (!account.isActive && entity?.sharingMode == AccountSharingMode.TEAM) {
                     Text(
-                        "Kosongkan kedua kanal sebelum akun dapat diarsipkan.",
+                        "Kembalikan Team menjadi Privat sebelum menghapus akun.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 8.dp),
@@ -700,11 +711,18 @@ private fun SyncCard(
     } else defaultStatusLabel
     HudCard(accent = statusColor.copy(alpha = 0.55f)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
-            Icon(
-                if (connected) Icons.Outlined.CloudDone else Icons.Outlined.CloudOff,
-                contentDescription = null,
-                tint = statusColor,
-            )
+            if (state.status == CloudSyncStatus.SYNCING) {
+                CircularProgressIndicator(
+                    modifier = Modifier.width(28.dp).height(28.dp),
+                    color = statusColor,
+                )
+            } else {
+                Icon(
+                    if (connected) Icons.Outlined.CloudDone else Icons.Outlined.CloudOff,
+                    contentDescription = null,
+                    tint = statusColor,
+                )
+            }
             Column(Modifier.weight(1f)) {
                 Text(if (team) "Team di Google Drive" else "Drive Privat", style = MaterialTheme.typography.titleMedium)
                 Text(statusLabel, style = MaterialTheme.typography.labelSmall, color = statusColor)
@@ -715,7 +733,7 @@ private fun SyncCard(
                 }
             }
         }
-        state.lastSyncedAt?.let { timestamp ->
+        state.lastSyncedAt?.takeIf { state.status == CloudSyncStatus.SYNCED }?.let { timestamp ->
             Text(
                 "Sinkron terakhir ${Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault()).format(syncDateFormat)}",
                 style = MaterialTheme.typography.bodySmall,
@@ -728,7 +746,10 @@ private fun SyncCard(
                 CloudSyncStatus.UNAVAILABLE -> "Sinkronisasi belum dikonfigurasi pada build ini. Backup lokal tetap tersedia."
                 CloudSyncStatus.NOT_CONNECTED -> "Opsional. Data disimpan terenkripsi pada Drive akun yang dipilih."
                 CloudSyncStatus.CONFLICT -> "Data perangkat dan ${if (team) "Team" else "Drive"} sama-sama berubah. Tinjau perbedaannya sebelum melanjutkan."
-                CloudSyncStatus.RESTART_REQUIRED -> "Snapshot Drive sudah divalidasi. Buka ulang KRON untuk menerapkannya dengan aman."
+                CloudSyncStatus.SYNCING -> "Memeriksa pembaruan dan mengirim atau mengambil snapshot Team terenkripsi."
+                CloudSyncStatus.WAITING_NETWORK -> "Sinkronisasi akan dicoba kembali saat jaringan tersedia."
+                CloudSyncStatus.FAILED -> "Sinkronisasi terakhir belum selesai. Anda dapat mencoba lagi dari kartu ini."
+                CloudSyncStatus.RESTART_REQUIRED -> "Pembaruan terenkripsi sudah divalidasi dan siap diterapkan saat aplikasi aktif."
                 CloudSyncStatus.FREE_ONLY_BLOCKED -> "Sinkronisasi dihentikan karena layanan meminta billing. Backup lokal tetap tersedia."
                 else -> "Data lokal tetap dapat digunakan tanpa koneksi internet."
             },
@@ -736,6 +757,14 @@ private fun SyncCard(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 8.dp),
         )
+        if (team) {
+            Text(
+                "Sinkronisasi Team dapat memakai data seluler.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
         if (onWifiOnly != null) {
             ToggleRow(
                 Icons.Outlined.Sync,
@@ -802,7 +831,7 @@ private fun cloudStatusPresentation(status: CloudSyncStatus): Pair<String, Color
     CloudSyncStatus.NEEDS_AUTHORIZATION -> "Perlu otorisasi ulang" to MaterialTheme.colorScheme.tertiary
     CloudSyncStatus.FAILED -> "Sinkronisasi gagal" to MaterialTheme.colorScheme.error
     CloudSyncStatus.CONFLICT -> "Konflik data" to MaterialTheme.colorScheme.error
-    CloudSyncStatus.RESTART_REQUIRED -> "Perlu buka ulang" to MaterialTheme.colorScheme.tertiary
+    CloudSyncStatus.RESTART_REQUIRED -> "Pembaruan siap diterapkan" to MaterialTheme.colorScheme.tertiary
     CloudSyncStatus.FREE_ONLY_BLOCKED -> "Dihentikan agar tetap gratis" to MaterialTheme.colorScheme.error
     CloudSyncStatus.UNAVAILABLE -> "Belum tersedia" to MaterialTheme.colorScheme.onSurfaceVariant
 }

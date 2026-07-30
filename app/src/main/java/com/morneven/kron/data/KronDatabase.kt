@@ -868,6 +868,14 @@ abstract class KronDatabase : RoomDatabase() {
             }
         }
 
+        internal fun closeAndForget(expected: KronDatabase? = null) = synchronized(this) {
+            val opened = instance
+            if (expected == null || opened === expected) {
+                opened?.close()
+                instance = null
+            }
+        }
+
         val MIGRATION_13_14: Migration = object : Migration(13, 14) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 val before = receiptMigrationProof(db, "receipts")
@@ -1406,6 +1414,13 @@ abstract class KronDatabase : RoomDatabase() {
                         "WHERE a.sharingMode!='TEAM' OR a.teamId!=w.teamId OR w.localRole NOT IN ('OWNER','EDITOR','VIEWER')",
                 ) == 0L,
             ) { "Workspace Team Account tidak konsisten" }
+            require(
+                scalar(
+                    db,
+                    "SELECT COUNT(*) FROM accounts a LEFT JOIN team_workspaces w ON w.accountId=a.id AND w.teamId=a.teamId " +
+                        "WHERE a.sharingMode='TEAM' AND w.accountId IS NULL",
+                ) == 0L,
+            ) { "Akun Team tidak memiliki workspace" }
 
             val unbalancedLedger = scalar(
                 db,

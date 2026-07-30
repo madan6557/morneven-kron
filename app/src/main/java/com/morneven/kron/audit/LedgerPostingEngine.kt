@@ -25,11 +25,26 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class LedgerPostingEngine @Inject constructor(
+class LedgerPostingEngine private constructor(
     @param:ApplicationContext private val context: Context,
-    private val database: KronDatabase,
+    private val databaseProvider: () -> KronDatabase,
     private val signingKeys: EvidenceSigningKeyManager,
+    private val auditIdentity: AuditIdentity,
 ) {
+    @Inject
+    constructor(
+        @ApplicationContext context: Context,
+        databaseRuntime: com.morneven.kron.security.DatabaseRuntime,
+        signingKeys: EvidenceSigningKeyManager,
+    ) : this(context, databaseRuntime::current, signingKeys, AuditIdentity(context))
+
+    internal constructor(
+        context: Context,
+        database: KronDatabase,
+        signingKeys: EvidenceSigningKeyManager,
+    ) : this(context, { database }, signingKeys, AuditIdentity(context))
+
+    private val database get() = databaseProvider()
     private val dao get() = database.kronDao()
 
     suspend fun finalizeUnsealedEvents() = database.withTransaction {
@@ -347,8 +362,9 @@ class LedgerPostingEngine @Inject constructor(
         val previous = latest?.chainHash ?: GENESIS_HASH
         val payloadHash = payloadHash(event)
         val chainHash = chainHash(previous, payloadHash, sequence)
-        val actor = dao.actorProfile()?.displayName ?: "Pengguna lokal"
-        val deviceId = dao.syncState()?.deviceId ?: "local-device"
+        val isTeam = dao.accountById(event.accountId)?.sharingMode == AccountSharingMode.TEAM
+        val actor = auditIdentity.actor(isTeam, keyId)
+        val deviceId = keyId.substringAfter(':', keyId)
         dao.insertJournalSeal(
             JournalSealEntity(
                 eventId = event.id,
@@ -376,10 +392,8 @@ class LedgerPostingEngine @Inject constructor(
         }
         val workspace = requireNotNull(dao.teamWorkspace(event.accountId)) { "Workspace event Team tidak ditemukan" }
         require(workspace.teamId == account.teamId) { "Workspace event Team tidak cocok" }
-        val deviceId = requireNotNull(dao.syncState()?.deviceId?.takeIf(String::isNotBlank)) {
-            "Identitas perangkat Team tidak tersedia"
-        }
-        val actor = dao.actorProfile()?.displayName ?: "Pengguna lokal"
+        val deviceId = keyId.substringAfter(':', keyId)
+        val actor = auditIdentity.actor(isTeam = true, keyId)
         val chainId = TeamLedgerCanonicalizer.chainId(workspace.teamId, deviceId)
         val latest = dao.latestTeamEventProof(chainId)
         val sequence = (latest?.sequence ?: 0L) + 1L

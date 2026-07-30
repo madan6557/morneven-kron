@@ -49,6 +49,27 @@ class TeamDriveRestClientTest {
     }
 
     @Test
+    fun deleteWorkspaceDeletesTeamArtifactsBeforeFolder() = runBlocking {
+        val urls = mutableListOf<String>()
+        val snapshot = fileJson("snapshot-1", "snapshot", snapshotProperties())
+        val invitation = fileJson("invite-1", "invitation", mapOf("product" to "KRON", "teamId" to "team-1"))
+        val client = TeamDriveRestClient(
+            endpoint = "https://drive.test",
+            connectionFactory = DriveHttpConnectionFactory { url ->
+                urls += url.toString()
+                FakeHttpConnection(url, "{\"files\":[$snapshot,$invitation]}".toByteArray())
+            },
+        )
+
+        client.deleteWorkspace("token", "folder-1", "team-1")
+
+        assertTrue(urls[0].contains("/drive/v3/files?q="))
+        assertEquals("https://drive.test/drive/v3/files/snapshot-1", urls[1])
+        assertEquals("https://drive.test/drive/v3/files/invite-1", urls[2])
+        assertEquals("https://drive.test/drive/v3/files/folder-1", urls[3])
+    }
+
+    @Test
     fun uploadSnapshotUsesImmutableFileAndChunkedParents() = runBlocking {
         lateinit var connection: FakeHttpConnection
         val response = fileJson(

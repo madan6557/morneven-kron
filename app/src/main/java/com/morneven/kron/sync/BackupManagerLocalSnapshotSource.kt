@@ -3,16 +3,19 @@ package com.morneven.kron.sync
 import com.morneven.kron.backup.BackupManager
 import com.morneven.kron.data.KronDatabase
 import com.morneven.kron.data.SyncStateEntity
+import com.morneven.kron.security.DatabaseRuntime
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class BackupManagerLocalSnapshotSource(
     private val backupManager: BackupManager,
-    private val database: KronDatabase,
+    private val databaseRuntime: DatabaseRuntime,
     private val initialDatasetId: String = UUID.randomUUID().toString(),
     private val initialDeviceId: String = UUID.randomUUID().toString(),
 ) : LocalSnapshotSource {
+    private val database get() = databaseRuntime.current()
+
     override suspend fun describe(): LocalDatasetSnapshot = withContext(Dispatchers.IO) {
         val syncState = database.kronDao().syncState() ?: SyncStateEntity(
             datasetId = initialDatasetId,
@@ -67,6 +70,7 @@ class BackupManagerLocalSnapshotSource(
             accountSubject = account.subjectId,
             accountEmail = account.email,
         )
-        return LocalApplyOutcome.RESTART_REQUIRED
+        databaseRuntime.markPendingSyncActivation()
+        return LocalApplyOutcome.APPLIED
     }
 }

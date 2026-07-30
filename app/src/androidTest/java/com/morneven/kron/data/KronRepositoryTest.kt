@@ -345,6 +345,17 @@ class KronRepositoryTest {
     }
 
     @Test
+    fun archiveAccountWithBalancePreservesItsJournal() = runBlocking {
+        val accountId = repository.addAccount("Cadangan", 75, 0)
+
+        repository.archiveAccount(accountId, "Tidak digunakan")
+
+        assertTrue(dao.accountById(accountId)?.isArchived == true)
+        assertEquals(75L, dao.accountBalance(accountId, FundingChannel.CASH))
+        assertTrue(dao.allEvents().any { it.type == LedgerType.ARCHIVE && it.accountId == accountId })
+    }
+
+    @Test
     fun februarySchedule_clampsAndReturnsToAnchorDay() {
         assertEquals(LocalDate.of(2027, 2, 28), ScheduleCalculator.next(LocalDate.of(2026, 2, 28), "YEARLY", 2, 29))
         assertEquals(LocalDate.of(2028, 2, 29), ScheduleCalculator.next(LocalDate.of(2027, 2, 28), "YEARLY", 2, 29))

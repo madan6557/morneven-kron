@@ -27,6 +27,10 @@ class TeamSnapshotHeadPolicyTest {
         assertEquals(TeamSyncDecision.UPLOAD, decide(localGeneration = 5))
         assertEquals(TeamSyncDecision.CONFLICT, decide(canWrite = false, localGeneration = 5))
         assertEquals(TeamSyncDecision.PULL, decide(remoteHead = "child", remoteGeneration = 6, descends = true))
+        assertEquals(
+            TeamSyncDecision.PULL,
+            TeamSyncPolicy.decide(true, "recovery-head", 9, "remote-head", 10, null, false, recoveringFromPrivateCopy = true),
+        )
         assertEquals(TeamSyncDecision.CONFLICT, decide(remoteHead = "child", remoteGeneration = 6, localGeneration = 5, descends = true))
         assertEquals(TeamSyncDecision.CONFLICT, decide(remoteHead = "child", remoteGeneration = 6, baseGeneration = null))
     }

@@ -13,6 +13,7 @@ import com.morneven.kron.automation.AutomationWorker
 import com.morneven.kron.backup.BackupManager
 import com.morneven.kron.security.SqlCipherLibrary
 import com.morneven.kron.team.TeamAtomicSwap
+import com.morneven.kron.team.TeamSyncRuntime
 import com.morneven.kron.sync.DriveSyncRuntimeFactory
 import dagger.hilt.android.HiltAndroidApp
 import java.util.concurrent.TimeUnit
@@ -25,6 +26,7 @@ import kotlinx.coroutines.SupervisorJob
 @HiltAndroidApp
 class KronApplication : Application() {
     @Inject lateinit var driveSyncRuntimeFactory: Lazy<DriveSyncRuntimeFactory>
+    @Inject lateinit var teamSyncRuntime: Lazy<TeamSyncRuntime>
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -43,6 +45,7 @@ class KronApplication : Application() {
     fun startDataServices() {
         val dataReady = runCatching { driveSyncRuntimeFactory.get().start(applicationScope) }.isSuccess
         if (!dataReady) return
+        runCatching { teamSyncRuntime.get().start(applicationScope) }
         val workManager = WorkManager.getInstance(this)
         workManager.enqueue(OneTimeWorkRequestBuilder<AutomationWorker>().build())
         workManager.enqueueUniquePeriodicWork(

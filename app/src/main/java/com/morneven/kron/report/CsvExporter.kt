@@ -5,6 +5,7 @@ import android.net.Uri
 import com.morneven.kron.data.ActivityRow
 import com.morneven.kron.data.AllocationBalanceRow
 import com.morneven.kron.data.KronDatabase
+import com.morneven.kron.security.DatabaseRuntime
 import com.morneven.kron.data.LedgerSide
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.Instant
@@ -20,8 +21,9 @@ import kotlinx.coroutines.withContext
 @Singleton
 class CsvExporter @Inject constructor(
     @param:ApplicationContext private val context: Context,
-    private val database: KronDatabase,
+    private val databaseRuntime: DatabaseRuntime,
 ) {
+    private val database get() = databaseRuntime.current()
     private val timeFmt = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.forLanguageTag("id-ID"))
 
     suspend fun export(uri: Uri, activities: List<ActivityRow>, allocations: List<AllocationBalanceRow>) = withContext(Dispatchers.IO) {

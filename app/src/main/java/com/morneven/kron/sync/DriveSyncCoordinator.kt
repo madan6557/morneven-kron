@@ -216,9 +216,7 @@ class DriveSyncCoordinator(
     suspend fun validatePassphrase(remoteHint: RemoteDriveSnapshot? = null): SyncRunResult = syncMutex.withLock {
         val state = stateStore.read()
         if (state.status == SyncStatus.DISABLED) return@withLock SyncRunResult.Disabled
-        if (state.status == SyncStatus.RESTART_REQUIRED) {
-            return@withLock SyncRunResult.RestartRequired(state.lastSnapshotId ?: "pending-restore")
-        }
+        if (state.status == SyncStatus.RESTART_REQUIRED) stateStore.update { it.copy(status = SyncStatus.IDLE, lastError = null) }
         if (state.disabledDueToBilling) return@withLock SyncRunResult.FreeOnlyBlocked
         val tokenResult = authorization.accessToken(interactive = false)
         if (tokenResult !is DriveAccessTokenResult.Granted) return@withLock handleTokenFailure(tokenResult)
@@ -262,9 +260,7 @@ class DriveSyncCoordinator(
     private suspend fun syncNowLocked(): SyncRunResult {
         val initialState = stateStore.read()
         if (initialState.status == SyncStatus.DISABLED) return SyncRunResult.Disabled
-        if (initialState.status == SyncStatus.RESTART_REQUIRED) {
-            return SyncRunResult.RestartRequired(initialState.lastSnapshotId ?: "pending-restore")
-        }
+        if (initialState.status == SyncStatus.RESTART_REQUIRED) stateStore.update { it.copy(status = SyncStatus.IDLE, lastError = null) }
         if (initialState.disabledDueToBilling) return SyncRunResult.FreeOnlyBlocked
         if (initialState.status == SyncStatus.SYNCING) {
             stateStore.update { it.copy(status = SyncStatus.ERROR, lastError = "Sinkron sebelumnya terputus") }
@@ -398,9 +394,7 @@ class DriveSyncCoordinator(
             return SyncRunResult.Conflict(conflict)
         }
         val state = stateStore.read()
-        if (state.status == SyncStatus.RESTART_REQUIRED) {
-            return SyncRunResult.RestartRequired(state.lastSnapshotId ?: "pending-restore")
-        }
+        if (state.status == SyncStatus.RESTART_REQUIRED) stateStore.update { it.copy(status = SyncStatus.IDLE, lastError = null) }
         if (state.disabledDueToBilling) return SyncRunResult.FreeOnlyBlocked
         val tokenResult = authorization.accessToken(interactive = false)
         if (tokenResult !is DriveAccessTokenResult.Granted) return handleTokenFailure(tokenResult)
@@ -481,9 +475,7 @@ class DriveSyncCoordinator(
 
     suspend fun downloadLatestSnapshot(): SyncRunResult = syncMutex.withLock {
         val state = stateStore.read()
-        if (state.status == SyncStatus.RESTART_REQUIRED) {
-            return SyncRunResult.RestartRequired(state.lastSnapshotId ?: "pending-restore")
-        }
+        if (state.status == SyncStatus.RESTART_REQUIRED) stateStore.update { it.copy(status = SyncStatus.IDLE, lastError = null) }
         if (state.disabledDueToBilling) return SyncRunResult.FreeOnlyBlocked
         stateStore.update { it.copy(status = SyncStatus.SYNCING, lastError = null) }
         val tokenResult = authorization.accessToken(interactive = false)
@@ -613,7 +605,7 @@ class DriveSyncCoordinator(
         try {
             val decrypted = cryptor.decrypt(envelope, passphrase)
             require(decrypted.manifest == remote.manifest) { "Metadata snapshot Drive tidak cocok" }
-            val outcome = try {
+            try {
                 local.applyRemoteAtomically(decrypted.payload, decrypted.manifest, token.account)
             } finally {
                 decrypted.payload.fill(0)
@@ -626,11 +618,7 @@ class DriveSyncCoordinator(
                     parentSnapshotId = remote.manifest.parentSnapshotId,
                     lastSnapshotId = remote.manifest.snapshotId,
                     lastSyncedAtEpochMillis = nowEpochMillis(),
-                    status = if (outcome == LocalApplyOutcome.RESTART_REQUIRED) {
-                        SyncStatus.RESTART_REQUIRED
-                    } else {
-                        SyncStatus.SYNCED
-                    },
+                    status = SyncStatus.SYNCED,
                     lastError = null,
                     conflictRemoteFileId = null,
                     accountSubject = token.account.subjectId,
@@ -638,11 +626,7 @@ class DriveSyncCoordinator(
                 )
             }
             DataRefreshBridge.emit()
-            return if (outcome == LocalApplyOutcome.RESTART_REQUIRED) {
-                SyncRunResult.RestartRequired(remote.manifest.snapshotId)
-            } else {
-                SyncRunResult.Synchronized(remote.manifest.snapshotId, uploaded = false)
-            }
+            return SyncRunResult.Applied(remote.manifest.snapshotId)
         } finally {
             envelope.fill(0)
             passphrase.fill('\u0000')

@@ -3,6 +3,7 @@ package com.morneven.kron.team
 import com.morneven.kron.BuildConfig
 import com.morneven.kron.audit.EvidenceSigningKeyManager
 import com.morneven.kron.data.KronDatabase
+import com.morneven.kron.security.DatabaseRuntime
 import com.morneven.kron.data.TeamAccessGuard
 import com.morneven.kron.data.TeamCapability
 import com.morneven.kron.data.TeamMemberEntity
@@ -27,12 +28,14 @@ class CreatedTeamInvitation(
 
 @Singleton
 class TeamInvitationManager @Inject constructor(
-    private val database: KronDatabase,
+    private val databaseRuntime: DatabaseRuntime,
     private val accessGuard: TeamAccessGuard,
     private val keyStore: TeamKeyStore,
     private val signingKeys: EvidenceSigningKeyManager,
     private val drive: TeamDriveRestClient,
 ) {
+    private val database get() = databaseRuntime.current()
+
     suspend fun create(
         accessToken: String,
         googleAccount: GoogleAccountIdentity,

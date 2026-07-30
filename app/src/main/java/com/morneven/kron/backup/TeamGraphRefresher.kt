@@ -4,6 +4,11 @@ import android.database.sqlite.SQLiteDatabase
 import com.morneven.kron.data.KronDatabase
 import java.io.File
 
+/** The remote branch must not silently replace unsynced append-only Team events. */
+internal class TeamSnapshotHistoryException : IllegalStateException(
+    "Snapshot Team tidak memuat seluruh riwayat lokal",
+)
+
 /** Applies a verified descendant snapshot to one existing Team account in a staging database. */
 internal object TeamGraphRefresher {
     fun refresh(
@@ -27,7 +32,14 @@ internal object TeamGraphRefresher {
             try {
                 db.beginTransaction()
                 try {
-                    val accountId = scalar(db, "SELECT id FROM accounts WHERE teamId=?", arrayOf(teamId))
+                    db.execSQL("PRAGMA defer_foreign_keys=ON")
+                    val accountId = scalar(
+                        db,
+                        """SELECT a.id FROM accounts a
+                           JOIN team_workspaces w ON w.accountId=a.id AND w.teamId=a.teamId
+                           WHERE a.teamId=? AND a.sharingMode='TEAM'""",
+                        arrayOf(teamId),
+                    )
                     require(accountId > 0) { "Akun Team lokal tidak ditemukan" }
                     validateAppendOnlyHistory(db, accountId)
                     createMappings(db)
@@ -40,6 +52,13 @@ internal object TeamGraphRefresher {
                         arrayOf<Any?>(folderId, role, liveFileId, headSnapshotId, generation, if (role == "VIEWER") 0 else 1,
                             System.currentTimeMillis(), System.currentTimeMillis(), accountId, teamId),
                     )
+                    require(
+                        scalar(
+                            db,
+                            "SELECT COUNT(*) FROM accounts WHERE id=? AND sharingMode='TEAM' AND teamId=?",
+                            arrayOf(accountId.toString(), teamId),
+                        ) == 1L,
+                    ) { "Identitas akun Team berubah saat sync" }
                     require(!db.rawQuery("PRAGMA foreign_key_check", null).use { it.moveToFirst() }) {
                         "Relasi hasil sync Team tidak valid"
                     }
@@ -54,13 +73,68 @@ internal object TeamGraphRefresher {
         }
     }
 
+    /** Unions two append-only Team branches. Shared mutable records must already agree. */
+    fun mergeFork(
+        target: File,
+        source: File,
+        teamId: String,
+        folderId: String,
+        liveFileId: String?,
+        role: String,
+        remoteSnapshotId: String,
+        remoteGeneration: Long,
+    ) {
+        val sourceScope = TeamSnapshotPruner.validateImported(source, teamId)
+        require(sourceScope.generation == remoteGeneration) { "Generation snapshot Team tidak cocok" }
+        SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            require(scalar(db, "PRAGMA user_version") == KronDatabase.SCHEMA_VERSION.toLong()) {
+                "Schema database target Team tidak sesuai"
+            }
+            db.execSQL("PRAGMA foreign_keys=ON")
+            db.execSQL("ATTACH DATABASE ? AS team_source", arrayOf(source.absolutePath))
+            try {
+                db.beginTransaction()
+                try {
+                    db.execSQL("PRAGMA defer_foreign_keys=ON")
+                    val accountId = scalar(
+                        db,
+                        """SELECT a.id FROM accounts a
+                           JOIN team_workspaces w ON w.accountId=a.id AND w.teamId=a.teamId
+                           WHERE a.teamId=? AND a.sharingMode='TEAM'""",
+                        arrayOf(teamId),
+                    )
+                    require(accountId > 0) { "Akun Team lokal tidak ditemukan" }
+                    validateSharedEvents(db, accountId)
+                    validateNoMutableFork(db, accountId)
+                    createMappings(db)
+                    upsertMutableGraph(db, sourceScope.accountId, accountId, overwriteExisting = false)
+                    appendEvents(db, sourceScope.accountId, accountId)
+                    db.execSQL(
+                        """UPDATE team_workspaces SET folderId=?,localRole=?,liveFileId=?,headSnapshotId=?,generation=?,status='MERGE_PENDING',
+                           canRead=1,canWrite=?,canShare=0,capabilitiesVerifiedAt=?,updatedAt=?
+                           WHERE accountId=? AND teamId=?""",
+                        arrayOf<Any?>(folderId, role, liveFileId, remoteSnapshotId, remoteGeneration + 1,
+                            if (role == "VIEWER") 0 else 1, System.currentTimeMillis(), System.currentTimeMillis(), accountId, teamId),
+                    )
+                    requireNoForeignKeyViolations(db, "Relasi hasil gabung Team tidak valid")
+                    validateFinancialInvariants(db)
+                    db.setTransactionSuccessful()
+                } finally {
+                    db.endTransaction()
+                }
+            } finally {
+                db.execSQL("DETACH DATABASE team_source")
+            }
+        }
+    }
+
     private fun validateAppendOnlyHistory(db: SQLiteDatabase, accountId: Long) {
-        requireZero(
-            db,
-            "SELECT COUNT(*) FROM activity_events l WHERE l.accountId=? AND NOT EXISTS(SELECT 1 FROM team_source.activity_events r WHERE r.id=l.id)",
-            arrayOf(accountId.toString()),
-            "Snapshot Team tidak memuat seluruh riwayat lokal",
-        )
+        if (scalar(
+                db,
+                "SELECT COUNT(*) FROM activity_events l WHERE l.accountId=? AND NOT EXISTS(SELECT 1 FROM team_source.activity_events r WHERE r.id=l.id)",
+                arrayOf(accountId.toString()),
+            ) != 0L
+        ) throw TeamSnapshotHistoryException()
         requireZero(
             db,
             """SELECT COUNT(*) FROM team_event_proofs l JOIN team_source.team_event_proofs r ON r.eventId=l.eventId
@@ -71,6 +145,56 @@ internal object TeamGraphRefresher {
         )
     }
 
+    private fun validateSharedEvents(db: SQLiteDatabase, accountId: Long) {
+        requireZero(
+            db,
+            """SELECT COUNT(*) FROM activity_events l JOIN team_source.activity_events r ON r.id=l.id
+               WHERE l.accountId=? AND (l.type<>r.type OR l.title<>r.title OR l.note<>r.note OR l.source<>r.source
+                   OR l.effectiveEpochDay<>r.effectiveEpochDay OR l.createdAt<>r.createdAt
+                   OR COALESCE(l.relatedEventId,'')<>COALESCE(r.relatedEventId,'')
+                   OR COALESCE(l.reversedByEventId,'')<>COALESCE(r.reversedByEventId,''))""",
+            arrayOf(accountId.toString()),
+            "UUID event Team memiliki payload berbeda",
+        )
+        requireZero(
+            db,
+            """SELECT COUNT(*) FROM activity_events l JOIN team_source.activity_events r ON r.id=l.id
+               LEFT JOIN team_event_proofs lp ON lp.eventId=l.id
+               LEFT JOIN team_source.team_event_proofs rp ON rp.eventId=r.id
+               WHERE l.accountId=? AND (
+                   (lp.eventId IS NULL) <> (rp.eventId IS NULL) OR
+                   (lp.eventId IS NOT NULL AND (lp.payloadHash<>rp.payloadHash OR lp.chainHash<>rp.chainHash OR lp.signatureBase64<>rp.signatureBase64)))""",
+            arrayOf(accountId.toString()),
+            "Bukti event Team berbeda pada UUID yang sama",
+        )
+        requireZero(
+            db,
+            """SELECT COUNT(*) FROM team_source.team_event_proofs s JOIN team_event_proofs t
+               ON t.chainId=s.chainId AND t.sequence=s.sequence
+               WHERE s.eventId NOT IN (SELECT id FROM activity_events WHERE accountId=?) AND t.eventId<>s.eventId""",
+            arrayOf(accountId.toString()),
+            "Rantai bukti Team bertabrakan",
+        )
+    }
+
+    private fun validateNoMutableFork(db: SQLiteDatabase, accountId: Long) {
+        val checks = listOf(
+            """SELECT COUNT(*) FROM categories l JOIN team_source.categories r ON r.syncId=l.syncId
+                WHERE l.accountId=$accountId AND (l.name<>r.name OR l.direction<>r.direction OR l.color<>r.color OR l.icon<>r.icon OR l.isArchived<>r.isArchived)""",
+            """SELECT COUNT(*) FROM portfolios l JOIN team_source.portfolios r ON r.syncId=l.syncId
+                WHERE l.accountId=$accountId AND (l.name<>r.name OR l.cadence<>r.cadence OR l.intervalCount<>r.intervalCount OR l.plannedIncome<>r.plannedIncome OR l.rolloverEnabled<>r.rolloverEnabled OR l.fundingPriority<>r.fundingPriority OR l.startEpochDay<>r.startEpochDay OR l.endMode<>r.endMode OR COALESCE(l.endValue,'')<>COALESCE(r.endValue,'') OR l.isPaused<>r.isPaused OR l.isArchived<>r.isArchived)""",
+            """SELECT COUNT(*) FROM budget_periods l JOIN portfolios lp ON lp.id=l.portfolioId
+                JOIN team_source.budget_periods r ON r.syncId=l.syncId JOIN team_source.portfolios rp ON rp.id=r.portfolioId
+                WHERE lp.accountId=$accountId AND (lp.syncId<>rp.syncId OR l.startEpochDay<>r.startEpochDay OR l.endEpochDay<>r.endEpochDay OR l.status<>r.status)""",
+            """SELECT COUNT(*) FROM allocations l JOIN budget_periods lpr ON lpr.id=l.periodId JOIN portfolios lp ON lp.id=lpr.portfolioId JOIN categories lc ON lc.id=l.categoryId
+                JOIN team_source.allocations r ON r.syncId=l.syncId JOIN team_source.budget_periods rpr ON rpr.id=r.periodId JOIN team_source.portfolios rp ON rp.id=rpr.portfolioId JOIN team_source.categories rc ON rc.id=r.categoryId
+                WHERE lp.accountId=$accountId AND (l.fundingChannel<>r.fundingChannel OR l.plannedAmount<>r.plannedAmount OR lp.syncId<>rp.syncId OR lc.syncId<>rc.syncId)""",
+            """SELECT COUNT(*) FROM recurring_rules l JOIN team_source.recurring_rules r ON r.syncId=l.syncId
+                WHERE l.accountId=$accountId AND (l.title<>r.title OR l.direction<>r.direction OR l.amount<>r.amount OR l.fundingChannel<>r.fundingChannel OR l.cadence<>r.cadence OR l.intervalCount<>r.intervalCount OR l.anchorMonth<>r.anchorMonth OR l.anchorDay<>r.anchorDay OR l.startEpochDay<>r.startEpochDay OR l.nextEpochDay<>r.nextEpochDay OR COALESCE(l.endEpochDay,-1)<>COALESCE(r.endEpochDay,-1) OR COALESCE(l.remainingOccurrences,-1)<>COALESCE(r.remainingOccurrences,-1) OR l.isPaused<>r.isPaused)""",
+        )
+        checks.forEach { sql -> requireZero(db, sql, null, "Perubahan metadata Team memerlukan pilihan") }
+    }
+
     private fun createMappings(db: SQLiteDatabase) {
         listOf("category", "portfolio", "period", "allocation").forEach { name ->
             db.execSQL("CREATE TEMP TABLE refresh_${name}_map(sourceId INTEGER PRIMARY KEY,targetId INTEGER NOT NULL UNIQUE)")
@@ -79,7 +203,7 @@ internal object TeamGraphRefresher {
         db.execSQL("CREATE TEMP TABLE refresh_ledger_map(sourceId TEXT PRIMARY KEY,targetId TEXT NOT NULL)")
     }
 
-    private fun upsertMutableGraph(db: SQLiteDatabase, sourceAccountId: Long, accountId: Long) {
+    private fun upsertMutableGraph(db: SQLiteDatabase, sourceAccountId: Long, accountId: Long, overwriteExisting: Boolean = true) {
         db.execSQL(
             """INSERT INTO categories(name,direction,color,icon,isArchived,accountId,syncId,revision,updatedAt,lastWriterId)
                SELECT s.name,s.direction,s.color,s.icon,s.isArchived,?,s.syncId,s.revision,s.updatedAt,s.lastWriterId
@@ -87,7 +211,7 @@ internal object TeamGraphRefresher {
             arrayOf(accountId),
         )
         map(db, "refresh_category_map", "categories")
-        db.execSQL(
+        if (overwriteExisting) db.execSQL(
             """UPDATE categories SET
                name=(SELECT s.name FROM team_source.categories s WHERE s.syncId=categories.syncId),
                direction=(SELECT s.direction FROM team_source.categories s WHERE s.syncId=categories.syncId),
@@ -108,7 +232,7 @@ internal object TeamGraphRefresher {
             arrayOf(accountId),
         )
         map(db, "refresh_portfolio_map", "portfolios")
-        updateColumns(db, "portfolios", listOf("name", "cadence", "intervalCount", "plannedIncome", "rolloverEnabled", "fundingPriority", "startEpochDay", "endMode", "endValue", "isPaused", "isArchived", "archivedAt", "revision", "updatedAt", "lastWriterId"), accountId)
+        if (overwriteExisting) updateColumns(db, "portfolios", listOf("name", "cadence", "intervalCount", "plannedIncome", "rolloverEnabled", "fundingPriority", "startEpochDay", "endMode", "endValue", "isPaused", "isArchived", "archivedAt", "revision", "updatedAt", "lastWriterId"), accountId)
 
         db.execSQL(
             """INSERT INTO budget_periods(portfolioId,startEpochDay,endEpochDay,status,createdAt,syncId,revision,updatedAt,lastWriterId)
@@ -117,7 +241,7 @@ internal object TeamGraphRefresher {
                WHERE NOT EXISTS(SELECT 1 FROM budget_periods t WHERE t.syncId=s.syncId)""",
         )
         map(db, "refresh_period_map", "budget_periods")
-        updateColumns(db, "budget_periods", listOf("startEpochDay", "endEpochDay", "status", "revision", "updatedAt", "lastWriterId"), null)
+        if (overwriteExisting) updateColumns(db, "budget_periods", listOf("startEpochDay", "endEpochDay", "status", "revision", "updatedAt", "lastWriterId"), null)
 
         db.execSQL(
             """INSERT INTO allocations(periodId,categoryId,fundingChannel,plannedAmount,syncId,revision,updatedAt,lastWriterId)
@@ -127,7 +251,7 @@ internal object TeamGraphRefresher {
                WHERE NOT EXISTS(SELECT 1 FROM allocations t WHERE t.syncId=s.syncId)""",
         )
         map(db, "refresh_allocation_map", "allocations")
-        updateColumns(db, "allocations", listOf("fundingChannel", "plannedAmount", "revision", "updatedAt", "lastWriterId"), null)
+        if (overwriteExisting) updateColumns(db, "allocations", listOf("fundingChannel", "plannedAmount", "revision", "updatedAt", "lastWriterId"), null)
 
         db.execSQL(
             """INSERT INTO portfolio_allocation_templates(portfolioId,categoryId,plannedAmount,cashPercentage,syncId,revision,updatedAt,lastWriterId)
@@ -136,7 +260,7 @@ internal object TeamGraphRefresher {
                JOIN refresh_category_map cm ON cm.sourceId=s.categoryId
                WHERE NOT EXISTS(SELECT 1 FROM portfolio_allocation_templates t WHERE t.syncId=s.syncId)""",
         )
-        updateColumns(db, "portfolio_allocation_templates", listOf("plannedAmount", "cashPercentage", "revision", "updatedAt", "lastWriterId"), null)
+        if (overwriteExisting) updateColumns(db, "portfolio_allocation_templates", listOf("plannedAmount", "cashPercentage", "revision", "updatedAt", "lastWriterId"), null)
 
         requireZero(
             db,
@@ -152,8 +276,8 @@ internal object TeamGraphRefresher {
                WHERE NOT EXISTS(SELECT 1 FROM recurring_rules t WHERE t.syncId=s.syncId)""",
             arrayOf(accountId),
         )
-        updateColumns(db, "recurring_rules", listOf("title", "direction", "amount", "fundingChannel", "cadence", "intervalCount", "anchorMonth", "anchorDay", "startEpochDay", "nextEpochDay", "endEpochDay", "remainingOccurrences", "isPaused", "pausedByArchive", "revision", "updatedAt", "lastWriterId"), accountId)
-        db.execSQL(
+        if (overwriteExisting) updateColumns(db, "recurring_rules", listOf("title", "direction", "amount", "fundingChannel", "cadence", "intervalCount", "anchorMonth", "anchorDay", "startEpochDay", "nextEpochDay", "endEpochDay", "remainingOccurrences", "isPaused", "pausedByArchive", "revision", "updatedAt", "lastWriterId"), accountId)
+        if (overwriteExisting) db.execSQL(
             """UPDATE recurring_rules SET
                categoryId=(SELECT cm.targetId FROM team_source.recurring_rules s LEFT JOIN refresh_category_map cm ON cm.sourceId=s.categoryId WHERE s.syncId=recurring_rules.syncId),
                allocationId=(SELECT am.targetId FROM team_source.recurring_rules s LEFT JOIN refresh_allocation_map am ON am.sourceId=s.allocationId WHERE s.syncId=recurring_rules.syncId)
@@ -161,7 +285,7 @@ internal object TeamGraphRefresher {
             arrayOf(accountId),
         )
 
-        db.execSQL(
+        if (overwriteExisting) db.execSQL(
             """UPDATE accounts SET name=(SELECT name FROM team_source.accounts WHERE id=?),
                revision=(SELECT revision FROM team_source.accounts WHERE id=?),
                updatedAt=(SELECT updatedAt FROM team_source.accounts WHERE id=?),
@@ -238,6 +362,10 @@ internal object TeamGraphRefresher {
 
     private fun requireZero(db: SQLiteDatabase, sql: String, args: Array<String>?, message: String) {
         require(scalar(db, sql, args) == 0L) { message }
+    }
+
+    private fun requireNoForeignKeyViolations(db: SQLiteDatabase, message: String) {
+        require(!db.rawQuery("PRAGMA foreign_key_check", null).use { it.moveToFirst() }) { message }
     }
 
     private fun scalar(db: SQLiteDatabase, sql: String, args: Array<String>? = null): Long =

@@ -14,6 +14,7 @@ import com.morneven.kron.data.ReceiptEntity
 import com.morneven.kron.data.TeamRole
 import com.morneven.kron.data.TeamWorkspaceStatus
 import com.morneven.kron.security.DatabaseEncryptionManager
+import com.morneven.kron.security.DatabaseRuntime
 import com.morneven.kron.security.EncryptedAttachmentStore
 import com.morneven.kron.security.SnapshotOperationLock
 import com.morneven.kron.security.SqlCipherLibrary
@@ -58,12 +59,14 @@ import org.json.JSONObject
 @Singleton
 class BackupManager @Inject constructor(
     @param:ApplicationContext private val context: Context,
-    private val database: KronDatabase,
+    private val databaseRuntime: DatabaseRuntime,
     private val attachmentStore: EncryptedAttachmentStore,
     private val databaseEncryption: DatabaseEncryptionManager,
     private val snapshotOperationLock: SnapshotOperationLock,
     private val teamKeyStore: TeamKeyStore,
 ) {
+    private val database get() = databaseRuntime.current()
+
     suspend fun export(uri: Uri, password: CharArray) = withContext(Dispatchers.IO) {
         require(password.size >= MIN_PASSWORD_LENGTH) { "Password backup minimal 12 karakter" }
         try {
@@ -206,17 +209,87 @@ class BackupManager @Inject constructor(
         }
     }
 
+    suspend fun stageMergeExistingTeamAccountForRestart(
+        payload: ByteArray,
+        teamId: String,
+        folderId: String,
+        liveFileId: String?,
+        role: String,
+        remoteSnapshotId: String,
+        remoteGeneration: Long,
+    ) = withContext(Dispatchers.IO) {
+        require(payload.isNotEmpty() && payload.size.toLong() <= MAX_SYNC_PAYLOAD_BYTES) {
+            "Snapshot Team tidak valid atau terlalu besar"
+        }
+        snapshotOperationLock.withLock {
+            withValidatedPortableCandidate(payload, "team-merge") { validationFile ->
+                val scope = TeamSnapshotPruner.validateImported(validationFile, teamId)
+                require(scope.generation == remoteGeneration) { "Generation snapshot Team tidak cocok" }
+                stageTeamDatabaseForRestart(validationFile) { target, source ->
+                    TeamGraphRefresher.mergeFork(
+                        target, source, teamId, folderId, liveFileId, role, remoteSnapshotId, remoteGeneration,
+                    )
+                }
+            }
+        }
+    }
+
+    suspend fun stageReplaceExistingTeamAccountForRestart(
+        payload: ByteArray,
+        teamId: String,
+        folderId: String,
+        liveFileId: String?,
+        role: String,
+        headSnapshotId: String,
+        generation: Long,
+    ) = withContext(Dispatchers.IO) {
+        require(payload.isNotEmpty() && payload.size.toLong() <= MAX_SYNC_PAYLOAD_BYTES) {
+            "Snapshot Team tidak valid atau terlalu besar"
+        }
+        snapshotOperationLock.withLock {
+            withValidatedPortableCandidate(payload, "team-replace") { validationFile ->
+                val scope = TeamSnapshotPruner.validateImported(validationFile, teamId)
+                require(scope.generation == generation) { "Generation snapshot Team tidak cocok" }
+                stageTeamDatabaseForRestart(validationFile) { target, source ->
+                    TeamGraphImporter.replaceExisting(
+                        target,
+                        source,
+                        TeamImportMetadata(
+                            teamId = teamId,
+                            folderId = folderId,
+                            liveFileId = liveFileId,
+                            localRole = role,
+                            headSnapshotId = headSnapshotId,
+                            generation = generation,
+                            inviteIdHash = null,
+                            importedAt = System.currentTimeMillis(),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    suspend fun stageRemoveExistingTeamAccountForRestart(teamId: String) = withContext(Dispatchers.IO) {
+        require(teamId.isNotBlank()) { "Team yang akan ditinggalkan tidak valid" }
+        snapshotOperationLock.withLock {
+            stageTeamDatabaseForRestart { target -> TeamGraphImporter.removeExisting(target, teamId) }
+        }
+    }
+
     private fun stageTeamDatabaseForRestart(
         source: File,
         transform: (target: File, source: File) -> Unit,
-    ) {
+    ) = stageTeamDatabaseForRestart { target -> transform(target, source) }
+
+    private fun stageTeamDatabaseForRestart(transform: (target: File) -> Unit) {
         database.openHelper.writableDatabase.query("PRAGMA wal_checkpoint(FULL)").use { it.moveToFirst() }
         val live = context.getDatabasePath(KronDatabase.DATABASE_NAME)
         val plaintext = File(context.cacheDir, "team-transform-${UUID.randomUUID()}.db")
         val encrypted = File(context.cacheDir, "team-transform-${UUID.randomUUID()}.encrypted")
         try {
             databaseEncryption.exportPlaintext(live, plaintext)
-            transform(plaintext, source)
+            transform(plaintext)
             validateDatabase(plaintext)
             databaseEncryption.encryptPortableDatabaseUsingCurrentMode(plaintext, live, encrypted)
             TeamAtomicSwap.stageReplaceForRestart(context, encrypted)
@@ -261,7 +334,7 @@ class BackupManager @Inject constructor(
             "Snapshot Team tidak valid atau terlalu besar"
         }
         snapshotOperationLock.withLock {
-            withValidatedPortableCandidate(payload, "team-conflict-preview") { validationFile ->
+            withValidatedPortableCandidate(payload, "team-conflict-preview", migrate = false) { validationFile ->
                 val local = readConflictDataset(localSnapshotId, accountId) { sql ->
                     database.openHelper.readableDatabase.query(sql)
                 }
@@ -276,6 +349,7 @@ class BackupManager @Inject constructor(
     private inline fun <T> withValidatedPortableCandidate(
         payload: ByteArray,
         directoryPrefix: String,
+        migrate: Boolean = true,
         block: (File) -> T,
     ): T {
         val workspace = File(context.cacheDir, "$directoryPrefix-${UUID.randomUUID()}")
@@ -290,8 +364,7 @@ class BackupManager @Inject constructor(
             verifyExtractedPackage(extracted, format)
             deleteDatabaseFiles(validationFile)
             extracted.database.copyTo(validationFile, overwrite = true)
-            migrateAndValidateCandidate(validationFile)
-            validateDatabase(validationFile)
+            if (migrate) migrateAndValidateCandidate(validationFile) else validateDatabase(validationFile)
             block(validationFile)
         } finally {
             deleteDatabaseFiles(validationFile)
@@ -1722,31 +1795,31 @@ class BackupManager @Inject constructor(
         private val TEAM_RECOVERY_KEY_ENTRY = Regex("team-recovery/[0-9a-f]{64}\\.key")
         private val SHA256 = Regex("[0-9a-f]{64}")
 
-        fun applyPendingRestore(context: Context) {
+        fun applyPendingRestore(context: Context): Boolean {
             SqlCipherLibrary.ensureLoaded()
             val pending = File(context.filesDir, PENDING_DIRECTORY)
-            if (!pending.exists()) return
+            if (!pending.exists()) return false
             val paths = restoreSwapPaths(context, pending)
 
             if (paths.committedMarker.exists()) {
                 finalizeCommittedRestore(paths)
-                return
+                return true
             }
 
             if (paths.transactionFile.exists() || paths.hasIncompleteMarker()) {
                 val metadata = readSwapMetadata(paths.transactionFile)
                 rollbackIncompleteRestore(paths, metadata)
-                return
+                return false
             }
 
             val ready = runCatching { validatePendingRestore(paths) }.getOrElse {
                 deleteChildRecursively(pending, context.filesDir)
-                return
+                return false
             }
             val metadata = captureSwapMetadata(paths)
             listOf(paths.oldDatabase, paths.oldWal, paths.oldShm, paths.oldReceipts).forEach { it.delete() }
 
-            runCatching {
+            return runCatching {
                 deletePath(paths.newDatabase)
                 deletePath(paths.newReceipts)
                 writeTransactionMetadata(paths.transactionFile, metadata.toJson().toString())
@@ -1780,14 +1853,17 @@ class BackupManager @Inject constructor(
                     "Checksum lampiran terpasang tidak cocok"
                 }
                 writeMarker(paths.committedMarker)
+                true
             }.onFailure { restoreError ->
                 runCatching { rollbackIncompleteRestore(paths, metadata) }
                     .onFailure { rollbackError ->
                         restoreError.addSuppressed(rollbackError)
                         throw IllegalStateException("Restore gagal dan data lama tidak dapat dipulihkan", restoreError)
                     }
-            }
+            }.getOrDefault(false)
         }
+
+        fun hasPendingRestore(context: Context): Boolean = File(context.filesDir, PENDING_DIRECTORY).exists()
 
         private val RESTORED_ATTACHMENT = Regex("[A-Za-z0-9_-]{8,128}\\.kat")
 

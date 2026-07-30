@@ -1,6 +1,7 @@
 package com.morneven.kron.team
 
 import com.morneven.kron.sync.DriveErrorClassifier
+import com.morneven.kron.sync.DriveApiException
 import com.morneven.kron.sync.DriveHttpConnectionFactory
 import com.morneven.kron.sync.DriveJson
 import com.morneven.kron.sync.DriveSnapshotManifest
@@ -347,6 +348,22 @@ class TeamDriveRestClient(
         listFiles(accessToken, folderId, teamId).mapNotNull { file ->
             if (!file.isSnapshot(teamId)) null else file.toRemoteSnapshot(file.snapshotManifest(teamId))
         }
+
+    /** Removes every KRON artifact before removing the Team workspace itself. */
+    suspend fun deleteWorkspace(accessToken: String, folderId: String, teamId: String) {
+        try {
+            listFiles(accessToken, folderId, teamId).forEach { file ->
+                try {
+                    delete(accessToken, file.fileId)
+                } catch (error: DriveApiException) {
+                    if (error.statusCode != 404) throw error
+                }
+            }
+            delete(accessToken, folderId)
+        } catch (error: DriveApiException) {
+            if (error.statusCode != 404) throw error
+        }
+    }
 
     suspend fun download(accessToken: String, fileId: String): ByteArray = withContext(Dispatchers.IO) {
         requireIdentifier(fileId, "File ID")

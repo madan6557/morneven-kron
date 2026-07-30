@@ -3,16 +3,18 @@ package com.morneven.kron.sync
 import androidx.room.withTransaction
 import com.morneven.kron.data.KronDatabase
 import com.morneven.kron.data.SyncStateEntity
+import com.morneven.kron.security.DatabaseRuntime
 import java.util.UUID
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 class RoomSyncStateStore(
-    private val database: KronDatabase,
+    private val databaseRuntime: DatabaseRuntime,
     private val initialDatasetId: String = UUID.randomUUID().toString(),
     private val initialDeviceId: String = UUID.randomUUID().toString(),
 ) : SyncStateStore {
     private val mutex = Mutex()
+    private val database get() = databaseRuntime.current()
 
     override suspend fun read(): SyncState = mutex.withLock {
         database.withTransaction { readOrCreate().toModel() }

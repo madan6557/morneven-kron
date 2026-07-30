@@ -33,6 +33,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.morneven.kron.backup.PreUpgradeBackupManager
 import com.morneven.kron.data.KronDatabase
@@ -44,10 +45,15 @@ import com.morneven.kron.security.DatabaseKeyManager
 import com.morneven.kron.security.DatabaseKeyProfileMismatchException
 import com.morneven.kron.security.DatabaseKeyUnavailableException
 import com.morneven.kron.security.DatabaseRecoveryRequiredException
+import com.morneven.kron.security.DatabaseRuntime
 import com.morneven.kron.sync.DriveSyncRuntime
 import com.morneven.kron.sync.DriveSyncRuntimeFactory
+import com.morneven.kron.sync.DriveSyncScheduler
+import com.morneven.kron.automation.AutomationWorker
 import com.morneven.kron.team.TeamDriveScopeProbe
 import com.morneven.kron.team.TeamDriveScopeProbeFactory
+import com.morneven.kron.team.TeamSyncRuntime
+import com.morneven.kron.team.TeamSyncScheduler
 import com.morneven.kron.ui.KronApp
 import com.morneven.kron.ui.MainViewModel
 import com.morneven.kron.ui.theme.KronTheme
@@ -55,6 +61,7 @@ import dagger.Lazy
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -63,6 +70,8 @@ class MainActivity : FragmentActivity() {
     private val viewModel: MainViewModel by viewModels()
     @Inject lateinit var driveSyncRuntimeFactory: Lazy<DriveSyncRuntimeFactory>
     @Inject lateinit var teamDriveScopeProbeFactory: Lazy<TeamDriveScopeProbeFactory>
+    @Inject lateinit var teamSyncRuntime: Lazy<TeamSyncRuntime>
+    @Inject lateinit var databaseRuntime: DatabaseRuntime
 
     private var driveSyncRuntime: DriveSyncRuntime? = null
     private var teamDriveScopeProbe: TeamDriveScopeProbe? = null
@@ -72,6 +81,7 @@ class MainActivity : FragmentActivity() {
     private var backupUiState by mutableStateOf<BackupUiState>(BackupUiState.Form)
     private var databaseOpening = false
     private var freshInstall = false
+    private var pendingSyncActivation = false
 
     private val createPreUpgradeBackup = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream"),
@@ -103,6 +113,11 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        lifecycleScope.launch {
+            databaseRuntime.pendingSyncActivation.collect { pending ->
+                if (pending) applyPendingSyncActivationIfSafe()
+            }
+        }
         enableEdgeToEdge()
         bootstrapManager = DatabaseBootstrapManager(this)
         preUpgradeBackupManager = PreUpgradeBackupManager(this)
@@ -128,6 +143,29 @@ class MainActivity : FragmentActivity() {
     override fun onResume() {
         super.onResume()
         if (DatabaseAccessGate.isReady()) viewModel.refreshForCurrentDate()
+        applyPendingSyncActivationIfSafe()
+    }
+
+    private fun applyPendingSyncActivationIfSafe() {
+        if (
+            !DatabaseAccessGate.isReady() ||
+            pendingSyncActivation ||
+            !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) ||
+            !databaseRuntime.hasPendingSyncActivation()
+        ) return
+        pendingSyncActivation = true
+        lifecycleScope.launch {
+            val result = applyStagedSnapshot()
+            if (result.isSuccess) {
+                recreate()
+            } else {
+                viewModel.showMessage(
+                    result.exceptionOrNull()?.message
+                        ?: "Pembaruan tersinkron tidak dapat diterapkan.",
+                )
+            }
+            pendingSyncActivation = false
+        }
     }
 
     private fun requestPreUpgradeBackup(password: String, confirmation: String) {
@@ -183,10 +221,24 @@ class MainActivity : FragmentActivity() {
                         activity = this@MainActivity,
                         driveSyncRuntime = driveSyncRuntime,
                         teamDriveScopeProbe = teamDriveScopeProbe,
+                        onApplyStagedSnapshot = ::applyStagedSnapshot,
                     )
                 }
             }
         }
+    }
+
+    private suspend fun applyStagedSnapshot(): Result<Unit> {
+        DriveSyncScheduler.cancel(this)
+        TeamSyncScheduler.cancelScheduledWork(this)
+        androidx.work.WorkManager.getInstance(this).cancelUniqueWork(AutomationWorker.UNIQUE_WORK_NAME)
+        val result = databaseRuntime.activatePendingSnapshot()
+        if (result.isSuccess) {
+            driveSyncRuntimeFactory.get().refreshAfterDatabaseActivation()
+            teamSyncRuntime.get().refreshAfterDatabaseActivation()
+            (application as KronApplication).startDataServices()
+        }
+        return result
     }
 
     private fun showRecoveryScreen(

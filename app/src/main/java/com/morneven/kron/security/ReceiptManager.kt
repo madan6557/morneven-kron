@@ -21,12 +21,14 @@ import org.json.JSONObject
 
 @Singleton
 class ReceiptManager @Inject constructor(
-    private val database: KronDatabase,
+    private val databaseRuntime: DatabaseRuntime,
     private val attachmentStore: EncryptedAttachmentStore,
     private val snapshotOperationLock: SnapshotOperationLock,
     private val ledgerPostingEngine: LedgerPostingEngine,
-    private val teamAccessGuard: TeamAccessGuard = TeamAccessGuard(database),
+    private val teamAccessGuard: TeamAccessGuard,
 ) {
+    private val database get() = databaseRuntime.current()
+
     suspend fun importReceipt(
         eventId: String,
         displayName: String,

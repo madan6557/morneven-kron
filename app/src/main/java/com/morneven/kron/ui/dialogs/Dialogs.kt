@@ -922,6 +922,8 @@ fun AuditDialog(
             .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss", java.util.Locale.forLanguageTag("id-ID")))
         Text("Tanggal efektif: ${LocalDate.ofEpochDay(event.effectiveEpochDay)}, $createdAtTime")
         Text("Sumber: ${event.source}")
+        Text("Pelaku: ${event.actor}")
+        Text("Perangkat: ${event.deviceId.take(16)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
         if (isAttachEvidence && parentEvent != null) {
             HorizontalDivider()

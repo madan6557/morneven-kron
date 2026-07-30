@@ -84,17 +84,31 @@ private fun RecurringRuleEntity.bumpRevision() = copy(revision = revision + 1, u
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @Singleton
-class KronRepository @Inject constructor(
-    private val database: KronDatabase,
+class KronRepository private constructor(
+    private val databaseProvider: () -> KronDatabase,
+    private val databaseEpoch: Flow<Long>,
     private val ledgerPostingEngine: LedgerPostingEngine,
-    private val teamAccessGuard: TeamAccessGuard = TeamAccessGuard(database),
+    private val teamAccessGuard: TeamAccessGuard,
 ) {
-    private val dao = database.kronDao()
+    @Inject
+    constructor(
+        databaseRuntime: com.morneven.kron.security.DatabaseRuntime,
+        ledgerPostingEngine: LedgerPostingEngine,
+        teamAccessGuard: TeamAccessGuard,
+    ) : this(databaseRuntime::current, databaseRuntime.epoch, ledgerPostingEngine, teamAccessGuard)
 
-    val accounts = dao.observeAccounts()
-    val archivedAccounts = dao.observeArchivedAccounts()
-    val recoveredTeamAccounts = dao.observeRecoveredTeamAccounts()
-    val accountBalances = dao.observeAccountBalances()
+    internal constructor(database: KronDatabase, ledgerPostingEngine: LedgerPostingEngine) :
+        this({ database }, flowOf(0L), ledgerPostingEngine, TeamAccessGuard(database))
+
+    private val database get() = databaseProvider()
+    private val dao get() = database.kronDao()
+    private fun <T> observe(block: (KronDao) -> Flow<T>): Flow<T> =
+        databaseEpoch.flatMapLatest { block(database.kronDao()) }
+
+    val accounts = observe(KronDao::observeAccounts)
+    val archivedAccounts = observe(KronDao::observeArchivedAccounts)
+    val recoveredTeamAccounts = observe(KronDao::observeRecoveredTeamAccounts)
+    val accountBalances = observe(KronDao::observeAccountBalances)
     val syncState = SyncStateBridge.syncState
 
     init {
@@ -107,47 +121,47 @@ class KronRepository @Inject constructor(
         }
     }
 
-    private val activeAccountFlow: Flow<Long?> = dao.observeActiveAccount()
+    private val activeAccountFlow: Flow<Long?> = observe(KronDao::observeActiveAccount)
         .map { it?.id }
         .distinctUntilChanged()
 
     val categories = activeAccountFlow.flatMapLatest { accountId ->
-        accountId?.let(dao::observeCategoriesForAccount) ?: flowOf(emptyList())
+        accountId?.let { database.kronDao().observeCategoriesForAccount(it) } ?: flowOf(emptyList())
     }
-    val rules = activeAccountFlow.flatMapLatest { it?.let(dao::observeRulesForAccount) ?: flowOf(emptyList()) }
-    val portfolios = activeAccountFlow.flatMapLatest { it?.let(dao::observePortfoliosForAccount) ?: flowOf(emptyList()) }
-    val archivedPortfolios = activeAccountFlow.flatMapLatest { it?.let(dao::observeArchivedPortfoliosForAccount) ?: flowOf(emptyList()) }
-    val periods = activeAccountFlow.flatMapLatest { it?.let(dao::observePeriodsForAccount) ?: flowOf(emptyList()) }
-    val allocations = activeAccountFlow.flatMapLatest { it?.let(dao::observeAllocationBalancesForAccount) ?: flowOf(emptyList()) }
-    val activities = activeAccountFlow.flatMapLatest { it?.let(dao::observeActivitiesForAccount) ?: flowOf(emptyList()) }
-    val eventChannels = activeAccountFlow.flatMapLatest { it?.let(dao::observeEventChannelsForAccount) ?: flowOf(emptyList()) }
-    val receipts = activeAccountFlow.flatMapLatest { it?.let(dao::observeReceiptsForAccount) ?: flowOf(emptyList()) }
-    val splits = activeAccountFlow.flatMapLatest { it?.let(dao::observeSplitsForAccount) ?: flowOf(emptyList()) }
-    val teamWorkspace = activeAccountFlow.flatMapLatest { it?.let(dao::observeTeamWorkspace) ?: flowOf(null) }
-    val teamMembers = activeAccountFlow.flatMapLatest { it?.let(dao::observeTeamMembers) ?: flowOf(emptyList()) }
+    val rules = activeAccountFlow.flatMapLatest { it?.let { id -> database.kronDao().observeRulesForAccount(id) } ?: flowOf(emptyList()) }
+    val portfolios = activeAccountFlow.flatMapLatest { it?.let { id -> database.kronDao().observePortfoliosForAccount(id) } ?: flowOf(emptyList()) }
+    val archivedPortfolios = activeAccountFlow.flatMapLatest { it?.let { id -> database.kronDao().observeArchivedPortfoliosForAccount(id) } ?: flowOf(emptyList()) }
+    val periods = activeAccountFlow.flatMapLatest { it?.let { id -> database.kronDao().observePeriodsForAccount(id) } ?: flowOf(emptyList()) }
+    val allocations = activeAccountFlow.flatMapLatest { it?.let { id -> database.kronDao().observeAllocationBalancesForAccount(id) } ?: flowOf(emptyList()) }
+    val activities = activeAccountFlow.flatMapLatest { it?.let { id -> database.kronDao().observeActivitiesForAccount(id) } ?: flowOf(emptyList()) }
+    val eventChannels = activeAccountFlow.flatMapLatest { it?.let { id -> database.kronDao().observeEventChannelsForAccount(id) } ?: flowOf(emptyList()) }
+    val receipts = activeAccountFlow.flatMapLatest { it?.let { id -> database.kronDao().observeReceiptsForAccount(id) } ?: flowOf(emptyList()) }
+    val splits = activeAccountFlow.flatMapLatest { it?.let { id -> database.kronDao().observeSplitsForAccount(id) } ?: flowOf(emptyList()) }
+    val teamWorkspace = activeAccountFlow.flatMapLatest { it?.let { id -> database.kronDao().observeTeamWorkspace(id) } ?: flowOf(null) }
+    val teamMembers = activeAccountFlow.flatMapLatest { it?.let { id -> database.kronDao().observeTeamMembers(id) } ?: flowOf(emptyList()) }
 
     val vault = activeAccountFlow.flatMapLatest { accountId ->
-        accountId?.let(dao::observeVaultBalance) ?: flowOf(0L)
+        accountId?.let { database.kronDao().observeVaultBalance(it) } ?: flowOf(0L)
     }
 
     val vaultByChannel = activeAccountFlow.flatMapLatest { accountId ->
-        accountId?.let(dao::observeVaultByChannel) ?: flowOf(emptyList())
+        accountId?.let { database.kronDao().observeVaultByChannel(it) } ?: flowOf(emptyList())
     }
 
     val unallocated = activeAccountFlow.flatMapLatest { accountId ->
-        accountId?.let(dao::observeUnallocatedBalance) ?: flowOf(0L)
+        accountId?.let { database.kronDao().observeUnallocatedBalance(it) } ?: flowOf(0L)
     }
 
     val unallocatedByChannel = activeAccountFlow.flatMapLatest { accountId ->
-        accountId?.let(dao::observeUnallocatedByChannel) ?: flowOf(emptyList())
+        accountId?.let { database.kronDao().observeUnallocatedByChannel(it) } ?: flowOf(emptyList())
     }
 
     val rolloverByChannel = activeAccountFlow.flatMapLatest { accountId ->
-        accountId?.let(dao::observeRolloverByChannel) ?: flowOf(emptyList())
+        accountId?.let { database.kronDao().observeRolloverByChannel(it) } ?: flowOf(emptyList())
     }
 
     fun cashflow(start: LocalDate, end: LocalDate) = activeAccountFlow.flatMapLatest { accountId ->
-        accountId?.let { dao.observeCashflow(start.toEpochDay(), end.toEpochDay(), it) }
+        accountId?.let { database.kronDao().observeCashflow(start.toEpochDay(), end.toEpochDay(), it) }
             ?: flowOf(CashflowRow(0, 0))
     }
 
@@ -254,11 +268,10 @@ class KronRepository @Inject constructor(
         teamAccessGuard.require(accountId, TeamCapability.WRITE)
         val account = requireNotNull(dao.accountById(accountId)) { "Akun tidak ditemukan" }
         require(!account.isArchived) { "Akun sudah diarsipkan" }
+        require(account.sharingMode == AccountSharingMode.PRIVATE) {
+            "Kembalikan Team menjadi Private sebelum menghapus akun"
+        }
         require(!account.isActive) { "Aktifkan akun lain sebelum mengarsipkan akun ini" }
-        require(
-            dao.accountBalance(accountId, FundingChannel.CASH) == 0L &&
-                dao.accountBalance(accountId, FundingChannel.EBUDGET) == 0L,
-        ) { "Saldo Cash dan eBudget harus Rp 0 sebelum diarsipkan" }
         val eventId = UUID.randomUUID().toString()
         val archivedAt = System.currentTimeMillis()
         dao.updateAccount(account.copy(isArchived = true, archivedAt = archivedAt).bumpRevision())
@@ -279,44 +292,7 @@ class KronRepository @Inject constructor(
         assertInvariant()
     }
 
-    suspend fun leaveTeam(accountId: Long) = database.withTransaction {
-        teamAccessGuard.require(accountId, TeamCapability.READ)
-        val account = requireNotNull(dao.accountById(accountId)) { "Akun tidak ditemukan" }
-        require(account.sharingMode == AccountSharingMode.TEAM) { "Akun bukan Team" }
-        val workspace = dao.teamWorkspace(accountId) ?: error("Workspace Team tidak ditemukan")
-        val eventId = UUID.randomUUID().toString()
-        dao.updateAccount(account.copy(sharingMode = AccountSharingMode.PRIVATE, teamId = null).bumpRevision())
-        dao.deleteTeamWorkspace(workspace.teamId)
-        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.RESTORE, "Tinggalkan Team", "Akun dikembalikan ke mode privat", "USER", LocalDate.now().toEpochDay(), accountId = accountId))
-        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = "Tinggalkan Team", beforeJson = "{\"sharingMode\":\"TEAM\",\"teamId\":\"${workspace.teamId}\"}", afterJson = "{\"sharingMode\":\"PRIVATE\",\"teamId\":null}"))
-        assertInvariant()
-    }
-
-    suspend fun joinTeam(accountId: Long, inviteId: String, teamId: String, role: String) = database.withTransaction {
-        val account = requireNotNull(dao.accountById(accountId)) { "Akun tidak ditemukan" }
-        require(account.sharingMode == AccountSharingMode.PRIVATE) { "Akun bukan Private" }
-        val eventId = UUID.randomUUID().toString()
-        val now = System.currentTimeMillis()
-        dao.updateAccount(account.copy(sharingMode = AccountSharingMode.TEAM, teamId = teamId).bumpRevision())
-        dao.upsertTeamWorkspace(TeamWorkspaceEntity(
-            accountId = accountId,
-            teamId = teamId,
-            folderId = "",
-            localRole = role,
-            ownerSubjectHash = "",
-            status = TeamWorkspaceStatus.LOCAL_ONLY,
-            updatedAt = now,
-        ))
-        val inviteIdHash = java.security.MessageDigest.getInstance("SHA-256").digest(inviteId.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
-        dao.insertTeamInvitationUse(TeamInvitationUseEntity(
-            inviteIdHash = inviteIdHash,
-            teamId = teamId,
-            usedAt = now,
-        ))
-        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.RESTORE, "Gabung Team", "Akun bergabung ke Team", "USER", LocalDate.now().toEpochDay(), accountId = accountId))
-        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = "Gabung Team", beforeJson = "{\"sharingMode\":\"PRIVATE\",\"teamId\":null}", afterJson = "{\"sharingMode\":\"TEAM\",\"teamId\":\"$teamId\"}"))
-        assertInvariant()
-    }
+    suspend fun teamWorkspaceFor(accountId: Long): TeamWorkspaceEntity? = dao.teamWorkspace(accountId)
 
     suspend fun addIncome(
         accountId: Long,

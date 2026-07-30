@@ -68,6 +68,8 @@ data class ConflictPreview(
     val identicalCount: Int get() = items.count { it.status == ConflictItemStatus.IDENTICAL }
     val differentCount: Int get() = items.count { it.status == ConflictItemStatus.DIFFERENT }
     val integrityProblemCount: Int get() = items.count { it.status == ConflictItemStatus.INTEGRITY_PROBLEM }
+    val unresolvedItems: List<ConflictItem> get() = items.filter { it.status != ConflictItemStatus.IDENTICAL }
+    val isAlreadyResolved: Boolean get() = unresolvedItems.isEmpty()
     val requiresChoices: Boolean get() = items.any {
         it.status == ConflictItemStatus.DIFFERENT && it.automaticChoice == null
     }

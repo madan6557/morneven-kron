@@ -17,9 +17,16 @@ enum class TeamCapability {
 class TeamAccessDeniedException(message: String) : IllegalStateException(message)
 
 @Singleton
-class TeamAccessGuard @Inject constructor(
-    private val database: KronDatabase,
+class TeamAccessGuard private constructor(
+    private val databaseProvider: () -> KronDatabase,
 ) {
+    @Inject
+    constructor(databaseRuntime: com.morneven.kron.security.DatabaseRuntime) : this(databaseRuntime::current)
+
+    internal constructor(database: KronDatabase) : this({ database })
+
+    private val database get() = databaseProvider()
+
     suspend fun requireActive(capability: TeamCapability) {
         val accountId = database.kronDao().activeAccount()?.id
             ?: throw TeamAccessDeniedException("Tidak ada akun aktif")

@@ -34,6 +34,18 @@ class ConflictCenterTest {
         assertTrue(runCatching { ConflictPreviewBuilder.mergePlan(preview, emptyMap()) }.isFailure)
     }
 
+    @Test
+    fun identicalSnapshotsAreAlreadyResolved() {
+        val shared = event("shared", "same")
+        val preview = ConflictPreviewBuilder.build(
+            device = ConflictDataset("local-head", listOf(shared), emptyList()),
+            drive = ConflictDataset("drive-head", listOf(shared), emptyList()),
+        )
+
+        assertTrue(preview.isAlreadyResolved)
+        assertTrue(preview.unresolvedItems.isEmpty())
+    }
+
     private fun event(id: String, hash: String) = ConflictEventRecord(
         eventId = id,
         type = "EXPENSE",

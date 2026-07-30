@@ -35,6 +35,7 @@ class TeamGraphImporterTest {
             assertNotEquals(1L, accountId)
             assertEquals(2, scalar(db, "SELECT COUNT(*) FROM accounts"))
             assertEquals(PRIVATE_MARKER, text(db, "SELECT name FROM accounts WHERE id=1"))
+            assertEquals("TEAM", text(db, "SELECT sharingMode FROM accounts WHERE id=$accountId"))
             assertEquals(1, scalar(db, "SELECT isActive FROM accounts WHERE id=$accountId"))
             assertEquals(0, scalar(db, "SELECT isActive FROM accounts WHERE id=1"))
             assertEquals(1, scalar(db, "SELECT COUNT(*) FROM categories WHERE accountId=$accountId AND syncId='team-category'"))
@@ -73,14 +74,89 @@ class TeamGraphImporterTest {
             db.execSQL("UPDATE team_workspaces SET generation=8")
         }
 
-        TeamGraphRefresher.refresh(target, source, "team-1", "folder-1", TeamRole.EDITOR, "snapshot-8", 8)
+        TeamGraphRefresher.refresh(target, source, "team-1", "folder-1", null, TeamRole.EDITOR, "snapshot-8", 8)
 
         SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
             assertEquals("Remote category", text(db, "SELECT name FROM categories WHERE accountId=$accountId AND syncId='team-category'"))
             assertEquals(PRIVATE_MARKER, text(db, "SELECT name FROM accounts WHERE id=1"))
+            assertEquals("TEAM", text(db, "SELECT sharingMode FROM accounts WHERE id=$accountId"))
             assertEquals(8, scalar(db, "SELECT generation FROM team_workspaces WHERE accountId=$accountId"))
             assertEquals("snapshot-8", text(db, "SELECT headSnapshotId FROM team_workspaces WHERE accountId=$accountId"))
             assertFalse(db.rawQuery("PRAGMA foreign_key_check", null).use { it.moveToFirst() })
+        }
+    }
+
+    @Test
+    fun refreshReportsConflictWhenRemoteOmitsLocalTeamEvent() {
+        val target = createTarget("team-refresh-history-target.db")
+        val source = createSource("team-refresh-history-source.db")
+        val accountId = TeamGraphImporter.merge(target, source, metadata())
+        SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            db.execSQL(
+                "INSERT INTO activity_events(id,type,title,note,source,effectiveEpochDay,createdAt,relatedEventId,reversedByEventId,targetAllocationId,accountId) " +
+                    "VALUES('member-local-event','SYSTEM','Member event','','USER',2,2,NULL,NULL,NULL,?)",
+                arrayOf(accountId),
+            )
+        }
+
+        assertTrue(runCatching {
+            TeamGraphRefresher.refresh(target, source, "team-1", "folder-1", null, TeamRole.EDITOR, "snapshot-8", 7)
+        }.exceptionOrNull() is TeamSnapshotHistoryException)
+
+        SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+            assertEquals(1, scalar(db, "SELECT COUNT(*) FROM activity_events WHERE id='member-local-event'"))
+            assertFalse(db.rawQuery("PRAGMA foreign_key_check", null).use { it.moveToFirst() })
+        }
+    }
+
+    @Test
+    fun mergesIndependentTeamEventsAndQueuesMergedHeadForUpload() {
+        val target = createTarget("team-merge-target.db")
+        val source = createSource("team-merge-source.db")
+        val accountId = TeamGraphImporter.merge(target, source, metadata())
+        SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            db.execSQL(
+                "INSERT INTO activity_events(id,type,title,note,source,effectiveEpochDay,createdAt,relatedEventId,reversedByEventId,targetAllocationId,accountId) " +
+                    "VALUES('member-local-event','SYSTEM','Member event','','USER',2,2,NULL,NULL,NULL,?)",
+                arrayOf(accountId),
+            )
+        }
+        SQLiteDatabase.openDatabase(source.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            db.execSQL(
+                "INSERT INTO activity_events(id,type,title,note,source,effectiveEpochDay,createdAt,relatedEventId,reversedByEventId,targetAllocationId,accountId) " +
+                    "VALUES('owner-remote-event','SYSTEM','Owner event','','USER',3,3,NULL,NULL,NULL,1)",
+            )
+            db.execSQL("UPDATE team_workspaces SET generation=8")
+        }
+
+        TeamGraphRefresher.mergeFork(target, source, "team-1", "folder-1", null, TeamRole.EDITOR, "snapshot-8", 8)
+
+        SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+            assertEquals(1, scalar(db, "SELECT COUNT(*) FROM activity_events WHERE id='member-local-event'"))
+            assertEquals(1, scalar(db, "SELECT COUNT(*) FROM activity_events WHERE id='owner-remote-event'"))
+            assertEquals("snapshot-8", text(db, "SELECT headSnapshotId FROM team_workspaces WHERE accountId=$accountId"))
+            assertEquals(9, scalar(db, "SELECT generation FROM team_workspaces WHERE accountId=$accountId"))
+            assertEquals("MERGE_PENDING", text(db, "SELECT status FROM team_workspaces WHERE accountId=$accountId"))
+            assertFalse(db.rawQuery("PRAGMA foreign_key_check", null).use { it.moveToFirst() })
+        }
+    }
+
+    @Test
+    fun refusesRefreshWhenLocalTeamIdentityWasChanged() {
+        val target = createTarget("team-refresh-identity-target.db")
+        val source = createSource("team-refresh-identity-source.db")
+        val accountId = TeamGraphImporter.merge(target, source, metadata())
+        SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            db.execSQL("UPDATE accounts SET sharingMode='PRIVATE',teamId=NULL WHERE id=?", arrayOf(accountId))
+        }
+
+        assertTrue(runCatching {
+            TeamGraphRefresher.refresh(target, source, "team-1", "folder-1", null, TeamRole.EDITOR, "snapshot-8", 7)
+        }.isFailure)
+
+        SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+            assertEquals("PRIVATE", text(db, "SELECT sharingMode FROM accounts WHERE id=$accountId"))
+            assertEquals(1, scalar(db, "SELECT COUNT(*) FROM activity_events WHERE accountId=$accountId AND id='team-event'"))
         }
     }
 
@@ -135,6 +211,82 @@ class TeamGraphImporterTest {
         SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
             assertEquals(1, scalar(db, "SELECT COUNT(*) FROM accounts"))
             assertEquals(PRIVATE_MARKER, text(db, "SELECT name FROM accounts WHERE id=1"))
+        }
+    }
+
+    @Test
+    fun replacesTeamFromRemoteEvenWhenRemoteDoesNotContainLocalEvent() {
+        val target = createTarget("team-replace-target.db")
+        val source = createSource("team-replace-source.db")
+        val localTeamAccount = TeamGraphImporter.merge(target, source, metadata())
+        SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            db.execSQL(
+                "CREATE TRIGGER append_only_audit_snapshots_delete BEFORE DELETE ON audit_snapshots " +
+                    "BEGIN SELECT RAISE(ABORT, 'Catatan audit KRON bersifat append-only'); END",
+            )
+            db.execSQL(
+                "INSERT INTO activity_events(id,type,title,note,source,effectiveEpochDay,createdAt,relatedEventId,reversedByEventId,targetAllocationId,accountId) " +
+                    "VALUES('local-only-team-event','SYSTEM','Local branch','','USER',2,2,NULL,NULL,NULL,?)",
+                arrayOf(localTeamAccount),
+            )
+            val categoryId = scalar(db, "SELECT id FROM categories WHERE accountId=$localTeamAccount")
+            db.execSQL(
+                "INSERT INTO ledger_accounts(id,code,name,kind,accountId,fundingChannel,categoryId,createdAt) VALUES(?,?,?, 'EXPENSE',NULL,NULL,?,3)",
+                arrayOf<Any?>("expense:category:$categoryId", "5$categoryId", "Local Team category", categoryId),
+            )
+        }
+
+        TeamGraphImporter.replaceExisting(target, source, metadata().copy(headSnapshotId = "snapshot-remote"))
+
+        SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+            assertEquals(2, scalar(db, "SELECT COUNT(*) FROM accounts"))
+            assertEquals(PRIVATE_MARKER, text(db, "SELECT name FROM accounts WHERE id=1"))
+            assertEquals(0, scalar(db, "SELECT COUNT(*) FROM activity_events WHERE id='local-only-team-event'"))
+            assertEquals(1, scalar(db, "SELECT COUNT(*) FROM activity_events WHERE id='team-event'"))
+            assertEquals("snapshot-remote", text(db, "SELECT headSnapshotId FROM team_workspaces WHERE teamId='team-1'"))
+            assertFalse(db.rawQuery("PRAGMA foreign_key_check", null).use { it.moveToFirst() })
+            assertEquals("ok", text(db, "PRAGMA integrity_check").lowercase())
+        }
+    }
+
+    @Test
+    fun removesDepartedTeamGraphSoItCanJoinAgainWithoutUuidCollision() {
+        val target = createTarget("team-leave-target.db")
+        val source = createSource("team-leave-source.db")
+        TeamGraphImporter.merge(target, source, metadata())
+
+        TeamGraphImporter.removeExisting(target, "team-1")
+
+        SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+            assertEquals(1, scalar(db, "SELECT COUNT(*) FROM accounts"))
+            assertEquals(1, scalar(db, "SELECT isActive FROM accounts WHERE id=1"))
+            assertEquals(0, scalar(db, "SELECT COUNT(*) FROM activity_events WHERE id='team-event'"))
+            assertEquals(0, scalar(db, "SELECT COUNT(*) FROM team_workspaces"))
+            assertEquals(0, scalar(db, "SELECT COUNT(*) FROM team_event_proofs"))
+            assertFalse(db.rawQuery("PRAGMA foreign_key_check", null).use { it.moveToFirst() })
+        }
+
+        TeamGraphImporter.merge(target, source, metadata())
+        SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+            assertEquals(2, scalar(db, "SELECT COUNT(*) FROM accounts"))
+            assertEquals(1, scalar(db, "SELECT COUNT(*) FROM activity_events WHERE id='team-event'"))
+        }
+    }
+
+    @Test
+    fun removesProofWhoseLegacyTeamIdDoesNotMatchItsTeamEvent() {
+        val target = createTarget("team-leave-mismatched-proof-target.db")
+        val source = createSource("team-leave-mismatched-proof-source.db")
+        TeamGraphImporter.merge(target, source, metadata())
+        SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            db.execSQL("UPDATE team_event_proofs SET teamId='legacy-team-id' WHERE eventId='team-event'")
+        }
+
+        TeamGraphImporter.removeExisting(target, "team-1")
+
+        SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+            assertEquals(0, scalar(db, "SELECT COUNT(*) FROM team_event_proofs"))
+            assertFalse(db.rawQuery("PRAGMA foreign_key_check", null).use { it.moveToFirst() })
         }
     }
 

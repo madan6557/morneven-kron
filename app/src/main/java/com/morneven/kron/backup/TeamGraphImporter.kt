@@ -46,11 +46,10 @@ internal object TeamGraphImporter {
             try {
                 db.beginTransaction()
                 try {
+                    db.execSQL("PRAGMA defer_foreign_keys=ON")
                     validateCollisions(db, metadata)
                     val accountId = insertGraph(db, sourceScope.accountId, metadata)
-                    require(!db.rawQuery("PRAGMA foreign_key_check", null).use { it.moveToFirst() }) {
-                        "Relasi hasil import Team tidak valid"
-                    }
+                    requireNoForeignKeyViolations(db, "Relasi hasil import Team tidak valid")
                     validateFinancialInvariants(db)
                     db.setTransactionSuccessful()
                     accountId
@@ -61,6 +60,130 @@ internal object TeamGraphImporter {
                 db.execSQL("DETACH DATABASE team_source")
             }
         }
+    }
+
+    /** Replaces one Team graph only after its previous branch was preserved externally. */
+    fun replaceExisting(target: File, source: File, metadata: TeamImportMetadata): Long {
+        require(target.isFile && source.isFile && target.canonicalFile != source.canonicalFile) {
+            "Database penggantian Team tidak valid"
+        }
+        require(metadata.teamId.isNotBlank() && metadata.folderId.isNotBlank()) {
+            "Metadata penggantian Team tidak valid"
+        }
+        require(metadata.localRole in setOf(TeamRole.OWNER, TeamRole.EDITOR, TeamRole.VIEWER)) {
+            "Role penggantian Team tidak valid"
+        }
+        require(metadata.generation >= 0 && metadata.importedAt > 0 &&
+            (metadata.inviteIdHash == null || metadata.inviteIdHash.matches(Regex("[0-9a-f]{64}")))
+        ) {
+            "Metadata penggantian Team tidak valid"
+        }
+        val sourceScope = TeamSnapshotPruner.validateImported(source, metadata.teamId)
+        require(sourceScope.generation == metadata.generation) { "Generation penggantian Team tidak cocok" }
+        return SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            require(scalar(db, "PRAGMA user_version") == KronDatabase.SCHEMA_VERSION.toLong()) {
+                "Schema database target Team tidak sesuai"
+            }
+            db.execSQL("PRAGMA foreign_keys=ON")
+            dropStagingTriggers(db)
+            db.execSQL("ATTACH DATABASE ? AS team_source", arrayOf(source.absolutePath))
+            try {
+                db.beginTransaction()
+                try {
+                    db.execSQL("PRAGMA defer_foreign_keys=ON")
+                    val accountId = scalar(
+                        db,
+                        "SELECT id FROM accounts WHERE teamId=? AND sharingMode='TEAM'",
+                        arrayOf(metadata.teamId),
+                    )
+                    require(accountId > 0) { "Akun Team lokal tidak ditemukan" }
+                    removeExistingGraph(db, accountId, metadata.teamId)
+                    validateCollisions(db, metadata)
+                    val replacementId = insertGraph(db, sourceScope.accountId, metadata)
+                    requireNoForeignKeyViolations(db, "Relasi hasil penggantian Team tidak valid")
+                    validateFinancialInvariants(db)
+                    db.setTransactionSuccessful()
+                    replacementId
+                } finally {
+                    db.endTransaction()
+                }
+            } finally {
+                db.execSQL("DETACH DATABASE team_source")
+            }
+        }
+    }
+
+    /** Removes a departed member's complete local Team graph from a disposable candidate. */
+    fun removeExisting(target: File, teamId: String) {
+        require(target.isFile && teamId.isNotBlank()) { "Akun Team yang akan dihapus tidak valid" }
+        SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            require(scalar(db, "PRAGMA user_version") == KronDatabase.SCHEMA_VERSION.toLong()) {
+                "Schema database target Team tidak sesuai"
+            }
+            db.execSQL("PRAGMA foreign_keys=ON")
+            dropStagingTriggers(db)
+            db.beginTransaction()
+            try {
+                db.execSQL("PRAGMA defer_foreign_keys=ON")
+                val accountId = scalar(
+                    db,
+                    "SELECT id FROM accounts WHERE teamId=? AND sharingMode='TEAM'",
+                    arrayOf(teamId),
+                )
+                require(accountId > 0) { "Akun Team lokal tidak ditemukan" }
+                removeExistingGraph(db, accountId, teamId)
+                db.execSQL(
+                    "UPDATE accounts SET isActive=CASE WHEN id=(SELECT id FROM accounts WHERE isArchived=0 ORDER BY id LIMIT 1) THEN 1 ELSE 0 END " +
+                        "WHERE EXISTS(SELECT 1 FROM accounts WHERE isArchived=0)",
+                )
+                require(scalar(db, "SELECT COUNT(*) FROM accounts WHERE teamId=?", arrayOf(teamId)) == 0L) {
+                    "Akun Team lokal belum terhapus"
+                }
+                requireNoForeignKeyViolations(db, "Relasi hasil keluar Team tidak valid")
+                validateFinancialInvariants(db)
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+        }
+    }
+
+    private fun removeExistingGraph(db: SQLiteDatabase, accountId: Long, teamId: String) {
+        val events = "SELECT id FROM activity_events WHERE accountId=$accountId"
+        db.execSQL("DELETE FROM team_event_proofs WHERE teamId=? OR eventId IN ($events)", arrayOf(teamId))
+        db.execSQL("DELETE FROM journal_seals WHERE eventId IN ($events)")
+        db.execSQL("DELETE FROM receipts WHERE eventId IN ($events)")
+        db.execSQL("DELETE FROM audit_snapshots WHERE eventId IN ($events)")
+        db.execSQL("DELETE FROM transaction_splits WHERE eventId IN ($events)")
+        db.execSQL("DELETE FROM budget_journal_lines WHERE eventId IN ($events)")
+        db.execSQL("DELETE FROM cash_journal_lines WHERE eventId IN ($events)")
+        db.execSQL("DELETE FROM ledger_lines WHERE eventId IN ($events)")
+        db.execSQL(
+            "DELETE FROM ledger_accounts WHERE accountId=? OR categoryId IN (SELECT id FROM categories WHERE accountId=?)",
+            arrayOf<Any?>(accountId, accountId),
+        )
+        db.execSQL("DELETE FROM recurring_occurrences WHERE ruleId IN (SELECT id FROM recurring_rules WHERE accountId=$accountId)")
+        db.execSQL("DELETE FROM recurring_rules WHERE accountId=$accountId")
+        db.execSQL("DELETE FROM portfolio_allocation_templates WHERE portfolioId IN (SELECT id FROM portfolios WHERE accountId=$accountId)")
+        db.execSQL("DELETE FROM allocations WHERE periodId IN (SELECT id FROM budget_periods WHERE portfolioId IN (SELECT id FROM portfolios WHERE accountId=$accountId))")
+        db.execSQL("DELETE FROM budget_periods WHERE portfolioId IN (SELECT id FROM portfolios WHERE accountId=$accountId)")
+        db.execSQL("DELETE FROM portfolios WHERE accountId=$accountId")
+        db.execSQL("DELETE FROM activity_events WHERE accountId=$accountId")
+        db.execSQL("DELETE FROM categories WHERE accountId=$accountId")
+        db.execSQL("DELETE FROM team_members WHERE accountId=$accountId")
+        db.execSQL("DELETE FROM team_invitation_uses WHERE teamId=?", arrayOf(teamId))
+        db.execSQL("DELETE FROM team_workspaces WHERE accountId=$accountId")
+        db.execSQL("DELETE FROM accounts WHERE id=$accountId")
+        db.execSQL("DELETE FROM ledger_accounts WHERE id NOT IN (SELECT DISTINCT ledgerAccountId FROM ledger_lines)")
+        db.execSQL("DELETE FROM evidence_keys WHERE id NOT IN (SELECT keyId FROM journal_seals UNION SELECT keyId FROM team_event_proofs)")
+    }
+
+    /** The target is a disposable candidate. Active append-only guards return on the next Room open. */
+    private fun dropStagingTriggers(db: SQLiteDatabase) {
+        val triggers = db.rawQuery("SELECT name FROM sqlite_master WHERE type='trigger'", null).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
+        }
+        triggers.forEach { trigger -> db.execSQL("DROP TRIGGER IF EXISTS `${trigger.replace("`", "``")}`") }
     }
 
     private fun validateCollisions(db: SQLiteDatabase, metadata: TeamImportMetadata) {
@@ -391,6 +514,15 @@ internal object TeamGraphImporter {
         message: String,
     ) {
         require(scalar(db, sql, args) == 0L) { message }
+    }
+
+    private fun requireNoForeignKeyViolations(db: SQLiteDatabase, message: String) {
+        val tables = db.rawQuery("PRAGMA foreign_key_check", null).use { cursor ->
+            buildSet {
+                while (cursor.moveToNext()) add(cursor.getString(0))
+            }.sorted().joinToString(", ")
+        }
+        require(tables.isEmpty()) { "$message: $tables" }
     }
 
     private fun validateFinancialInvariants(db: SQLiteDatabase) {

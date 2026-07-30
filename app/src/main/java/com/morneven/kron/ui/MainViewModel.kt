@@ -47,6 +47,7 @@ import com.morneven.kron.team.TeamKeyStore
 import com.morneven.kron.team.TeamSnapshotCoordinator
 import com.morneven.kron.team.TeamSnapshotConflictException
 import com.morneven.kron.team.TeamSyncResult
+import com.morneven.kron.team.TeamSyncScheduler
 import com.morneven.kron.team.TeamConflictPreview
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -169,7 +170,7 @@ private data class PreferenceSlice(
 )
 
 internal fun teamFilePickerRequired(error: Throwable): Boolean =
-    error is DriveApiException && error.statusCode in setOf(403, 404)
+    error is DriveApiException && error.statusCode == 403
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @HiltViewModel
@@ -192,6 +193,7 @@ class MainViewModel @Inject constructor(
     private val teamSnapshotCoordinator: TeamSnapshotCoordinator,
     private val teamConversionManager: TeamConversionManager,
     private val teamDriveClient: TeamDriveRestClient,
+    private val databaseRuntime: com.morneven.kron.security.DatabaseRuntime,
 ) : ViewModel() {
     private val driveSyncAccountStore: SelectedGoogleAccountStore = PreferencesSelectedGoogleAccountStore(context)
     private val message = MutableStateFlow<String?>(null)
@@ -528,7 +530,7 @@ class MainViewModel @Inject constructor(
 
     fun activateAccount(accountId: Long) = runAction("Akun aktif diganti") { repository.activateAccount(accountId) }
 
-    fun archiveAccount(accountId: Long, reason: String) = runAction("Akun diarsipkan") {
+    fun archiveAccount(accountId: Long, reason: String) = runAction("Akun dihapus dari daftar aktif") {
         repository.archiveAccount(accountId, reason)
     }
 
@@ -536,11 +538,21 @@ class MainViewModel @Inject constructor(
         repository.restoreAccount(accountId, reason)
     }
 
-    fun leaveTeam(accountId: Long) = runAction("Berhasil keluar dari Team") {
-        val workspace = repository.teamWorkspace.first()
-            ?: error("Tidak ada workspace Team aktif")
-        teamKeyStore.clear(workspace.teamId)
-        repository.leaveTeam(accountId)
+    fun leaveTeam(accountId: Long, onApplied: () -> Unit) = viewModelScope.launch {
+        runCatching {
+            val workspace = requireNotNull(repository.teamWorkspaceFor(accountId)) { "Workspace Team tidak ditemukan" }
+            require(workspace.localRole != TeamRole.OWNER) { "Owner gunakan Kembali ke Privat untuk mengubah kepemilikan akun" }
+            backupManager.stageRemoveExistingTeamAccountForRestart(workspace.teamId)
+            databaseRuntime.markPendingSyncActivation()
+        }
+            .onSuccess {
+                message.value = "Menghapus data Team dari perangkat"
+                onApplied()
+            }
+            .onFailure {
+                if (it is CancellationException) throw it
+                message.value = it.message ?: "Tidak dapat keluar dari Team"
+            }
     }
 
     fun createTeamInvite(
@@ -607,7 +619,7 @@ class MainViewModel @Inject constructor(
     fun syncTeamSnapshot(
         accessToken: String,
         accountId: Long,
-        onRestartRequired: () -> Unit,
+        onApplied: () -> Unit,
         onFileAccessRequired: (() -> Unit)? = null,
         allowFileAccessRetry: Boolean = true,
     ) = viewModelScope.launch {
@@ -621,18 +633,25 @@ class MainViewModel @Inject constructor(
                 TeamSyncResult.NoChanges -> {
                     mutableTeamSyncDetail.value = "Data perangkat dan Team sudah sama."
                     message.value = "Team sudah tersinkron"
+                    TeamSyncScheduler.scheduleAfterChange(context)
                 }
                 TeamSyncResult.NoData -> {
                     mutableTeamSyncDetail.value = "Owner belum mengunggah snapshot Team."
                     message.value = "Belum ada data Team yang dapat diambil"
+                    TeamSyncScheduler.scheduleAfterChange(context)
+                }
+                TeamSyncResult.SnapshotRemoved -> {
+                    mutableTeamSyncDetail.value = "Snapshot Team telah dihapus oleh Owner atau akses Anda telah dicabut. Data lokal dipertahankan."
+                    message.value = "Workspace Team sudah tidak tersedia"
                 }
                 is TeamSyncResult.Uploaded -> {
                     mutableTeamSyncDetail.value = "Perubahan Team berhasil dikirim."
                     message.value = "Team berhasil disinkronkan"
+                    TeamSyncScheduler.scheduleAfterChange(context)
                 }
-                is TeamSyncResult.RestartRequired -> {
-                    mutableTeamSyncDetail.value = "Pembaruan Team sudah divalidasi dan siap diterapkan."
-                    onRestartRequired()
+                is TeamSyncResult.Applied -> {
+                    mutableTeamSyncDetail.value = "Menerapkan pembaruan Team terenkripsi."
+                    onApplied()
                 }
                 is TeamSyncResult.Conflict -> {
                     mutableTeamConflictAccount.value = result.accountId
@@ -682,17 +701,35 @@ class MainViewModel @Inject constructor(
         accessToken: String,
         accountId: Long,
         remoteSnapshotId: String,
-        onRestartRequired: () -> Unit,
+        onApplied: () -> Unit,
     ) = viewModelScope.launch {
         try {
             teamSnapshotCoordinator.resolveUseTeam(accessToken, accountId, remoteSnapshotId)
             mutableTeamConflictAccount.value = null
             mutableTeamConflictPreview.value = null
-            onRestartRequired()
+            onApplied()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
             mutableTeamConflictError.value = error.message ?: "Resolusi konflik Team gagal"
+        }
+    }
+
+    fun resolveTeamMerge(
+        accessToken: String,
+        accountId: Long,
+        remoteSnapshotId: String,
+        onApplied: () -> Unit,
+    ) = viewModelScope.launch {
+        try {
+            teamSnapshotCoordinator.resolveMerge(accessToken, accountId, remoteSnapshotId)
+            mutableTeamConflictAccount.value = null
+            mutableTeamConflictPreview.value = null
+            onApplied()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            mutableTeamConflictError.value = error.message ?: "Gabung konflik Team gagal"
         }
     }
 
@@ -763,12 +800,14 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    fun convertTeamToPrivate(accountId: Long) =
+    fun convertTeamToPrivate(accessToken: String, accountId: Long) =
         runAction("Akun berhasil dikonversi ke Private") {
-            val workspace = repository.teamWorkspace.first()
+            val workspace = repository.teamWorkspaceFor(accountId)
                 ?: error("Tidak ada workspace Team aktif")
-            teamKeyStore.clear(workspace.teamId)
+            require(workspace.localRole == TeamRole.OWNER) { "Hanya Owner yang dapat mengembalikan Team menjadi Private" }
+            teamDriveClient.deleteWorkspace(accessToken, workspace.folderId, workspace.teamId)
             teamConversionManager.convertTeamToPrivate(listOf(accountId))
+            teamKeyStore.clear(workspace.teamId)
         }
 
     fun joinTeam(
@@ -807,7 +846,7 @@ class MainViewModel @Inject constructor(
                 generation = preflightResult.generation,
                 inviteIdHash = TeamInvitationCodec.sha256(invitation.inviteId.toByteArray(Charsets.UTF_8)),
             )
-            message.value = "Akun Team siap. Buka ulang KRON untuk mengaktifkannya."
+            message.value = "Menerapkan akun Team terenkripsi."
             onStaged()
         } catch (cancelled: CancellationException) {
             if (storedKey) teamKeyStore.clear(preflightResult.teamId)

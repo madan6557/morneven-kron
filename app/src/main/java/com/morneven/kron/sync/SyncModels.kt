@@ -186,7 +186,7 @@ sealed interface ConflictResolution {
 
 sealed interface SyncRunResult {
     data class Synchronized(val snapshotId: String, val uploaded: Boolean) : SyncRunResult
-    data class RestartRequired(val snapshotId: String) : SyncRunResult
+    data class Applied(val snapshotId: String) : SyncRunResult
     data object NoChanges : SyncRunResult
     data object NoData : SyncRunResult
     data object Disabled : SyncRunResult
@@ -227,7 +227,6 @@ interface LocalSnapshotSource {
 
 enum class LocalApplyOutcome {
     APPLIED,
-    RESTART_REQUIRED,
 }
 
 fun interface SyncSecretProvider {

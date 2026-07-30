@@ -89,7 +89,13 @@ object TeamRole {
 
 object TeamWorkspaceStatus {
     const val LOCAL_ONLY = "LOCAL_ONLY"
+    const val SYNCING = "SYNCING"
     const val SYNCED = "SYNCED"
+    const val WAITING_NETWORK = "WAITING_NETWORK"
+    const val FAILED = "FAILED"
+    const val MERGE_PENDING = "MERGE_PENDING"
+    const val APPLY_PENDING = "APPLY_PENDING"
+    const val AUTH_REQUIRED = "AUTH_REQUIRED"
     const val CONFLICT = "CONFLICT"
     const val REVOKED = "REVOKED"
     const val ARCHIVED = "ARCHIVED"
@@ -764,6 +770,8 @@ data class ActivityRow(
     val ledgerDebit: Long,
     val ledgerCredit: Long,
     val auditStatus: String,
+    val actor: String,
+    val deviceId: String,
 )
 
 data class EventChannelRow(

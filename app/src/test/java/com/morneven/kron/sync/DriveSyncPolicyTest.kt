@@ -90,7 +90,7 @@ class DriveSyncPolicyTest {
     }
 
     @Test
-    fun downloadedSnapshotRequiresRestartAndIsNeverReportedAsApplied() = runBlocking {
+    fun downloadedSnapshotIsReportedAsAppliedAfterStaging() = runBlocking {
         val passphrase = "passphrase-aman".toCharArray()
         val payload = "portable-backup".toByteArray()
         val manifest = DriveSnapshotManifest(
@@ -145,7 +145,7 @@ class DriveSyncPolicyTest {
                 account: GoogleAccountIdentity,
             ): LocalApplyOutcome {
                     applyCalls++
-                    return LocalApplyOutcome.RESTART_REQUIRED
+                    return LocalApplyOutcome.APPLIED
                 }
             },
             stateStore = stateStore,
@@ -154,9 +154,9 @@ class DriveSyncPolicyTest {
             currentAppVersionCode = 22,
         )
 
-        assertEquals(SyncRunResult.RestartRequired("snapshot-2"), coordinator.syncNow())
+        assertEquals(SyncRunResult.Applied("snapshot-2"), coordinator.syncNow())
         assertEquals(1, applyCalls)
-        assertEquals(SyncStatus.RESTART_REQUIRED, stateStore.read().status)
+        assertEquals(SyncStatus.SYNCED, stateStore.read().status)
         assertEquals("snapshot-2", stateStore.read().lastSnapshotId)
     }
 

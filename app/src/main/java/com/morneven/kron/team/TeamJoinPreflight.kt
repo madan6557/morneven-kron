@@ -4,6 +4,7 @@ import com.morneven.kron.BuildConfig
 import com.morneven.kron.audit.EvidenceSigningKeyManager
 import com.morneven.kron.backup.BackupManager
 import com.morneven.kron.data.KronDatabase
+import com.morneven.kron.security.DatabaseRuntime
 import com.morneven.kron.data.TeamRole
 import com.morneven.kron.sync.GoogleAccountIdentity
 import com.morneven.kron.sync.RemoteDriveSnapshot
@@ -24,12 +25,14 @@ class TeamJoinPreflightResult(
 
 @Singleton
 class TeamJoinPreflight @Inject constructor(
-    private val database: KronDatabase,
+    private val databaseRuntime: DatabaseRuntime,
     private val drive: TeamDriveRestClient,
     private val signingKeys: EvidenceSigningKeyManager,
     private val snapshotCryptor: TeamSnapshotCryptor,
     private val backupManager: BackupManager,
 ) {
+    private val database get() = databaseRuntime.current()
+
     suspend fun verifyReadOnly(
         accessToken: String,
         googleAccount: GoogleAccountIdentity,

@@ -301,6 +301,6 @@ class TeamDriveScopeProbeFactory @Inject constructor(
     }
 
     companion object {
-        private const val TEAM_ACCOUNT_PREFERENCES = "kron_team_google_account"
+        internal const val TEAM_ACCOUNT_PREFERENCES = "kron_team_google_account"
     }
 }

@@ -11,7 +11,9 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import java.util.concurrent.TimeUnit
+import com.morneven.kron.backup.BackupManager
 import com.morneven.kron.security.DatabaseAccessGate
+import com.morneven.kron.team.TeamAtomicSwap
 
 /**
  * The app registers a coordinator only after optional Drive sync is configured.
@@ -38,6 +40,10 @@ class DriveSyncWorker(
 ) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result {
         if (!DatabaseAccessGate.isReady()) return Result.retry()
+        // Do not publish a private recovery package while a newer Team candidate waits for foreground activation.
+        if (BackupManager.hasPendingRestore(applicationContext) || TeamAtomicSwap.hasPendingSwap(applicationContext)) {
+            return Result.retry()
+        }
         val coordinator = DriveSyncServiceLocator.coordinator() ?: return Result.success()
         return when (val result = coordinator.syncNow()) {
             is SyncRunResult.Error -> if (result.retryable) Result.retry() else Result.failure()

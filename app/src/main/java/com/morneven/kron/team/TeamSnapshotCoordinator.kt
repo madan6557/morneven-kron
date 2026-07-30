@@ -1,25 +1,32 @@
 package com.morneven.kron.team
 
+import android.content.Context
 import com.morneven.kron.BuildConfig
 import com.morneven.kron.audit.LedgerPostingEngine
 import com.morneven.kron.backup.BackupManager
+import com.morneven.kron.backup.TeamSnapshotHistoryException
 import com.morneven.kron.data.KronDatabase
+import com.morneven.kron.data.AccountSharingMode
 import com.morneven.kron.data.TeamAccessGuard
 import com.morneven.kron.data.TeamCapability
 import com.morneven.kron.data.ReceiptEntity
 import com.morneven.kron.data.TeamWorkspaceStatus
 import com.morneven.kron.data.TeamRole
 import com.morneven.kron.security.EncryptedAttachmentStore
+import com.morneven.kron.security.DatabaseRuntime
 import com.morneven.kron.sync.AesGcmDriveSnapshotCryptor
+import com.morneven.kron.sync.DriveApiException
 import com.morneven.kron.sync.DriveSnapshotManifest
 import com.morneven.kron.sync.RemoteDriveSnapshot
 import com.morneven.kron.sync.SnapshotKind
 import com.morneven.kron.sync.SnapshotDag
 import com.morneven.kron.sync.ConflictPreview
+import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 
 class TeamSnapshotConflictException : IllegalStateException(
     "Head snapshot Team berubah atau memiliki fork. Buka Pusat Konflik sebelum melanjutkan.",
@@ -28,10 +35,14 @@ class TeamSnapshotConflictException : IllegalStateException(
 sealed interface TeamSyncResult {
     data object NoChanges : TeamSyncResult
     data object NoData : TeamSyncResult
+    data object SnapshotRemoved : TeamSyncResult
     data class Uploaded(val snapshotId: String) : TeamSyncResult
-    data class RestartRequired(val snapshotId: String) : TeamSyncResult
+    data class Applied(val snapshotId: String) : TeamSyncResult
     data class Conflict(val accountId: Long) : TeamSyncResult
 }
+
+internal fun teamSnapshotMissing(error: Throwable): Boolean =
+    error is DriveApiException && error.statusCode == 404
 
 data class TeamConflictPreview(
     val accountId: Long,
@@ -40,25 +51,67 @@ data class TeamConflictPreview(
 )
 
 @Singleton
+class TeamMergeParentStore @Inject constructor(
+    @ApplicationContext context: Context,
+) {
+    private val preferences = context.getSharedPreferences("kron_team_merge", Context.MODE_PRIVATE)
+
+    fun remember(teamId: String, remoteHead: String, localHead: String?) {
+        if (localHead.isNullOrBlank() || localHead == remoteHead) return
+        check(preferences.edit()
+            .putString("$teamId.remote", remoteHead)
+            .putString("$teamId.local", localHead)
+            .commit()) { "Metadata merge Team tidak dapat disimpan" }
+    }
+
+    fun parents(teamId: String, remoteHead: String?): List<String> = buildList {
+        remoteHead?.takeIf(String::isNotBlank)?.let(::add)
+        if (preferences.getString("$teamId.remote", null) == remoteHead) {
+            preferences.getString("$teamId.local", null)?.takeIf(String::isNotBlank)?.let(::add)
+        }
+    }.distinct()
+
+    fun clear(teamId: String) {
+        preferences.edit().remove("$teamId.remote").remove("$teamId.local").apply()
+    }
+}
+
+@Singleton
 class TeamSnapshotCoordinator @Inject constructor(
-    private val database: KronDatabase,
+    private val databaseRuntime: DatabaseRuntime,
     private val ledgerPostingEngine: LedgerPostingEngine,
     private val backupManager: BackupManager,
     private val accessGuard: TeamAccessGuard,
     private val keyStore: TeamKeyStore,
     private val drive: TeamDriveRestClient,
     private val cryptor: TeamSnapshotCryptor,
+    private val conflictRecoveryStore: TeamConflictRecoveryStore,
+    private val mergeParents: TeamMergeParentStore,
     private val attachmentStore: EncryptedAttachmentStore,
     private val blobStore: TeamBlobStore? = null,
 ) {
+    private val database get() = databaseRuntime.current()
+
     suspend fun sync(accessToken: String, accountId: Long): TeamSyncResult {
         check(BuildConfig.TEAM_ACCOUNT_ENABLED) { "Team Account belum aktif pada build ini" }
         val dao = database.kronDao()
         val account = requireNotNull(dao.accountById(accountId)) { "Team Account tidak ditemukan" }
         val workspace = requireNotNull(dao.teamWorkspace(accountId)) { "Workspace Team tidak ditemukan" }
+        require(account.sharingMode == AccountSharingMode.TEAM) { "Akun bukan Team" }
         require(account.teamId == workspace.teamId) { "Workspace Team belum siap untuk sync" }
         val canWrite = workspace.localRole != TeamRole.VIEWER
-        val head = workspace.liveFileId?.let { drive.stableSnapshot(accessToken, it, workspace.teamId) }
+        val head = try {
+            workspace.liveFileId?.let { drive.stableSnapshot(accessToken, it, workspace.teamId) }
+        } catch (error: Throwable) {
+            if (!teamSnapshotMissing(error)) throw error
+            dao.markTeamWorkspaceStatus(
+                accountId,
+                workspace.teamId,
+                TeamWorkspaceStatus.REVOKED,
+                System.currentTimeMillis(),
+            )
+            return TeamSyncResult.SnapshotRemoved
+        }
         if (head == null) return if (canWrite) TeamSyncResult.Uploaded(publish(accessToken, accountId).manifest.snapshotId) else TeamSyncResult.NoData
         return when (
             TeamSyncPolicy.decide(
@@ -69,6 +122,7 @@ class TeamSnapshotCoordinator @Inject constructor(
                 remoteGeneration = head.manifest.generation,
                 baseGeneration = workspace.headSnapshotId?.let { head.manifest.parentSnapshotIds.takeIf { parents -> it in parents }?.let { workspace.generation } },
                 remoteDescendsFromBase = workspace.headSnapshotId in head.manifest.parentSnapshotIds,
+                recoveringFromPrivateCopy = workspace.status == TeamWorkspaceStatus.LOCAL_ONLY || workspace.headSnapshotId == null,
             )
         ) {
             TeamSyncDecision.NO_CHANGES -> {
@@ -77,12 +131,53 @@ class TeamSnapshotCoordinator @Inject constructor(
             }
             TeamSyncDecision.UPLOAD -> TeamSyncResult.Uploaded(publish(accessToken, accountId).manifest.snapshotId)
             TeamSyncDecision.PULL -> {
-                applyRemoteForRestart(accessToken, workspace, head)
-                markPrivateRecoveryChanged()
-                TeamSyncResult.RestartRequired(head.manifest.snapshotId)
+                try {
+                    applyRemoteForRestart(accessToken, workspace, head)
+                    TeamSyncResult.Applied(head.manifest.snapshotId)
+                } catch (_: TeamSnapshotHistoryException) {
+                    conflict(workspace)
+                }
             }
-            TeamSyncDecision.CONFLICT -> conflict(workspace)
+            TeamSyncDecision.CONFLICT -> autoResolveIdenticalConflict(accessToken, workspace, head) ?: conflict(workspace)
         }
+    }
+
+    private suspend fun autoResolveIdenticalConflict(
+        accessToken: String,
+        workspace: com.morneven.kron.data.TeamWorkspaceEntity,
+        remote: RemoteDriveSnapshot,
+    ): TeamSyncResult? = try {
+        val teamKey = requireNotNull(keyStore.acquire(workspace.teamId)) { "Team key tidak tersedia" }
+        var envelope = ByteArray(0)
+        var payload = ByteArray(0)
+        try {
+            envelope = drive.download(accessToken, remote.fileId)
+            val opened = cryptor.decrypt(envelope, teamKey)
+            payload = opened.payload
+            require(opened.manifest == remote.manifest) { "Metadata snapshot Team tidak cocok" }
+            if (!backupManager.previewTeamSnapshotPayload(
+                    payload,
+                    workspace.accountId,
+                    workspace.headSnapshotId,
+                    remote.manifest.snapshotId,
+                ).isAlreadyResolved
+            ) return null
+            if (workspace.localRole == TeamRole.VIEWER) {
+                applyRemoteForRestart(accessToken, workspace, remote)
+            } else {
+                mergeParents.remember(workspace.teamId, remote.manifest.snapshotId, workspace.headSnapshotId)
+                mergeRemoteForRestart(accessToken, workspace, remote)
+            }
+            return TeamSyncResult.Applied(remote.manifest.snapshotId)
+        } finally {
+            teamKey.fill(0)
+            envelope.fill(0)
+            payload.fill(0)
+        }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Throwable) {
+        null
     }
 
     private suspend fun applyRemoteForRestart(
@@ -107,6 +202,15 @@ class TeamSnapshotCoordinator @Inject constructor(
                 headSnapshotId = remote.manifest.snapshotId,
                 generation = remote.manifest.generation,
             )
+            database.kronDao().markTeamSnapshotStatus(
+                workspace.accountId,
+                workspace.teamId,
+                workspace.generation,
+                workspace.headSnapshotId,
+                TeamWorkspaceStatus.APPLY_PENDING,
+                System.currentTimeMillis(),
+            )
+            databaseRuntime.markPendingSyncActivation()
         } finally {
             teamKey.fill(0)
             envelope.fill(0)
@@ -144,16 +248,120 @@ class TeamSnapshotCoordinator @Inject constructor(
         accessToken: String,
         accountId: Long,
         expectedRemoteSnapshotId: String,
-    ): TeamSyncResult.RestartRequired {
+    ): TeamSyncResult.Applied {
         val workspace = requireNotNull(database.kronDao().teamWorkspace(accountId)) { "Workspace Team tidak ditemukan" }
         val head = requireNotNull(workspace.liveFileId) { "File snapshot Team belum tersedia" }
             .let { drive.stableSnapshot(accessToken, it, workspace.teamId) }
         require(head.manifest.snapshotId == expectedRemoteSnapshotId) {
             "Snapshot Team berubah. Muat ulang Pusat Konflik."
         }
-        applyRemoteForRestart(accessToken, workspace, head)
-        markPrivateRecoveryChanged()
-        return TeamSyncResult.RestartRequired(head.manifest.snapshotId)
+        replaceRemoteForRestart(accessToken, workspace, head)
+        return TeamSyncResult.Applied(head.manifest.snapshotId)
+    }
+
+    suspend fun resolveMerge(
+        accessToken: String,
+        accountId: Long,
+        expectedRemoteSnapshotId: String,
+    ): TeamSyncResult.Applied {
+        val workspace = requireNotNull(database.kronDao().teamWorkspace(accountId)) { "Workspace Team tidak ditemukan" }
+        require(workspace.localRole != TeamRole.VIEWER) { "Viewer tidak dapat menggabungkan perubahan Team" }
+        val head = requireNotNull(workspace.liveFileId) { "File snapshot Team belum tersedia" }
+            .let { drive.stableSnapshot(accessToken, it, workspace.teamId) }
+        require(head.manifest.snapshotId == expectedRemoteSnapshotId) {
+            "Snapshot Team berubah. Muat ulang Pusat Konflik."
+        }
+        mergeParents.remember(workspace.teamId, head.manifest.snapshotId, workspace.headSnapshotId)
+        try {
+            mergeRemoteForRestart(accessToken, workspace, head)
+        } catch (error: Throwable) {
+            mergeParents.clear(workspace.teamId)
+            throw error
+        }
+        return TeamSyncResult.Applied(head.manifest.snapshotId)
+    }
+
+    private suspend fun replaceRemoteForRestart(
+        accessToken: String,
+        workspace: com.morneven.kron.data.TeamWorkspaceEntity,
+        remote: RemoteDriveSnapshot,
+    ) {
+        val teamKey = requireNotNull(keyStore.acquire(workspace.teamId)) { "Team key tidak tersedia" }
+        var envelope = ByteArray(0)
+        var payload = ByteArray(0)
+        try {
+            envelope = drive.download(accessToken, remote.fileId)
+            val opened = cryptor.decrypt(envelope, teamKey)
+            payload = opened.payload
+            require(opened.manifest == remote.manifest) { "Metadata snapshot Team tidak cocok" }
+            conflictRecoveryStore.save(
+                accountId = workspace.accountId,
+                teamId = workspace.teamId,
+                localHeadSnapshotId = workspace.headSnapshotId,
+                generation = workspace.generation,
+                teamKey = teamKey,
+            )
+            backupManager.stageReplaceExistingTeamAccountForRestart(
+                payload = payload,
+                teamId = workspace.teamId,
+                folderId = workspace.folderId,
+                liveFileId = workspace.liveFileId,
+                role = workspace.localRole,
+                headSnapshotId = remote.manifest.snapshotId,
+                generation = remote.manifest.generation,
+            )
+            database.kronDao().markTeamSnapshotStatus(
+                workspace.accountId,
+                workspace.teamId,
+                workspace.generation,
+                workspace.headSnapshotId,
+                TeamWorkspaceStatus.APPLY_PENDING,
+                System.currentTimeMillis(),
+            )
+            databaseRuntime.markPendingSyncActivation()
+        } finally {
+            teamKey.fill(0)
+            envelope.fill(0)
+            payload.fill(0)
+        }
+    }
+
+    private suspend fun mergeRemoteForRestart(
+        accessToken: String,
+        workspace: com.morneven.kron.data.TeamWorkspaceEntity,
+        remote: RemoteDriveSnapshot,
+    ) {
+        val teamKey = requireNotNull(keyStore.acquire(workspace.teamId)) { "Team key tidak tersedia" }
+        var envelope = ByteArray(0)
+        var payload = ByteArray(0)
+        try {
+            envelope = drive.download(accessToken, remote.fileId)
+            val opened = cryptor.decrypt(envelope, teamKey)
+            payload = opened.payload
+            require(opened.manifest == remote.manifest) { "Metadata snapshot Team tidak cocok" }
+            backupManager.stageMergeExistingTeamAccountForRestart(
+                payload = payload,
+                teamId = workspace.teamId,
+                folderId = workspace.folderId,
+                liveFileId = workspace.liveFileId,
+                role = workspace.localRole,
+                remoteSnapshotId = remote.manifest.snapshotId,
+                remoteGeneration = remote.manifest.generation,
+            )
+            database.kronDao().markTeamSnapshotStatus(
+                workspace.accountId,
+                workspace.teamId,
+                workspace.generation,
+                workspace.headSnapshotId,
+                TeamWorkspaceStatus.APPLY_PENDING,
+                System.currentTimeMillis(),
+            )
+            databaseRuntime.markPendingSyncActivation()
+        } finally {
+            teamKey.fill(0)
+            envelope.fill(0)
+            payload.fill(0)
+        }
     }
 
     private suspend fun conflict(workspace: com.morneven.kron.data.TeamWorkspaceEntity): TeamSyncResult.Conflict {
@@ -167,6 +375,7 @@ class TeamSnapshotCoordinator @Inject constructor(
         val dao = database.kronDao()
         val account = requireNotNull(dao.accountById(accountId)) { "Team Account tidak ditemukan" }
         val workspace = requireNotNull(dao.teamWorkspace(accountId)) { "Workspace Team tidak ditemukan" }
+        require(account.sharingMode == AccountSharingMode.TEAM) { "Akun bukan Team" }
         require(account.teamId == workspace.teamId) {
             "Workspace Team belum siap untuk sync"
         }
@@ -188,12 +397,13 @@ class TeamSnapshotCoordinator @Inject constructor(
             if (current.generation != workspace.generation || current.headSnapshotId != workspace.headSnapshotId) {
                 throw TeamSnapshotConflictException()
             }
+            val parentSnapshotIds = mergeParents.parents(workspace.teamId, workspace.headSnapshotId)
             val manifest = DriveSnapshotManifest(
                 protocolVersion = 2,
                 datasetId = workspace.teamId,
                 snapshotId = UUID.randomUUID().toString(),
-                parentSnapshotId = workspace.headSnapshotId,
-                parentSnapshotIds = listOfNotNull(workspace.headSnapshotId),
+                parentSnapshotId = parentSnapshotIds.firstOrNull(),
+                parentSnapshotIds = parentSnapshotIds,
                 generation = workspace.generation,
                 sourceDeviceId = deviceId,
                 schemaVersion = KronDatabase.SCHEMA_VERSION,
@@ -230,6 +440,7 @@ class TeamSnapshotCoordinator @Inject constructor(
                 updatedAt = System.currentTimeMillis(),
             )
             if (updated != 1) throw TeamSnapshotConflictException()
+            mergeParents.clear(workspace.teamId)
             markPrivateRecoveryChanged()
             try {
                 uploadReceiptBlobs(accessToken, accountId, teamKey)
@@ -318,7 +529,9 @@ internal object TeamSyncPolicy {
         remoteGeneration: Long,
         baseGeneration: Long?,
         remoteDescendsFromBase: Boolean,
+        recoveringFromPrivateCopy: Boolean = false,
     ): TeamSyncDecision {
+        if (recoveringFromPrivateCopy) return TeamSyncDecision.PULL
         if (localHeadId == remoteHeadId) {
             return when {
                 localGeneration == remoteGeneration -> TeamSyncDecision.NO_CHANGES

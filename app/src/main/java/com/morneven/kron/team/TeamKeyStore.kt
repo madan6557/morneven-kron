@@ -82,6 +82,16 @@ class TeamKeyStore @Inject constructor(
         }
     }
 
+    suspend fun clearOrphaned(activeTeamIds: Collection<String>) = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val activeFiles = activeTeamIds.map(::keyFile).map { it.name }.toSet()
+            val directory = File(context.noBackupFilesDir, "security/team-keys-v1")
+            directory.listFiles()?.filter { file ->
+                file.isFile && activeFiles.none { active -> file.name == active || file.name.startsWith("$active.") }
+            }?.forEach(::eraseFile)
+        }
+    }
+
     private fun decrypt(teamId: String, source: File): ByteArray = DataInputStream(
         source.inputStream().buffered(),
     ).use { input ->

@@ -4,6 +4,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import com.morneven.kron.data.AccountSharingMode
 import com.morneven.kron.data.KronDatabase
+import com.morneven.kron.security.DatabaseRuntime
 import com.morneven.kron.data.TeamRole
 import com.morneven.kron.data.TeamWorkspaceStatus
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -32,8 +33,10 @@ data class ConversionRequest(
 @Singleton
 class TeamConversionManager @Inject constructor(
     @param:ApplicationContext private val context: Context,
-    private val database: KronDatabase,
+    private val databaseRuntime: DatabaseRuntime,
 ) {
+    private val database get() = databaseRuntime.current()
+
     suspend fun convertPrivateToTeam(
         accountIds: List<Long>,
         request: ConversionRequest,
@@ -80,6 +83,7 @@ class TeamConversionManager @Inject constructor(
                 db.execSQL("DELETE FROM team_workspaces WHERE accountId=?", arrayOf<Any?>(a))
                 db.execSQL("DELETE FROM team_members WHERE accountId=?", arrayOf<Any?>(a))
             }
+            db.execSQL("UPDATE sync_state SET localGeneration=localGeneration+1,updatedAt=? WHERE id=1", arrayOf(now))
         }
         return ConversionResult(accountIds, backupPath)
     }
@@ -102,14 +106,15 @@ class TeamConversionManager @Inject constructor(
     private fun validateTeamAccounts(accountIds: List<Long>) {
         val liveWritable = database.openHelper.writableDatabase
         for (aid in accountIds) {
-            val sharingMode = liveWritable.query(
-                "SELECT sharingMode FROM accounts WHERE id=?",
+            val row = liveWritable.query(
+                "SELECT a.sharingMode,w.localRole FROM accounts a LEFT JOIN team_workspaces w ON w.accountId=a.id WHERE a.id=?",
                 arrayOf(aid.toString()),
             ).use { cursor ->
                 require(cursor.moveToFirst()) { "Akun $aid tidak ditemukan" }
-                cursor.getString(0)
+                cursor.getString(0) to cursor.getString(1)
             }
-            require(sharingMode == AccountSharingMode.TEAM) { "Akun $aid bukan Team" }
+            require(row.first == AccountSharingMode.TEAM) { "Akun $aid bukan Team" }
+            require(row.second == TeamRole.OWNER) { "Hanya Owner yang dapat mengembalikan Team menjadi Private" }
         }
     }
 

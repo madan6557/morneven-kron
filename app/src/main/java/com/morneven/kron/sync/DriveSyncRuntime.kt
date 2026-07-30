@@ -9,6 +9,7 @@ import androidx.activity.result.IntentSenderRequest
 import com.morneven.kron.BuildConfig
 import com.morneven.kron.backup.BackupManager
 import com.morneven.kron.data.KronDatabase
+import com.morneven.kron.security.DatabaseRuntime
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
@@ -18,6 +19,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -249,7 +251,6 @@ class DriveSyncRuntime internal constructor(
     suspend fun syncNow(): SyncRunResult = passphraseOperationMutex.withLock { syncNowLocked() }
 
     private suspend fun syncNowLocked(): SyncRunResult {
-        factory.restartResult()?.let { return it }
         factory.networkBlockedResult()?.let { return it }
         if (!secretStore.isStored() && !secretStore.hasStaged()) return SyncRunResult.PassphraseRequired
         return finalizeStagedPassphrase(coordinator.syncNow())
@@ -265,7 +266,6 @@ class DriveSyncRuntime internal constructor(
         conflict: SyncConflict,
         resolution: ConflictResolution,
     ): SyncRunResult = passphraseOperationMutex.withLock {
-        factory.restartResult()?.let { return it }
         factory.networkBlockedResult()?.let { return it }
         if (!secretStore.isStored() && !secretStore.hasStaged()) return SyncRunResult.PassphraseRequired
         if (
@@ -284,7 +284,6 @@ class DriveSyncRuntime internal constructor(
     }
 
     suspend fun previewConflict(conflict: SyncConflict): ConflictPreviewResult = passphraseOperationMutex.withLock {
-        factory.restartResult()?.let { return@withLock ConflictPreviewResult.Error("KRON perlu dibuka ulang") }
         factory.networkBlockedResult()?.let { return@withLock ConflictPreviewResult.Error(it.message) }
         if (!secretStore.isStored() && !secretStore.hasStaged()) return@withLock ConflictPreviewResult.PassphraseRequired
         coordinator.previewConflict(conflict).also { result ->
@@ -295,18 +294,12 @@ class DriveSyncRuntime internal constructor(
     }
 
     suspend fun downloadAndApplyLatest(): SyncRunResult = passphraseOperationMutex.withLock {
-        factory.clearRestartRequired()
-        factory.restartResult()?.let { return it }
         factory.networkBlockedResult()?.let { return it }
         if (!secretStore.isStored() && !secretStore.hasStaged()) {
             return SyncRunResult.PassphraseRequired
         }
         val result = coordinator.downloadLatestSnapshot()
         finalizeStagedPassphrase(result)
-    }
-
-    suspend fun suspendForRestart() {
-        factory.deactivate()
     }
 
     suspend fun disconnect() = passphraseOperationMutex.withLock {
@@ -322,10 +315,6 @@ class DriveSyncRuntime internal constructor(
 
     suspend fun updateSyncAccount(account: GoogleAccountIdentity) {
         factory.updateSyncAccount(account)
-    }
-
-    suspend fun clearRestartRequired() {
-        factory.clearRestartRequired()
     }
 
     suspend fun startAccountMigration(account: GoogleAccountIdentity) {
@@ -362,6 +351,7 @@ class DriveSyncRuntime internal constructor(
         }
         return when (verifiedResult) {
             is SyncRunResult.Synchronized,
+            is SyncRunResult.Applied,
             SyncRunResult.NoChanges,
             SyncRunResult.NoData,
             -> {
@@ -385,12 +375,6 @@ class DriveSyncRuntime internal constructor(
                 secretStore.discardStaged()
                 verifiedResult
             }
-            is SyncRunResult.RestartRequired -> {
-                if (!secretStore.commitStaged()) {
-                    secretStore.discardStaged()
-                }
-                verifiedResult
-            }
             SyncRunResult.AuthorizationRequired,
             is SyncRunResult.Conflict,
             -> verifiedResult
@@ -402,17 +386,19 @@ class DriveSyncRuntime internal constructor(
     }
 }
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @Singleton
 class DriveSyncRuntimeFactory @Inject constructor(
     @param:ApplicationContext private val context: Context,
-    private val database: KronDatabase,
+    private val databaseRuntime: DatabaseRuntime,
     private val backupManager: BackupManager,
     private val secretStore: EncryptedSyncSecretStore,
 ) {
+    private val database get() = databaseRuntime.current()
     private val syncPreferences = context.getSharedPreferences(SYNC_PREFERENCES, Context.MODE_PRIVATE)
     private val accountStore = PreferencesSelectedGoogleAccountStore(context)
-    private val stateStore = RoomSyncStateStore(database)
-    private val localSnapshotSource = BackupManagerLocalSnapshotSource(backupManager, database)
+    private val stateStore = RoomSyncStateStore(databaseRuntime)
+    private val localSnapshotSource = BackupManagerLocalSnapshotSource(backupManager, databaseRuntime)
     private val authorizationBridge = PlayServicesAuthorizationClientBridge(context)
     private val driveClient = DriveRestV3AppDataClient()
     private val lifecycleMutex = Mutex()
@@ -452,7 +438,7 @@ class DriveSyncRuntimeFactory @Inject constructor(
         }
         applicationScope.launch {
             var previousGeneration: Long? = null
-            database.kronDao().observeSyncState()
+            databaseRuntime.epoch.flatMapLatest { database.kronDao().observeSyncState() }
                 .filterNotNull()
                 .map { SyncWatch(it.localGeneration, it.lastSyncedGeneration, it.disabledDueToBilling, it.status) }
                 .distinctUntilChanged()
@@ -462,7 +448,7 @@ class DriveSyncRuntimeFactory @Inject constructor(
                     val changed = previousGeneration?.let { it != localGeneration }
                         ?: (localGeneration > lastSyncedGeneration)
                     previousGeneration = localGeneration
-                    if (watch.billingBlocked || watch.status == SyncStatus.RESTART_REQUIRED.name) {
+                    if (watch.billingBlocked) {
                         deactivate()
                     } else if (changed && localGeneration > lastSyncedGeneration && isReady()) {
                         DriveSyncScheduler.scheduleAfterChange(context, isWifiOnly())
@@ -478,9 +464,7 @@ class DriveSyncRuntimeFactory @Inject constructor(
         return installBackgroundIfReady(syncImmediately = false)
     }
 
-    internal suspend fun clearRestartRequired() {
-        stateStore.update { it.copy(status = SyncStatus.IDLE, lastError = null) }
-    }
+    internal suspend fun refreshAfterDatabaseActivation(): Boolean = installBackgroundIfReady(syncImmediately = false)
 
     internal suspend fun updateSyncAccount(account: GoogleAccountIdentity) {
         stateStore.update { it.copy(accountSubject = account.subjectId, accountEmail = account.email) }
@@ -514,12 +498,6 @@ class DriveSyncRuntimeFactory @Inject constructor(
         DriveSyncScheduler.cancel(context)
     }
 
-    internal suspend fun restartResult(): SyncRunResult.RestartRequired? {
-        val state = stateStore.read()
-        if (state.status != SyncStatus.RESTART_REQUIRED) return null
-        return SyncRunResult.RestartRequired(state.lastSnapshotId ?: "pending-restore")
-    }
-
     fun networkBlockMessage(allowMetered: Boolean = false): String? {
         val manager = context.getSystemService(ConnectivityManager::class.java)
         val capabilities = manager.getNetworkCapabilities(manager.activeNetwork)
@@ -543,7 +521,7 @@ class DriveSyncRuntimeFactory @Inject constructor(
         if (!BuildConfig.DRIVE_SYNC_CONFIGURED) return false
         if (!secretStore.isStored() || accountStore.read() == null) return false
         val state = stateStore.read()
-        return !state.disabledDueToBilling && state.status !in setOf(SyncStatus.DISABLED, SyncStatus.RESTART_REQUIRED)
+        return !state.disabledDueToBilling && state.status != SyncStatus.DISABLED
     }
 
     private fun backgroundCoordinator(): DriveSyncCoordinator {

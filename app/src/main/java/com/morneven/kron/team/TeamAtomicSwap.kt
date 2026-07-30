@@ -26,13 +26,13 @@ internal class TeamAtomicSwap private constructor(private val context: Context) 
         writeSynced(readyFile, "$READY_VERSION:${sha256File(stagingDb)}")
     }
 
-    fun applySwap() {
-        if (!swapDir.exists()) return
+    fun applySwap(): Boolean {
+        if (!swapDir.exists()) return false
         if (readyFile.exists()) {
             val metadata = runCatching(::readSwapMetadata).getOrElse {
                 writeSynced(transactionFile, "aborted:invalid-ready-file")
                 deleteSwapDir()
-                return
+                return false
             }
             try {
                 oldDb.delete()
@@ -46,6 +46,7 @@ internal class TeamAtomicSwap private constructor(private val context: Context) 
                 require(sha256File(liveDb) == metadata.dbSha256) { "Database live setelah swap tidak cocok" }
                 writeSynced(transactionFile, "committed:${metadata.dbSha256}")
                 deleteSwapDir()
+                return true
             } catch (e: Exception) {
                 val oldExists = oldDb.exists()
                 if (oldExists) {
@@ -60,6 +61,7 @@ internal class TeamAtomicSwap private constructor(private val context: Context) 
         } else {
             writeSynced(transactionFile, "aborted:no-ready-file")
             deleteSwapDir()
+            return false
         }
     }
 
@@ -136,9 +138,9 @@ internal class TeamAtomicSwap private constructor(private val context: Context) 
         private const val READY_VERSION = 2
         private val SHA256_REGEX = Regex("[0-9a-f]{64}")
 
-        fun applyPendingSwap(context: Context) {
-            TeamAtomicSwap(context).applySwap()
-        }
+        fun applyPendingSwap(context: Context): Boolean = TeamAtomicSwap(context).applySwap()
+
+        fun hasPendingSwap(context: Context): Boolean = File(context.filesDir, SWAP_DIR_NAME).exists()
 
         fun stageReplaceForRestart(context: Context, database: File) {
             TeamAtomicSwap(context).stageReplace(database)
