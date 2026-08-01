@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import com.morneven.kron.data.ActivityRow
 import com.morneven.kron.data.CategoryEntity
 import com.morneven.kron.data.FundingChannel
+import com.morneven.kron.data.PeriodStatus
 import com.morneven.kron.data.TransactionSplitEntity
 import com.morneven.kron.ui.KronUiState
 import com.morneven.kron.ui.components.ChannelBadge
@@ -185,7 +186,7 @@ fun ReportsScreen(
     val prevNet = prevIncome - prevExpense
     val selectedChannel = channel.value
     val filteredAllocations = remember(state.allocations, selectedChannel) {
-        state.allocations.filter { selectedChannel == null || it.fundingChannel == selectedChannel }
+        state.allocations.filter { it.periodStatus != PeriodStatus.CLOSED && (selectedChannel == null || it.fundingChannel == selectedChannel) }
     }
     val periods = remember(filteredAllocations) {
         filteredAllocations

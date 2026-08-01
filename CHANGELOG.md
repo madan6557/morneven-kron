@@ -1,5 +1,9 @@
 # KRON Changelog
 
+## 1.6.3 - 2026-08-01
+
+- Laporan "Aktual per budget" tidak lagi menampilkan periode budget yang sudah ditutup (CLOSED); hanya periode berjalan dan mendatang yang tampil.
+
 ## 1.6.2 - 2026-08-01
 
 - Rollover sisa budget diperbaiki: periode yang sudah lewat dan bersih kini otomatis ditutup dan surplusnya dipindahkan ke Reserve rollover setiap reconcile, termasuk setelah resolusi minus. Periode dengan kategori minus tetap menunggu resolusi sebelum ditutup.
