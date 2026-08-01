@@ -1,5 +1,10 @@
 # KRON Changelog
 
+## 1.6.4 - 2026-08-01
+
+- "Aktivitas terbaru" di beranda kini hanya menampilkan aktivitas jenis uang (sama dengan filter "Uang" di halaman transaksi): pemasukan, pengeluaran, pengeluaran tak terduga, transfer, saldo awal, dan transfer kanal. Aktivitas budget tidak lagi tampil di beranda.
+- Bump versionCode untuk memastikan update diterapkan pada instalasi yang sudah ada.
+
 ## 1.6.3 - 2026-08-01
 
 - Laporan "Aktual per budget" tidak lagi menampilkan periode budget yang sudah ditutup (CLOSED); hanya periode berjalan dan mendatang yang tampil.
