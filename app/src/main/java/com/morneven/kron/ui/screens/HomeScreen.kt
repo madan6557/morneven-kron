@@ -283,9 +283,7 @@ fun HomeScreen(
         }
 
         val financialActivities = state.activities.filter {
-            it.type !in setOf("TRANSFER", "CHANNEL_TRANSFER") &&
-                it.source != "SYSTEM" &&
-                it.type !in setOf("REVERSAL", "ARCHIVE", "RESTORE", "RESTORE_REVERSAL")
+            it.type in setOf("INCOME", "EXPENSE", "UNEXPECTED_EXPENSE", "TRANSFER", "OPENING_BALANCE", "CHANNEL_TRANSFER")
         }
         if (financialActivities.isNotEmpty()) {
             item { SectionHeader("Aktivitas terbaru", "Lihat semua", onAllActivities) }
