@@ -67,6 +67,7 @@ import com.morneven.kron.data.AllocationDraft
 import com.morneven.kron.data.CategoryEntity
 import com.morneven.kron.data.ExpenseSplitInput
 import com.morneven.kron.data.FundingChannel
+import com.morneven.kron.data.PeriodStatus
 import com.morneven.kron.data.TransactionDirection
 import com.morneven.kron.evidence.EvidenceHealth
 import com.morneven.kron.evidence.EvidencePackageManager
@@ -469,7 +470,7 @@ fun PortfolioDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (String
     var name by rememberSaveable { mutableStateOf("") }
     var cadence by rememberSaveable { mutableStateOf("MONTHLY") }
     var plannedIncome by rememberSaveable { mutableStateOf("") }
-    var rollover by rememberSaveable { mutableStateOf(false) }
+    var rollover by rememberSaveable { mutableStateOf(true) }
     var startDate by rememberDate(LocalDate.now())
     var endDate by rememberNullableDate()
     var intervalCount by rememberSaveable { mutableIntStateOf(1) }
@@ -582,11 +583,12 @@ fun BudgetDetailDialog(state: KronUiState, periodId: Long, readOnly: Boolean = f
                             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f))
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 Text("Sisa", style = MaterialTheme.typography.bodyMedium)
+                                val remaining = if (row.periodStatus == PeriodStatus.CLOSED) row.plannedAmount - row.spentAmount else row.availableAmount
                                 Text(
-                                    budgetMoney(row.availableAmount),
+                                    budgetMoney(remaining),
                                     style = MaterialTheme.typography.titleMedium,
-                                    color = if (row.availableAmount < 0) MaterialTheme.colorScheme.error
-                                    else if (row.availableAmount > 0) KronGold
+                                    color = if (remaining < 0) MaterialTheme.colorScheme.error
+                                    else if (remaining > 0) KronGold
                                     else MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                                 if (!readOnly) TextButton(onClick = { correctionId = row.id; correctedAmount = row.plannedAmount.toString() }) { Text("Koreksi") }
@@ -663,9 +665,9 @@ fun BudgetHistoryDialog(
             val rows = periodAllocations.filter { it.periodId == period.id }
             val totalPlanned = rows.sumOf { it.plannedAmount }
             val totalSpent = rows.sumOf { it.spentAmount }
-            val totalRemaining = rows.sumOf { it.availableAmount }
-            val cashRemaining = rows.filter { it.fundingChannel == FundingChannel.CASH }.sumOf { it.availableAmount }
-            val eBudgetRemaining = rows.filter { it.fundingChannel == FundingChannel.EBUDGET }.sumOf { it.availableAmount }
+            val totalRemaining = rows.sumOf { if (it.periodStatus == PeriodStatus.CLOSED) it.plannedAmount - it.spentAmount else it.availableAmount }
+            val cashRemaining = rows.filter { it.fundingChannel == FundingChannel.CASH }.sumOf { if (it.periodStatus == PeriodStatus.CLOSED) it.plannedAmount - it.spentAmount else it.availableAmount }
+            val eBudgetRemaining = rows.filter { it.fundingChannel == FundingChannel.EBUDGET }.sumOf { if (it.periodStatus == PeriodStatus.CLOSED) it.plannedAmount - it.spentAmount else it.availableAmount }
             HudCard(accent = if (totalRemaining < 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {

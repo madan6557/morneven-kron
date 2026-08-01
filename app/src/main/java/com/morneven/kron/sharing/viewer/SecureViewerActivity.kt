@@ -29,36 +29,27 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.activity.compose.setContent
 import androidx.fragment.app.FragmentActivity
-import com.morneven.kron.sharing.onetime.DeviceBindingKeyManager
-import com.morneven.kron.sharing.onetime.ViewCapsuleCodec
+import com.morneven.kron.capsule.CapsuleCodec
+import com.morneven.kron.capsule.CapsuleSnapshot
 import com.morneven.kron.ui.components.formatIdr
-import org.json.JSONArray
-import org.json.JSONObject
 
 class SecureViewerActivity : FragmentActivity() {
     private var capsuleId: String = ""
-    private var keyManager: DeviceBindingKeyManager? = null
-    private var plaintext: ByteArray? = null
+    private var snapshot: CapsuleSnapshot? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-
         capsuleId = intent?.getStringExtra(EXTRA_CAPSULE_ID) ?: ""
-        val encodedCapsule = intent?.getStringExtra(EXTRA_ENCODED_CAPSULE) ?: ""
-
-        if (capsuleId.isEmpty() || encodedCapsule.isEmpty()) {
+        if (capsuleId.isEmpty()) {
             Toast.makeText(this, "Kapsul tidak valid", Toast.LENGTH_SHORT).show()
             finish(); return
         }
-
-        keyManager = DeviceBindingKeyManager(applicationContext)
-
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
-                        Text("Sekali Buka - $capsuleId", style = MaterialTheme.typography.titleMedium)
+                        Text("Kapsul - $capsuleId", style = MaterialTheme.typography.titleMedium)
                         Spacer(Modifier.height(8.dp))
                         Text("Memverifikasi...", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -69,94 +60,105 @@ class SecureViewerActivity : FragmentActivity() {
 
     override fun onStart() {
         super.onStart()
-        if (capsuleId.isNotEmpty()) authenticateAndDecrypt()
+        if (capsuleId.isNotEmpty()) authenticateAndLoad()
     }
 
     override fun onStop() { super.onStop(); zeroize() }
     override fun onDestroy() { super.onDestroy(); zeroize() }
 
-    private fun authenticateAndDecrypt() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) { decryptIfReady(); return }
+    private fun authenticateAndLoad() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) { loadSnapshot(); return }
         val executor = ContextCompat.getMainExecutor(this)
         val prompt = BiometricPrompt(this, executor, object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = decryptIfReady()
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = loadSnapshot()
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                 Toast.makeText(this@SecureViewerActivity, errString, Toast.LENGTH_LONG).show(); finish()
             }
             override fun onAuthenticationFailed() = Toast.makeText(this@SecureViewerActivity, "Gagal", Toast.LENGTH_SHORT).show()
         })
         prompt.authenticate(BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Buka Sekali").setSubtitle("Verifikasi untuk membuka kapsul")
+            .setTitle("Buka Kapsul").setSubtitle("Verifikasi untuk membuka kapsul")
             .setNegativeButtonText("Batal").build())
     }
 
-    private fun decryptIfReady() {
-        val encoded = intent?.getStringExtra(EXTRA_ENCODED_CAPSULE) ?: return
-        val capsule = ViewCapsuleCodec.decodeFromString(encoded) ?: run {
-            Toast.makeText(this, "Kapsul tidak valid", Toast.LENGTH_SHORT).show(); finish(); return
+    private fun loadSnapshot() {
+        val path = intent?.getStringExtra(EXTRA_SNAPSHOT_FILE) ?: run {
+            Toast.makeText(this, "Data kapsul tidak tersedia", Toast.LENGTH_SHORT).show(); finish(); return
         }
-        val result = keyManager?.decryptWithContentKey(capsuleId, capsule.encryptedProjection, capsule.nonce)
-        if (result != null) {
-            plaintext = result
-            val projection = ViewCapsuleCodec.deserializeProjection(result)
-            runOnUiThread { showProjection(projection) }
-        } else {
-            Toast.makeText(this, "Gagal membuka kapsul", Toast.LENGTH_SHORT).show(); finish()
+        val file = java.io.File(path)
+        val bytes = runCatching { file.readBytes() }.getOrNull()
+        if (bytes == null || !file.delete()) {
+            Toast.makeText(this, "Gagal membaca kapsul", Toast.LENGTH_SHORT).show(); finish(); return
         }
+        snapshot = runCatching {
+            CapsuleCodec.deserializeSnapshot(bytes)
+        }.getOrNull()
+        if (snapshot == null) {
+            Toast.makeText(this, "Gagal membaca kapsul", Toast.LENGTH_SHORT).show(); finish(); return
+        }
+        runOnUiThread { showSnapshot(snapshot!!) }
     }
 
-    private fun showProjection(projection: com.morneven.kron.sharing.onetime.ViewProjection) {
-        val summary = runCatching { JSONObject(projection.summaryJson) }.getOrNull()
-        val transactions = runCatching { JSONArray(projection.transactionsJson) }.getOrNull()
-        val budgets = runCatching { JSONArray(projection.budgetsJson) }.getOrNull()
-
+    private fun showSnapshot(snapshot: CapsuleSnapshot) {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
-                        Text("Sekali Buka", style = MaterialTheme.typography.titleMedium)
+                        Text("Kapsul", style = MaterialTheme.typography.titleMedium)
+                        Text(snapshot.accountName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.height(4.dp))
-                        Text(capsuleId, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Mode: ${snapshot.sharingMode}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.height(12.dp))
 
-                        if (summary != null) {
-                            SectionHeader("Ringkasan")
-                            SummaryRow("Pemasukan", formatIdr(summary.optLong("totalIncome")), MaterialTheme.colorScheme.primary)
-                            SummaryRow("Pengeluaran", formatIdr(summary.optLong("totalExpense")), MaterialTheme.colorScheme.error)
-                            SummaryRow("Saldo", formatIdr(summary.optLong("balance")), MaterialTheme.colorScheme.tertiary)
-                        }
+                        SectionHeader("Ringkasan")
+                        SummaryRow("Kas", formatIdr(snapshot.cashBalance))
+                        SummaryRow("Vault", formatIdr(snapshot.vaultBalance))
+                        SummaryRow("Belum dialokasi", formatIdr(snapshot.unallocatedBalance))
 
-                        if (transactions != null && transactions.length() > 0) {
+                        if (snapshot.transactions.isNotEmpty()) {
                             Spacer(Modifier.height(12.dp))
-                            SectionHeader("Transaksi (${transactions.length()})")
-                            for (i in 0 until transactions.length()) {
-                                val t = transactions.getJSONObject(i)
-                                Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                                    Text(t.optString("date", ""), fontSize = 10.sp, modifier = Modifier.width(72.dp))
-                                    Text(t.optString("description", ""), fontSize = 10.sp, modifier = Modifier.weight(1f).padding(horizontal = 4.dp))
-                                    Text(formatIdr(t.optLong("amount")), fontSize = 10.sp,
-                                        color = if (t.optString("type") == "INCOME") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+                            SectionHeader("Transaksi (${snapshot.transactions.size})")
+                            snapshot.transactions.take(50).forEach { t ->
+                                Row(Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+                                    Text(java.time.LocalDate.ofEpochDay(t.effectiveEpochDay).toString(), fontSize = 10.sp, modifier = Modifier.width(72.dp))
+                                    Text(t.title, fontSize = 10.sp, modifier = Modifier.weight(1f).padding(horizontal = 4.dp), maxLines = 1)
+                                    Text(formatIdr(t.amount), fontSize = 10.sp, color = if (t.direction == "INCOME") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
                                 }
                             }
                         }
 
-                        if (budgets != null && budgets.length() > 0) {
+                        if (snapshot.allocations.isNotEmpty()) {
                             Spacer(Modifier.height(12.dp))
-                            SectionHeader("Anggaran (${budgets.length()})")
-                            for (i in 0 until budgets.length()) {
-                                val bg = budgets.getJSONObject(i)
-                                Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                                    Text(bg.optString("category", ""), fontSize = 10.sp, modifier = Modifier.weight(1f))
-                                    Text(
-                                        "${formatIdr(bg.optLong("spent"))} / ${formatIdr(bg.optLong("budget"))}",
-                                        fontSize = 10.sp)
+                            SectionHeader("Anggaran (${snapshot.allocations.size})")
+                            snapshot.allocations.take(20).forEach { a ->
+                                Row(Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+                                    Text(a.categoryName, fontSize = 10.sp, modifier = Modifier.weight(1f))
+                                    Text("${formatIdr(a.spentAmount)} / ${formatIdr(a.plannedAmount)}", fontSize = 10.sp)
                                 }
+                            }
+                        }
+
+                        if (snapshot.portfolios.isNotEmpty()) {
+                            Spacer(Modifier.height(12.dp))
+                            SectionHeader("Portfolio (${snapshot.portfolios.size})")
+                            snapshot.portfolios.forEach { p ->
+                                Row(Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+                                    Text(p.name, fontSize = 10.sp, modifier = Modifier.weight(1f))
+                                    Text("${p.cadence} | ${formatIdr(p.plannedIncome)}", fontSize = 10.sp)
+                                }
+                            }
+                        }
+
+                        if (snapshot.auditEntries.isNotEmpty()) {
+                            Spacer(Modifier.height(12.dp))
+                            SectionHeader("Audit (${snapshot.auditEntries.size})")
+                            snapshot.auditEntries.take(20).forEach { a ->
+                                Text("${a.type} | ${a.actor ?: "-"} | ${a.sealedAt}", fontSize = 9.sp, modifier = Modifier.padding(vertical = 1.dp))
                             }
                         }
 
                         Spacer(Modifier.height(16.dp))
-                        Text("Kapsul hanya dapat dibuka sekali.", style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Kapsul ini adalah snapshot finansial read-only. Tidak menerima pembaruan.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -164,8 +166,7 @@ class SecureViewerActivity : FragmentActivity() {
     }
 
     private fun zeroize() {
-        plaintext?.fill(0); plaintext = null
-        if (capsuleId.isNotEmpty()) keyManager?.deleteContentKey(capsuleId)
+        snapshot = null
     }
 
     @Composable
@@ -175,23 +176,21 @@ class SecureViewerActivity : FragmentActivity() {
     }
 
     @Composable
-    private fun SummaryRow(label: String, value: String, color: androidx.compose.ui.graphics.Color) {
+    private fun SummaryRow(label: String, value: String) {
         Row(Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
             Text(label, modifier = Modifier.weight(1f))
-            Text(value, color = color, fontWeight = FontWeight.SemiBold)
+            Text(value, fontWeight = FontWeight.SemiBold)
         }
     }
 
     companion object {
         private const val EXTRA_CAPSULE_ID = "capsule_id"
-        private const val EXTRA_ENCODED_CAPSULE = "encoded_capsule"
-        private const val EXTRA_MANIFEST_JSON = "manifest_json"
+        private const val EXTRA_SNAPSHOT_FILE = "snapshot_file"
 
-        fun createIntent(context: Context, capsuleId: String, encodedCapsule: String, manifestJson: String = ""): Intent =
+        fun createIntent(context: Context, capsuleId: String, snapshotFile: String): Intent =
             Intent(context, SecureViewerActivity::class.java).apply {
                 putExtra(EXTRA_CAPSULE_ID, capsuleId)
-                putExtra(EXTRA_ENCODED_CAPSULE, encodedCapsule)
-                putExtra(EXTRA_MANIFEST_JSON, manifestJson)
+                putExtra(EXTRA_SNAPSHOT_FILE, snapshotFile)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             }
     }

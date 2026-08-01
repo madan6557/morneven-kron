@@ -721,21 +721,6 @@ class KronRepository private constructor(
         eventId
     }
 
-    suspend fun releaseRolloverToVault(channel: String) = database.withTransaction {
-        val activeId = activeAccountId()
-        val amount = dao.rolloverBalance(channel, activeId)
-        require(amount > 0) { "Reserve rollover kosong" }
-        val eventId = UUID.randomUUID().toString()
-        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.RELEASE, "Reserve rollover kembali ke Main Vault", "Pelepasan dana berlebih", "USER", LocalDate.now().toEpochDay(), accountId = activeId))
-        dao.insertBudgetLines(listOf(
-            BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.ROLLOVER, fundingChannel = channel, amount = -amount, accountId = activeId),
-            BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = channel, amount = amount, accountId = activeId),
-        ))
-        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = "Dana berlebih rollover dikembalikan ke Main Vault", beforeJson = "{\"rollover\":$amount}", afterJson = "{\"vault\":$amount}"))
-        assertInvariant()
-        eventId
-    }
-
     suspend fun correctAllocation(allocationId: Long, newPlannedAmount: Long, note: String) = database.withTransaction {
         require(newPlannedAmount >= 0) { "Nominal budget tidak boleh negatif" }
         val allocation = requireNotNull(dao.allocationById(allocationId))
@@ -754,7 +739,21 @@ class KronRepository private constructor(
             BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = allocation.fundingChannel, amount = -delta, accountId = activeId),
         ))
         dao.updateAllocation(allocation.copy(plannedAmount = newPlannedAmount).bumpRevision())
-        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = note, beforeJson = "{\"planned\":$oldPlanned}", afterJson = "{\"planned\":$newPlannedAmount}"))
+        val period = requireNotNull(dao.periodById(allocation.periodId))
+        val template = dao.templatesForPortfolio(period.portfolioId).firstOrNull { it.categoryId == allocation.categoryId }
+        if (template != null) {
+            val oldCash = template.plannedAmount * template.cashPercentage / 100
+            val newCash = oldCash + (if (allocation.fundingChannel == FundingChannel.CASH) delta else 0)
+            val newTotal = template.plannedAmount + delta
+            val newPercentage = if (newTotal == 0L) 0 else ((newCash * 100) / newTotal).toInt()
+            dao.updateAllocationTemplate(template.copy(
+                plannedAmount = newTotal,
+                cashPercentage = newPercentage,
+                revision = template.revision + 1,
+                updatedAt = System.currentTimeMillis(),
+            ))
+        }
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = note, beforeJson = "{\"planned\":$oldPlanned,\"template\":${template?.plannedAmount ?: 0}}", afterJson = "{\"planned\":$newPlannedAmount,\"template\":${if (template != null) template.plannedAmount + delta else 0}}"))
         refreshPeriodStatus(allocation.periodId)
         assertInvariant()
         eventId
@@ -1072,6 +1071,18 @@ class KronRepository private constructor(
         reconcilePortfolios()
     }
 
+    suspend fun setPortfolioRollover(portfolioId: Long, enabled: Boolean, reason: String = "Pengaturan rollover diubah pengguna") = database.withTransaction {
+        val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == portfolioId })
+        requireActiveAccount(portfolio.accountId)
+        require(!portfolio.isArchived) { "Pulihkan portfolio terlebih dahulu" }
+        if (portfolio.rolloverEnabled == enabled) return@withTransaction
+        dao.updatePortfolio(portfolio.copy(rolloverEnabled = enabled).bumpRevision())
+        val eventId = UUID.randomUUID().toString()
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.SYSTEM, "Rollover ${if (enabled) "diaktifkan" else "dinonaktifkan"}: ${portfolio.name}", reason, "USER", LocalDate.now().toEpochDay(), accountId = portfolio.accountId))
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = reason, beforeJson = "{\"portfolioId\":$portfolioId,\"rollover\":${!enabled}}", afterJson = "{\"portfolioId\":$portfolioId,\"rollover\":$enabled}"))
+        assertInvariant()
+    }
+
     suspend fun archivePortfolio(portfolioId: Long, reason: String) = database.withTransaction {
         require(reason.isNotBlank()) { "Alasan wajib diisi" }
         val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == portfolioId })
@@ -1193,11 +1204,12 @@ class KronRepository private constructor(
             val current = periods.firstOrNull { it.status != PeriodStatus.CLOSED && today.toEpochDay() in it.startEpochDay..it.endEpochDay }
             val firstPeriod = periods.minByOrNull { it.startEpochDay }
             if (firstPeriod != null && today.isBefore(LocalDate.ofEpochDay(firstPeriod.startEpochDay))) return@forEach
+            closeStalePeriods(periods, portfolio, today, activeId)
             if (current != null) {
-                if (current.status == PeriodStatus.DRAFT || current.status == PeriodStatus.UNDERFUNDED) {
-                    val previous = periods.filter { it.endEpochDay < current.startEpochDay }.maxByOrNull { it.endEpochDay }
-                    val previousHasDeficit = previous?.let { period -> dao.allocationIdsForPeriod(period.id).any { dao.allocationAvailable(it) < 0 } } == true
-                    if (!previousHasDeficit && canFundPeriod(current.id)) fundUnderfundedPeriod(current.id)
+                val previous = periods.filter { it.endEpochDay < current.startEpochDay }.maxByOrNull { it.endEpochDay }
+                val previousHasDeficit = previous?.let { period -> dao.allocationIdsForPeriod(period.id).any { dao.allocationAvailable(it) < 0 } } == true
+                if ((current.status == PeriodStatus.DRAFT || current.status == PeriodStatus.UNDERFUNDED) && !previousHasDeficit && canFundPeriod(current.id)) {
+                    fundUnderfundedPeriod(current.id)
                 }
                 return@forEach
             }
@@ -1234,42 +1246,51 @@ class KronRepository private constructor(
                 }
             }
             if (unresolved) return@forEach
-            if (previous != null) {
-                val remaining = dao.allocationsForPeriod(previous.id).mapNotNull { allocation ->
-                    dao.allocationAvailable(allocation.id).takeIf { it > 0 }?.let { Triple(allocation, it, nextAllocations[allocation.categoryId to allocation.fundingChannel]) }
-                }
-                if (remaining.isNotEmpty()) {
-                    val activeId = activeAccountId()
-                    val eventId = UUID.randomUUID().toString()
-                    val rollover = portfolio.rolloverEnabled
-                    dao.insertEvent(ActivityEventEntity(
-                        eventId,
-                        if (rollover) LedgerType.ROLLOVER else LedgerType.RELEASE,
-                        if (rollover) "Rollover ${portfolio.name}" else "Pelepasan sisa ${portfolio.name}",
-                        "Penutupan periode",
-                        "SYSTEM",
-                        today.toEpochDay(),
-                        accountId = activeId,
-                    ))
-                    dao.insertBudgetLines(remaining.flatMap { (allocation, value, targetId) ->
-                        listOf(
-                            BudgetJournalLineEntity(eventId = eventId, allocationId = allocation.id, fundingChannel = allocation.fundingChannel, amount = -value, accountId = activeId),
-                            if (rollover) BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.ROLLOVER, fundingChannel = allocation.fundingChannel, amount = value, accountId = activeId)
-                            else BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = allocation.fundingChannel, amount = value, accountId = activeId),
-                        )
-                    })
-                    dao.insertAudit(AuditSnapshotEntity(
-                        eventId = eventId,
-                        reason = if (rollover) "Sisa dibawa ke periode baru" else "Sisa kembali ke Main Vault",
-                        beforeJson = "{\"periodId\":${previous.id}}",
-                        afterJson = "{\"periodId\":$nextId}",
-                    ))
-                }
-                dao.updatePeriod(previous.copy(status = PeriodStatus.CLOSED).bumpRevision())
-            }
             if (canFundPeriod(nextId)) fundUnderfundedPeriod(nextId)
         }
         assertInvariant()
+    }
+
+    private suspend fun closePreviousPeriod(previous: BudgetPeriodEntity?, portfolio: PortfolioEntity, today: LocalDate, activeId: Long) {
+        if (previous == null || previous.status == PeriodStatus.CLOSED) return
+        val hasDeficit = dao.allocationIdsForPeriod(previous.id).any { dao.allocationAvailable(it) < 0 }
+        if (hasDeficit) return
+        val remaining = dao.allocationsForPeriod(previous.id).mapNotNull { allocation ->
+            dao.allocationAvailable(allocation.id).takeIf { it > 0 }?.let { allocation to it }
+        }
+        if (remaining.isNotEmpty()) {
+            val eventId = UUID.randomUUID().toString()
+            val rollover = portfolio.rolloverEnabled
+            dao.insertEvent(ActivityEventEntity(
+                eventId,
+                if (rollover) LedgerType.ROLLOVER else LedgerType.RELEASE,
+                if (rollover) "Rollover ${portfolio.name}" else "Pelepasan sisa ${portfolio.name}",
+                "Penutupan periode",
+                "SYSTEM",
+                today.toEpochDay(),
+                accountId = activeId,
+            ))
+            dao.insertBudgetLines(remaining.flatMap { (allocation, value) ->
+                listOf(
+                    BudgetJournalLineEntity(eventId = eventId, allocationId = allocation.id, fundingChannel = allocation.fundingChannel, amount = -value, accountId = activeId),
+                    if (rollover) BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.ROLLOVER, fundingChannel = allocation.fundingChannel, amount = value, accountId = activeId)
+                    else BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = allocation.fundingChannel, amount = value, accountId = activeId),
+                )
+            })
+            dao.insertAudit(AuditSnapshotEntity(
+                eventId = eventId,
+                reason = if (rollover) "Sisa dibawa ke periode baru" else "Sisa kembali ke Main Vault",
+                beforeJson = "{\"periodId\":${previous.id}}",
+                afterJson = "{\"periodId\":${previous.id},\"status\":\"CLOSED\"}",
+            ))
+        }
+        dao.updatePeriod(previous.copy(status = PeriodStatus.CLOSED).bumpRevision())
+    }
+
+    private suspend fun closeStalePeriods(periods: List<BudgetPeriodEntity>, portfolio: PortfolioEntity, today: LocalDate, activeId: Long) {
+        periods.filter { it.status != PeriodStatus.CLOSED && it.endEpochDay < today.toEpochDay() }
+            .sortedBy { it.startEpochDay }
+            .forEach { closePreviousPeriod(it, portfolio, today, activeId) }
     }
 
     private suspend fun canFundPeriod(periodId: Long): Boolean {

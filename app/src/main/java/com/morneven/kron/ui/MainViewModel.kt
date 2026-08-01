@@ -21,6 +21,7 @@ import com.morneven.kron.data.ExpenseSplitInput
 import com.morneven.kron.data.EventChannelRow
 import com.morneven.kron.data.FundingChannel
 import com.morneven.kron.data.KronRepository
+import com.morneven.kron.data.PeriodStatus
 import com.morneven.kron.data.PortfolioEntity
 import com.morneven.kron.data.RecurringRuleEntity
 import com.morneven.kron.data.ReceiptEntity
@@ -126,8 +127,8 @@ data class KronUiState(
     val totalCashAssets: Long get() = activeAccountBalance?.cashBalance ?: 0
     val totalEBudgetAssets: Long get() = activeAccountBalance?.eBudgetBalance ?: 0
     val totalVault: Long get() = vaultCash + vaultEBudget
-    val bookedCash: Long get() = allocations.filter { !it.portfolioArchived && it.fundingChannel == FundingChannel.CASH }.sumOf { it.bookedAmount }
-    val bookedEBudget: Long get() = allocations.filter { !it.portfolioArchived && it.fundingChannel == FundingChannel.EBUDGET }.sumOf { it.bookedAmount }
+    val bookedCash: Long get() = allocations.filter { !it.portfolioArchived && it.periodStatus != PeriodStatus.CLOSED && it.fundingChannel == FundingChannel.CASH }.sumOf { it.bookedAmount }
+    val bookedEBudget: Long get() = allocations.filter { !it.portfolioArchived && it.periodStatus != PeriodStatus.CLOSED && it.fundingChannel == FundingChannel.EBUDGET }.sumOf { it.bookedAmount }
     val unresolvedTotal: Long get() = unallocatedCash + unallocatedEBudget
 }
 
@@ -359,7 +360,7 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             combine(repository.allocations, preferences.budgetAlertsEnabled) { allocations, enabled -> allocations to enabled }
                 .collect { (allocations, enabled) ->
-                    if (enabled) budgetNotifier.sync(allocations.filterNot(AllocationBalanceRow::portfolioArchived))
+                    if (enabled) budgetNotifier.sync(allocations.filter { !it.portfolioArchived && it.periodStatus != PeriodStatus.CLOSED })
                 }
         }
         viewModelScope.launch {
@@ -982,6 +983,9 @@ class MainViewModel @Inject constructor(
     fun fundPeriod(periodId: Long) = runAction("Portfolio aktif") { repository.fundUnderfundedPeriod(periodId) }
     fun pausePortfolio(portfolioId: Long, reason: String) = runAction("Portfolio dijeda") { repository.pausePortfolio(portfolioId, reason) }
     fun resumePortfolio(portfolioId: Long, reason: String) = runAction("Portfolio dilanjutkan") { repository.resumePortfolio(portfolioId, reason) }
+    fun setPortfolioRollover(portfolioId: Long, enabled: Boolean) = runAction(if (enabled) "Rollover diaktifkan" else "Rollover dinonaktifkan") {
+        repository.setPortfolioRollover(portfolioId, enabled)
+    }
     fun archivePortfolio(portfolioId: Long, reason: String) = runAction("Portfolio diarsipkan") { repository.archivePortfolio(portfolioId, reason) }
     fun restorePortfolio(portfolioId: Long, activate: Boolean, reason: String) = runAction(if (activate) "Portfolio dipulihkan dan diaktifkan" else "Portfolio dipulihkan") {
         repository.restorePortfolio(portfolioId, activate, reason)
@@ -1001,10 +1005,6 @@ class MainViewModel @Inject constructor(
 
     fun resolveFromRollover(targetId: Long, amount: Long, note: String) = runAction("Reserve rollover menutup overbudget") {
         repository.resolveFromRollover(targetId, amount, note)
-    }
-
-    fun releaseRolloverToVault(channel: String) = runAction("Reserve rollover dikembalikan ke Main Vault") {
-        repository.releaseRolloverToVault(channel)
     }
 
     fun correctAllocation(allocationId: Long, newPlannedAmount: Long, note: String) = runAction("Koreksi budget tercatat") {

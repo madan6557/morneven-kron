@@ -20,6 +20,7 @@ internal object TeamGraphRefresher {
         role: String,
         headSnapshotId: String,
         generation: Long,
+        canShare: Boolean = false,
     ) {
         val sourceScope = TeamSnapshotPruner.validateImported(source, teamId)
         require(sourceScope.generation == generation) { "Generation snapshot Team tidak cocok" }
@@ -47,10 +48,10 @@ internal object TeamGraphRefresher {
                     appendEvents(db, sourceScope.accountId, accountId)
                     db.execSQL(
                         """UPDATE team_workspaces SET folderId=?,localRole=?,liveFileId=?,headSnapshotId=?,generation=?,status='SYNCED',
-                           canRead=1,canWrite=?,canShare=0,capabilitiesVerifiedAt=?,updatedAt=?
+                           canRead=1,canWrite=?,canShare=?,capabilitiesVerifiedAt=?,updatedAt=?
                            WHERE accountId=? AND teamId=?""",
                         arrayOf<Any?>(folderId, role, liveFileId, headSnapshotId, generation, if (role == "VIEWER") 0 else 1,
-                            System.currentTimeMillis(), System.currentTimeMillis(), accountId, teamId),
+                            if (canShare) 1 else 0, System.currentTimeMillis(), System.currentTimeMillis(), accountId, teamId),
                     )
                     require(
                         scalar(
@@ -83,6 +84,7 @@ internal object TeamGraphRefresher {
         role: String,
         remoteSnapshotId: String,
         remoteGeneration: Long,
+        canShare: Boolean = false,
     ) {
         val sourceScope = TeamSnapshotPruner.validateImported(source, teamId)
         require(sourceScope.generation == remoteGeneration) { "Generation snapshot Team tidak cocok" }
@@ -111,10 +113,10 @@ internal object TeamGraphRefresher {
                     appendEvents(db, sourceScope.accountId, accountId)
                     db.execSQL(
                         """UPDATE team_workspaces SET folderId=?,localRole=?,liveFileId=?,headSnapshotId=?,generation=?,status='MERGE_PENDING',
-                           canRead=1,canWrite=?,canShare=0,capabilitiesVerifiedAt=?,updatedAt=?
+                           canRead=1,canWrite=?,canShare=?,capabilitiesVerifiedAt=?,updatedAt=?
                            WHERE accountId=? AND teamId=?""",
                         arrayOf<Any?>(folderId, role, liveFileId, remoteSnapshotId, remoteGeneration + 1,
-                            if (role == "VIEWER") 0 else 1, System.currentTimeMillis(), System.currentTimeMillis(), accountId, teamId),
+                            if (role == "VIEWER") 0 else 1, if (canShare) 1 else 0, System.currentTimeMillis(), System.currentTimeMillis(), accountId, teamId),
                     )
                     requireNoForeignKeyViolations(db, "Relasi hasil gabung Team tidak valid")
                     validateFinancialInvariants(db)

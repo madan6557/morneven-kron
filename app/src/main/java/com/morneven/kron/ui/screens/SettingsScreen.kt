@@ -157,10 +157,12 @@ fun SettingsScreen(
     onLeaveTeam: (() -> Unit)? = null,
     onConvertToPrivate: (() -> Unit)? = null,
     onRunTeamScopeProbe: (() -> Unit)? = null,
-    onCreateOneTimeOffer: (() -> Unit)? = null,
-    onOpenOneTimeCapsule: (() -> Unit)? = null,
-    onViewOneTimeApprovals: (() -> Unit)? = null,
-    oneTimePendingApprovalCount: Int = 0,
+    onCreateCapsule: (() -> Unit)? = null,
+    onOpenCapsule: (() -> Unit)? = null,
+    capsuleSentCount: Int = 0,
+    capsuleReceivedCount: Int = 0,
+    onViewSentCapsules: (() -> Unit)? = null,
+    onViewReceivedCapsules: (() -> Unit)? = null,
     driveSyncConnected: Boolean = false,
 ) {
     var showArchive by rememberSaveable { mutableStateOf(false) }
@@ -328,12 +330,30 @@ fun SettingsScreen(
         item { SectionHeader("Kapsul") }
         item {
             HudCard {
-                Text("Coming Soon", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "Fitur Kapsul belum tersedia dan tidak aktif pada build ini.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Button(
+                    onClick = { onCreateCapsule?.invoke() },
+                    enabled = onCreateCapsule != null,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                ) { Text("Buat Kapsul") }
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { onOpenCapsule?.invoke() },
+                    enabled = onOpenCapsule != null,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                ) { Text("Buka Kapsul") }
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth()) {
+                    TextButton(
+                        onClick = { onViewSentCapsules?.invoke() },
+                        enabled = onViewSentCapsules != null && capsuleSentCount > 0,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Dikirim ($capsuleSentCount)") }
+                    TextButton(
+                        onClick = { onViewReceivedCapsules?.invoke() },
+                        enabled = onViewReceivedCapsules != null && capsuleReceivedCount > 0,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Diterima ($capsuleReceivedCount)") }
+                }
             }
         }
 

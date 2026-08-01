@@ -24,6 +24,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -58,12 +59,12 @@ fun BudgetScreen(
     onResolve: () -> Unit,
     onFund: (Long) -> Unit,
     onChannelTransfer: () -> Unit,
-    onReleaseRollover: (String) -> Unit,
     onDetail: (Long, Boolean) -> Unit,
     onHistory: (Long) -> Unit,
     onPause: (Long) -> Unit,
     onResume: (Long) -> Unit,
     onArchive: (Long) -> Unit,
+    onToggleRollover: (Long, Boolean) -> Unit,
     onRestore: (Long, Boolean) -> Unit,
     readOnly: Boolean = false,
     modifier: Modifier = Modifier,
@@ -120,12 +121,6 @@ fun BudgetScreen(
                         ChannelAmount(FundingChannel.CASH, state.bookedCash, state.valuesVisible, Modifier.weight(1f))
                         ChannelAmount(FundingChannel.EBUDGET, state.bookedEBudget, state.valuesVisible, Modifier.weight(1f))
                     }
-                    if (!readOnly && (state.rolloverCash > 0 || state.rolloverEBudget > 0)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (state.rolloverCash > 0) Button(onClick = { onReleaseRollover(FundingChannel.CASH) }) { Text("Cash ke Vault") }
-                            if (state.rolloverEBudget > 0) Button(onClick = { onReleaseRollover(FundingChannel.EBUDGET) }) { Text("eBudget ke Vault") }
-                        }
-                    }
                     Spacer(Modifier.height(12.dp))
                     Text("Reserve rollover", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.tertiary)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -158,6 +153,7 @@ fun BudgetScreen(
                 ActiveBudgetCard(
                     rows = rows,
                     paused = portfolio.isPaused,
+                    rolloverEnabled = portfolio.rolloverEnabled,
                     hasPortfolioDeficit = state.allocations.any { it.portfolioId == first.portfolioId && it.availableAmount < 0 },
                     visible = state.valuesVisible,
                     onDetail = { onDetail(first.periodId, readOnly) },
@@ -165,6 +161,7 @@ fun BudgetScreen(
                     onPause = { onPause(first.portfolioId) },
                     onResume = { onResume(first.portfolioId) },
                     onArchive = { onArchive(first.portfolioId) },
+                    onToggleRollover = { enabled -> onToggleRollover(first.portfolioId, enabled) },
                     onResolve = onResolve,
                     onFund = { onFund(first.periodId) },
                     readOnly = readOnly,
@@ -221,6 +218,7 @@ fun BudgetScreen(
 private fun ActiveBudgetCard(
     rows: List<AllocationBalanceRow>,
     paused: Boolean,
+    rolloverEnabled: Boolean,
     hasPortfolioDeficit: Boolean,
     visible: Boolean,
     onDetail: () -> Unit,
@@ -228,6 +226,7 @@ private fun ActiveBudgetCard(
     onPause: () -> Unit,
     onResume: () -> Unit,
     onArchive: () -> Unit,
+    onToggleRollover: (Boolean) -> Unit,
     onResolve: () -> Unit,
     onFund: () -> Unit,
     readOnly: Boolean,
@@ -281,6 +280,10 @@ private fun ActiveBudgetCard(
                 }
             } else if (first.periodStatus == PeriodStatus.UNDERFUNDED || first.periodStatus == PeriodStatus.DRAFT) {
                 Button(onClick = onFund, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) { Text("Booking dari Main Vault") }
+            }
+            Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Rollover sisa ke periode berikutnya", style = MaterialTheme.typography.bodyMedium)
+                Switch(checked = rolloverEnabled, onCheckedChange = onToggleRollover)
             }
         }
     }

@@ -201,6 +201,7 @@ class TeamSnapshotCoordinator @Inject constructor(
                 role = workspace.localRole,
                 headSnapshotId = remote.manifest.snapshotId,
                 generation = remote.manifest.generation,
+                canShare = workspace.canShare,
             )
             database.kronDao().markTeamSnapshotStatus(
                 workspace.accountId,
@@ -347,6 +348,7 @@ class TeamSnapshotCoordinator @Inject constructor(
                 role = workspace.localRole,
                 remoteSnapshotId = remote.manifest.snapshotId,
                 remoteGeneration = remote.manifest.generation,
+                canShare = workspace.canShare,
             )
             database.kronDao().markTeamSnapshotStatus(
                 workspace.accountId,

@@ -194,6 +194,7 @@ class BackupManager @Inject constructor(
         role: String,
         headSnapshotId: String,
         generation: Long,
+        canShare: Boolean = false,
     ) = withContext(Dispatchers.IO) {
         require(payload.isNotEmpty() && payload.size.toLong() <= MAX_SYNC_PAYLOAD_BYTES) {
             "Snapshot Team tidak valid atau terlalu besar"
@@ -203,7 +204,7 @@ class BackupManager @Inject constructor(
                 val scope = TeamSnapshotPruner.validateImported(validationFile, teamId)
                 require(scope.generation == generation) { "Generation snapshot Team tidak cocok" }
                 stageTeamDatabaseForRestart(validationFile) { target, source ->
-                    TeamGraphRefresher.refresh(target, source, teamId, folderId, liveFileId, role, headSnapshotId, generation)
+                    TeamGraphRefresher.refresh(target, source, teamId, folderId, liveFileId, role, headSnapshotId, generation, canShare)
                 }
             }
         }
@@ -217,6 +218,7 @@ class BackupManager @Inject constructor(
         role: String,
         remoteSnapshotId: String,
         remoteGeneration: Long,
+        canShare: Boolean = false,
     ) = withContext(Dispatchers.IO) {
         require(payload.isNotEmpty() && payload.size.toLong() <= MAX_SYNC_PAYLOAD_BYTES) {
             "Snapshot Team tidak valid atau terlalu besar"
@@ -227,7 +229,7 @@ class BackupManager @Inject constructor(
                 require(scope.generation == remoteGeneration) { "Generation snapshot Team tidak cocok" }
                 stageTeamDatabaseForRestart(validationFile) { target, source ->
                     TeamGraphRefresher.mergeFork(
-                        target, source, teamId, folderId, liveFileId, role, remoteSnapshotId, remoteGeneration,
+                        target, source, teamId, folderId, liveFileId, role, remoteSnapshotId, remoteGeneration, canShare,
                     )
                 }
             }

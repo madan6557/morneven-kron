@@ -1,5 +1,15 @@
 # KRON Changelog
 
+## 1.6.2 - 2026-08-01
+
+- Rollover sisa budget diperbaiki: periode yang sudah lewat dan bersih kini otomatis ditutup dan surplusnya dipindahkan ke Reserve rollover setiap reconcile, termasuk setelah resolusi minus. Periode dengan kategori minus tetap menunggu resolusi sebelum ditutup.
+- "Dana terbooking" tidak lagi menghitung periode yang sudah ditutup, hanya periode berjalan.
+- Riwayat budget menampilkan sisa aktual periode tertutup (rencana dikurangi terpakai), bukan nilai nol setelah rollover.
+- Pengaturan "Rollover sisa" kini dapat diubah per portfolio; portfolio baru default rollover aktif.
+- Koreksi nominal budget ikut memperbarui template portfolio sehingga periode berikutnya mengikuti nilai terkoreksi.
+- Tombol manual "Cash/eBudget ke Vault" dan "Isi dari Vault" dihapus; rollover berjalan otomatis tanpa campur tangan pengguna.
+- Kapsul One-Time View: perbaikan penandatanganan (base64 case-sensitive, salt, encoding bytes), deteksi gzip sesuai arah pengiriman, dan snapshot dialihkan ke file cache untuk mencegah TransactionTooLargeException serta kebocoran data finansial.
+
 ## 1.6.1 - 2026-07-29
 
 - Menstabilkan Team Account berbasis Google Drive tanpa backend untuk peran Owner, Editor, dan Viewer.

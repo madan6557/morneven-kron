@@ -50,6 +50,8 @@ import com.morneven.kron.sync.DriveSyncRuntime
 import com.morneven.kron.sync.DriveSyncRuntimeFactory
 import com.morneven.kron.sync.DriveSyncScheduler
 import com.morneven.kron.automation.AutomationWorker
+import com.morneven.kron.capsule.CapsuleDriveScopeProbe
+import com.morneven.kron.capsule.CapsuleDriveScopeProbeFactory
 import com.morneven.kron.team.TeamDriveScopeProbe
 import com.morneven.kron.team.TeamDriveScopeProbeFactory
 import com.morneven.kron.team.TeamSyncRuntime
@@ -70,11 +72,13 @@ class MainActivity : FragmentActivity() {
     private val viewModel: MainViewModel by viewModels()
     @Inject lateinit var driveSyncRuntimeFactory: Lazy<DriveSyncRuntimeFactory>
     @Inject lateinit var teamDriveScopeProbeFactory: Lazy<TeamDriveScopeProbeFactory>
+    @Inject lateinit var capsuleDriveScopeProbeFactory: Lazy<CapsuleDriveScopeProbeFactory>
     @Inject lateinit var teamSyncRuntime: Lazy<TeamSyncRuntime>
     @Inject lateinit var databaseRuntime: DatabaseRuntime
 
     private var driveSyncRuntime: DriveSyncRuntime? = null
     private var teamDriveScopeProbe: TeamDriveScopeProbe? = null
+    private var capsuleDriveScopeProbe: CapsuleDriveScopeProbe? = null
     private lateinit var bootstrapManager: DatabaseBootstrapManager
     private lateinit var preUpgradeBackupManager: PreUpgradeBackupManager
     private var pendingBackupPassword: CharArray? = null
@@ -215,12 +219,18 @@ class MainActivity : FragmentActivity() {
                 } else {
                     null
                 }
+                capsuleDriveScopeProbe = if (BuildConfig.DRIVE_SYNC_CONFIGURED) {
+                    runCatching { capsuleDriveScopeProbeFactory.get().create(this@MainActivity, driveSyncRuntime) }.getOrNull()
+                } else {
+                    null
+                }
                 setContent {
                     KronApp(
                         viewModel = viewModel,
                         activity = this@MainActivity,
                         driveSyncRuntime = driveSyncRuntime,
                         teamDriveScopeProbe = teamDriveScopeProbe,
+                        capsuleDriveScopeProbe = capsuleDriveScopeProbe,
                         onApplyStagedSnapshot = ::applyStagedSnapshot,
                     )
                 }

@@ -156,6 +156,7 @@ import com.morneven.kron.sync.GoogleAccountIdentity
 import com.morneven.kron.sync.SyncConflict
 import com.morneven.kron.sync.SyncConflictReason
 import com.morneven.kron.sync.SyncRunResult
+import com.morneven.kron.capsule.CapsuleDriveScopeProbe
 import com.morneven.kron.team.TeamDriveScopeProbe
 import com.morneven.kron.team.TeamScopeProbeResult
 import com.morneven.kron.ui.theme.KronTheme
@@ -189,6 +190,7 @@ fun KronApp(
     activity: FragmentActivity,
     driveSyncRuntime: DriveSyncRuntime?,
     teamDriveScopeProbe: TeamDriveScopeProbe?,
+    capsuleDriveScopeProbe: CapsuleDriveScopeProbe?,
     onApplyStagedSnapshot: suspend () -> Result<Unit>,
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -307,7 +309,7 @@ fun KronApp(
         if (locked) {
             LockScreen(lockError, state.authFailures, state.authLockedUntil, authenticate)
         } else {
-            MainScaffold(state, viewModel, activity, driveSyncRuntime, teamDriveScopeProbe, onApplyStagedSnapshot)
+            MainScaffold(state, viewModel, activity, driveSyncRuntime, teamDriveScopeProbe, capsuleDriveScopeProbe, onApplyStagedSnapshot)
         }
     }
 }
@@ -319,6 +321,7 @@ private fun MainScaffold(
     activity: FragmentActivity,
     driveSyncRuntime: DriveSyncRuntime?,
     teamDriveScopeProbe: TeamDriveScopeProbe?,
+    capsuleDriveScopeProbe: CapsuleDriveScopeProbe?,
     onApplyStagedSnapshot: suspend () -> Result<Unit>,
 ) {
     val navController = rememberNavController()
@@ -409,21 +412,31 @@ private fun MainScaffold(
     var showCollaboratorDialog by rememberSaveable { mutableStateOf(false) }
     var collaboratorBusy by remember { mutableStateOf(false) }
     var collaboratorConfirmRemove by remember { mutableStateOf<TeamMemberEntity?>(null) }
-    var showOneTimeOfferDialog by rememberSaveable { mutableStateOf(false) }
-    var oneTimeOfferCode by rememberSaveable { mutableStateOf<String?>(null) }
-    var showOneTimeOpenDialog by rememberSaveable { mutableStateOf(false) }
-    var oneTimeCapsuleCode by rememberSaveable { mutableStateOf("") }
+    var showCapsuleCreateDialog by rememberSaveable { mutableStateOf(false) }
+    var capsuleCreateBusy by remember { mutableStateOf(false) }
+    var capsuleTargetEmail by rememberSaveable { mutableStateOf("") }
+    var capsuleCreatedCode by rememberSaveable { mutableStateOf<String?>(null) }
+    var showCapsuleOpenDialog by rememberSaveable { mutableStateOf(false) }
+    var capsuleOpenCode by rememberSaveable { mutableStateOf("") }
+    var capsuleOpenBusy by remember { mutableStateOf(false) }
+    var showCapsuleSentDialog by rememberSaveable { mutableStateOf(false) }
+    var showCapsuleReceivedDialog by rememberSaveable { mutableStateOf(false) }
+    var capsuleSentRecords by remember { mutableStateOf<List<com.morneven.kron.capsule.CapsuleRecord>>(emptyList()) }
+    var capsuleReceivedRecords by remember { mutableStateOf<List<com.morneven.kron.capsule.CapsuleRecord>>(emptyList()) }
+    var pendingCapsuleAuthorization by remember { mutableStateOf<com.morneven.kron.sync.DriveConnectResult.UserActionRequired?>(null) }
+    var pendingCapsulePickerResolution by rememberSaveable { mutableStateOf<String?>(null) }
+    var capsuleOpenToken by remember { mutableStateOf<String?>(null) }
     var isAccountSwitching by remember { mutableStateOf(false) }
     var restartRequired by rememberSaveable { mutableStateOf(false) }
     var applyingSnapshot by remember { mutableStateOf(false) }
-    val oneTimeOfferManager = remember {
-        com.morneven.kron.sharing.onetime.OneTimeOfferManager(activity.applicationContext)
+    val capsuleManager = remember {
+        com.morneven.kron.capsule.CapsuleManager(
+            activity.applicationContext,
+            com.morneven.kron.audit.EvidenceSigningKeyManager(),
+            com.morneven.kron.capsule.CapsuleDriveClient(),
+            com.morneven.kron.capsule.CapsuleStore(activity.applicationContext),
+        )
     }
-    var oneTimeScopeBusy by remember { mutableStateOf(false) }
-    var oneTimeSelectedScope by rememberSaveable { mutableStateOf("Last30Days") }
-    var showOneTimeScopePicker by rememberSaveable { mutableStateOf(false) }
-    var showOneTimeApprovalDialog by remember { mutableStateOf(false) }
-    var oneTimePendingApprovals by remember { mutableStateOf<List<com.morneven.kron.sharing.onetime.OfferRecord>>(emptyList()) }
     var cloudWifiOnly by rememberSaveable(driveSyncRuntime) {
         mutableStateOf(driveSyncRuntime?.isWifiOnly() ?: false)
     }
@@ -715,6 +728,101 @@ private fun MainScaffold(
                 teamProbeMessage = "Permintaan scope Team sudah tidak berlaku."
             }
     }
+    val capsuleAuthorizationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result ->
+        android.util.Log.e("KRON_CAPSULE", "capsuleAuthLauncher: code=${result.resultCode}, data=${result.data != null}")
+        val pending = pendingCapsuleAuthorization
+        pendingCapsuleAuthorization = null
+        if (pending != null && capsuleDriveScopeProbe != null) {
+            scope.launch {
+                runCatching {
+                    capsuleDriveScopeProbe.completeAuthorization(
+                        account = pending.account,
+                        resolutionId = pending.resolutionId,
+                        resultCode = result.resultCode,
+                        data = result.data,
+                    )
+                }.onSuccess { connectResult ->
+                    android.util.Log.e("KRON_CAPSULE", "completeAuth success: ${connectResult::class.simpleName}")
+                    if (connectResult is DriveConnectResult.Connected) {
+                        viewModel.showMessage("Akun Google terhubung untuk Kapsul")
+                    } else if (connectResult is DriveConnectResult.Failed) {
+                        viewModel.showMessage(connectResult.message)
+                    }
+                }.onFailure { error ->
+                    android.util.Log.e("KRON_CAPSULE", "completeAuth failed", error)
+                    capsuleDriveScopeProbe.cancelAuthorization(pending.resolutionId)
+                    viewModel.showMessage(error.message ?: "Gagal mendapatkan izin Drive")
+                }
+            }
+        }
+    }
+    LaunchedEffect(pendingCapsuleAuthorization?.resolutionId) {
+        val pending = pendingCapsuleAuthorization ?: return@LaunchedEffect
+        val probe = capsuleDriveScopeProbe ?: return@LaunchedEffect
+        android.util.Log.e("KRON_CAPSULE", "LaunchedEffect: resolutionId=${pending.resolutionId}")
+        runCatching { probe.authorizationRequest(pending.resolutionId) }
+            .onSuccess { intentSender ->
+                android.util.Log.e("KRON_CAPSULE", "LaunchedEffect: launching intentSender")
+                capsuleAuthorizationLauncher.launch(intentSender)
+            }
+            .onFailure {
+                android.util.Log.e("KRON_CAPSULE", "LaunchedEffect: failed", it)
+                pendingCapsuleAuthorization = null
+                probe.cancelAuthorization(pending.resolutionId)
+            }
+    }
+    val capsulePickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result ->
+        val resolutionId = pendingCapsulePickerResolution
+        pendingCapsulePickerResolution = null
+        if (resolutionId != null && capsuleDriveScopeProbe != null) {
+            capsuleOpenBusy = true
+            scope.launch {
+                when (val completion = capsuleDriveScopeProbe.completeFilePicker(resolutionId, result.resultCode, result.data)) {
+                    is DrivePickerCompletionResult.Granted -> {
+                        capsuleOpenToken = completion.accessToken
+                        val tokenResult = DriveAccessTokenResult.Granted(
+                            completion.account, completion.accessToken,
+                        )
+                        val result = capsuleManager.receive(capsuleOpenCode, { tokenResult })
+                        if (result.snapshot != null) {
+                            val json = com.morneven.kron.capsule.CapsuleCodec.serializeSnapshot(result.snapshot)
+                            val viewFile = java.io.File(activity.cacheDir, "capsule-view-${System.currentTimeMillis()}.json")
+                            viewFile.writeText(String(json, Charsets.UTF_8))
+                            showCapsuleOpenDialog = false
+                            activity.startActivity(
+                                com.morneven.kron.sharing.viewer.SecureViewerActivity.createIntent(
+                                    activity, capsuleOpenCode, viewFile.absolutePath,
+                                ),
+                            )
+                        } else {
+                            viewModel.showMessage(result.error ?: "Kode tidak valid")
+                        }
+                        capsuleOpenBusy = false
+                    }
+                    is DrivePickerCompletionResult.Failed -> {
+                        capsuleOpenBusy = false
+                        viewModel.showMessage(completion.message)
+                    }
+                }
+            }
+        }
+    }
+    LaunchedEffect(pendingCapsulePickerResolution) {
+        val resolutionId = pendingCapsulePickerResolution ?: return@LaunchedEffect
+        val probe = capsuleDriveScopeProbe ?: return@LaunchedEffect
+        runCatching { probe.authorizationRequest(resolutionId) }
+            .onSuccess(capsulePickerLauncher::launch)
+            .onFailure {
+                pendingCapsulePickerResolution = null
+                probe.cancelAuthorization(resolutionId)
+                capsuleOpenBusy = false
+                viewModel.showMessage("Google Picker Kapsul sudah tidak berlaku")
+            }
+    }
     val teamPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult(),
     ) { result ->
@@ -903,7 +1011,6 @@ private fun MainScaffold(
                     onResolve = { dialog = ActionDialog.RESOLVE },
                     onFund = viewModel::fundPeriod,
                     onChannelTransfer = { dialog = ActionDialog.CHANNEL_TRANSFER },
-                    onReleaseRollover = viewModel::releaseRolloverToVault,
                     onDetail = { periodId, readOnly -> detailPeriod = periodId to readOnly },
                     onHistory = { historyPortfolioId = it },
                     onPause = { portfolioId ->
@@ -926,6 +1033,7 @@ private fun MainScaffold(
                         ) { viewModel.archivePortfolio(portfolioId, it) }
                         criticalReason = ""
                     },
+                    onToggleRollover = viewModel::setPortfolioRollover,
                     onRestore = { portfolioId, activate ->
                         val portfolio = state.archivedPortfolios.firstOrNull { it.id == portfolioId }
                         val rows = state.allocations.filter { it.portfolioId == portfolioId }
@@ -1156,25 +1264,25 @@ private fun MainScaffold(
                             showTeamScopeProbe = true
                         }
                     },
-                    onCreateOneTimeOffer = if (BuildConfig.ONE_TIME_VIEW_ENABLED &&
-                        state.activeAccount?.sharingMode == AccountSharingMode.TEAM &&
-                        state.teamWorkspace?.localRole == TeamRole.OWNER
-                    ) {
-                        { showOneTimeScopePicker = true; oneTimeOfferCode = null; oneTimeSelectedScope = "Last30Days" }
-                    } else null,
-                    onOpenOneTimeCapsule = if (BuildConfig.ONE_TIME_VIEW_ENABLED) {
-                        { showOneTimeOpenDialog = true; oneTimeCapsuleCode = "" }
-                    } else null,
-                    onViewOneTimeApprovals = if (BuildConfig.ONE_TIME_VIEW_ENABLED &&
-                        state.activeAccount?.sharingMode == AccountSharingMode.TEAM &&
-                        state.teamWorkspace?.localRole == TeamRole.OWNER
-                    ) {
-                        {
-                            oneTimePendingApprovals = oneTimeOfferManager.getPendingApprovals()
-                            showOneTimeApprovalDialog = true
-                        }
-                    } else null,
-                    oneTimePendingApprovalCount = oneTimeOfferManager.getPendingApprovals().size,
+                    onCreateCapsule = {
+                        capsuleTargetEmail = ""
+                        capsuleCreatedCode = null
+                        showCapsuleCreateDialog = true
+                    },
+                    onOpenCapsule = {
+                        capsuleOpenCode = ""
+                        showCapsuleOpenDialog = true
+                    },
+                    capsuleSentCount = capsuleManager.listSent().size,
+                    capsuleReceivedCount = capsuleManager.listReceived().size,
+                    onViewSentCapsules = {
+                        capsuleSentRecords = capsuleManager.listSent()
+                        showCapsuleSentDialog = true
+                    },
+                    onViewReceivedCapsules = {
+                        capsuleReceivedRecords = capsuleManager.listReceived()
+                        showCapsuleReceivedDialog = true
+                    },
                     driveSyncConnected = cloudBackupState.status != CloudSyncStatus.UNAVAILABLE &&
                         cloudBackupState.status != CloudSyncStatus.NOT_CONNECTED,
                 )
@@ -1726,23 +1834,27 @@ private fun MainScaffold(
             },
         )
     }
-    if (showOneTimeOfferDialog) {
+    if (showCapsuleCreateDialog) {
         AlertDialog(
-            onDismissRequest = { showOneTimeOfferDialog = false; oneTimeOfferCode = null },
-            title = { Text("Buat Tautan Sekali Buka") },
+            onDismissRequest = { showCapsuleCreateDialog = false; capsuleCreatedCode = null },
+            title = { Text("Buat Kapsul") },
             text = {
-                if (oneTimeOfferCode != null) {
+                if (capsuleCreatedCode != null) {
                     Column {
-                        Text("Tautan berhasil dibuat:", style = MaterialTheme.typography.bodyMedium)
+                        Text("Kapsul berhasil dibuat!", style = MaterialTheme.typography.bodyMedium)
                         Spacer(Modifier.height(8.dp))
-                        Text(oneTimeOfferCode!!, style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(8.dp)
-                                .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)
-                                .padding(8.dp))
+                        SelectionContainer {
+                            Text(capsuleCreatedCode!!, style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(8.dp)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)
+                                    .padding(8.dp))
+                        }
                         Spacer(Modifier.height(8.dp))
-                        Text("Bagikan tautan ini kepada penerima. Tautan hanya dapat digunakan satu kali.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Bagikan kode ini kepada penerima. Kode hanya dapat diklaim dalam 7 hari.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(4.dp))
+                        Text("Kapsul adalah snapshot finansial dan tidak menerima pembaruan.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                } else if (oneTimeScopeBusy) {
+                } else if (capsuleCreateBusy) {
                     Column {
                         CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
                         Spacer(Modifier.height(8.dp))
@@ -1750,96 +1862,93 @@ private fun MainScaffold(
                     }
                 } else {
                     Column {
-                        Text("Pilih rentang data yang akan dibagikan:", style = MaterialTheme.typography.bodyMedium)
+                        Text("Akun sumber: ${state.activeAccount?.name ?: "-"}", style = MaterialTheme.typography.bodyMedium)
                         Spacer(Modifier.height(8.dp))
-                        val scopes = listOf("Last30Days" to "30 Hari Terakhir", "CurrentMonthReport" to "Bulan Ini", "CurrentSummary" to "Semua Data", "CurrentFullSnapshot" to "Full Snapshot")
-                        scopes.forEach { (value, label) ->
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { oneTimeSelectedScope = value }) {
-                                androidx.compose.material3.RadioButton(selected = oneTimeSelectedScope == value, onClick = { oneTimeSelectedScope = value })
-                                Spacer(Modifier.width(8.dp))
-                                Text(label)
-                            }
-                        }
+                        OutlinedTextField(
+                            value = capsuleTargetEmail,
+                            onValueChange = { capsuleTargetEmail = it },
+                            label = { Text("Email penerima") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                         Spacer(Modifier.height(8.dp))
-                        Text("Data akan dienkripsi dan hanya dapat dibuka satu kali pada perangkat penerima.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Data: Seluruh akun (transaksi, anggaran, portfolio, audit)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Kapsul bersifat read-only dan tidak menerima pembaruan.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             },
             confirmButton = {
-                if (oneTimeOfferCode != null) {
-                    TextButton(onClick = { showOneTimeOfferDialog = false; oneTimeOfferCode = null }) { Text("Selesai") }
+                if (capsuleCreatedCode != null) {
+                    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+                    TextButton(onClick = {
+                        clipboard.setText(androidx.compose.ui.text.AnnotatedString(capsuleCreatedCode!!))
+                        viewModel.showMessage("Kode kapsul disalin")
+                    }) { Text("Salin") }
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = {
+                        val sendIntent = Intent().apply {
+                            action = Intent.ACTION_SEND
+                            putExtra(Intent.EXTRA_TEXT, capsuleCreatedCode)
+                            type = "text/plain"
+                        }
+                        activity.startActivity(Intent.createChooser(sendIntent, "Bagikan Kode Kapsul"))
+                    }) { Text("Bagikan") }
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = { showCapsuleCreateDialog = false; capsuleCreatedCode = null }) { Text("Selesai") }
                 } else {
                     TextButton(
                         onClick = {
-                            oneTimeScopeBusy = true
+                            if (capsuleTargetEmail.isBlank()) {
+                                viewModel.showMessage("Masukkan email penerima"); return@TextButton
+                            }
+                            capsuleCreateBusy = true
                             scope.launch {
-                                val driveSubjectId = driveSyncRuntime?.currentAccount()?.subjectId
-                                val result = oneTimeOfferManager.createOffer(state, oneTimeSelectedScope, driveSubjectId)
-                                if (result != null) {
-                                    oneTimeOfferCode = result.code
-                                } else {
-                                    viewModel.showMessage("Gagal membuat kapsul")
+                                val probe = capsuleDriveScopeProbe
+                                val tokenResult = probe?.ensureAuthorized()
+                                    ?: com.morneven.kron.sync.DriveAccessTokenResult.Disconnected
+                                android.util.Log.e("KRON_CAPSULE", "ensureAuthorized result: ${tokenResult::class.simpleName}")
+                                if (tokenResult is com.morneven.kron.sync.DriveAccessTokenResult.UserActionRequired) {
+                                    val account = probe?.getAccount()
+                                    pendingCapsuleAuthorization = com.morneven.kron.sync.DriveConnectResult.UserActionRequired(account, tokenResult.resolutionId)
+                                    capsuleCreateBusy = false
+                                    return@launch
                                 }
-                                oneTimeScopeBusy = false
+                                val account = state.activeAccount ?: return@launch
+                                val result = capsuleManager.create(account, capsuleTargetEmail, "", { tokenResult })
+                                android.util.Log.e("KRON_CAPSULE", "create result: $result")
+                                if (result != null) {
+                                    capsuleCreatedCode = result.code
+                                } else {
+                                    viewModel.showMessage("Gagal membuat kapsul. Periksa koneksi dan akun Google.")
+                                }
+                                capsuleCreateBusy = false
                             }
                         },
-                        enabled = !oneTimeScopeBusy,
-                    ) { Text("Buat Tautan") }
+                        enabled = !capsuleCreateBusy && capsuleTargetEmail.isNotBlank(),
+                    ) { Text("Buat Kapsul") }
                 }
             },
             dismissButton = {
-                if (oneTimeOfferCode == null) {
-                    TextButton(onClick = { showOneTimeOfferDialog = false }) { Text("Batal") }
+                if (capsuleCreatedCode == null) {
+                    TextButton(onClick = { showCapsuleCreateDialog = false }) { Text("Batal") }
                 }
             },
         )
     }
-    if (showOneTimeApprovalDialog) {
+    if (showCapsuleOpenDialog) {
         AlertDialog(
-            onDismissRequest = { showOneTimeApprovalDialog = false },
-            title = { Text("Persetujuan Tertunda") },
-            text = {
-                if (oneTimePendingApprovals.isEmpty()) {
-                    Text("Tidak ada permintaan yang menunggu persetujuan.")
-                } else {
-                    Column {
-                        oneTimePendingApprovals.forEach { record ->
-                            Text("Kode: ${record.code}", style = MaterialTheme.typography.bodyMedium)
-                            Text("Ruang lingkup: ${record.dataScope}", style = MaterialTheme.typography.bodySmall)
-                            Text("Status: ${record.status.name}", style = MaterialTheme.typography.bodySmall)
-                            TextButton(onClick = {
-                                scope.launch {
-                                    if (oneTimeOfferManager.approveAndIssue(record.code)) {
-                                        viewModel.showMessage("Kapsul diterbitkan untuk ${record.code}")
-                                    } else {
-                                        viewModel.showMessage("Gagal menyetujui ${record.code}")
-                                    }
-                                    oneTimePendingApprovals = oneTimeOfferManager.getPendingApprovals()
-                                }
-                            }) { Text("Setujui & Terbitkan") }
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showOneTimeApprovalDialog = false }) { Text("Tutup") }
-            },
-        )
-    }
-    if (showOneTimeOpenDialog) {
-        AlertDialog(
-            onDismissRequest = { showOneTimeOpenDialog = false },
-            title = { Text("Buka Kapsul Sekali") },
+            onDismissRequest = { showCapsuleOpenDialog = false },
+            title = { Text("Buka Kapsul") },
             text = {
                 Column {
-                    Text("Masukkan tautan yang diterima dari pemilik Team:", style = MaterialTheme.typography.bodySmall)
+                    Text("Masukkan kode Kapsul yang diterima:", style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
-                        value = oneTimeCapsuleCode,
-                        onValueChange = { oneTimeCapsuleCode = it.uppercase() },
+                        value = capsuleOpenCode,
+                        onValueChange = { capsuleOpenCode = it },
+                        enabled = !capsuleOpenBusy,
                         label = { Text("Kode kapsul") },
-                        placeholder = { Text("KRONCP1.") },
+                        placeholder = { Text("KRONCAP2.") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -1848,27 +1957,105 @@ private fun MainScaffold(
             confirmButton = {
                 TextButton(
                     onClick = {
+                        capsuleOpenBusy = true
                         scope.launch {
-                            val capsule = oneTimeOfferManager.consume(oneTimeCapsuleCode)
-                            if (capsule != null) {
-                                val encoded = com.morneven.kron.sharing.onetime.ViewCapsuleCodec.encodeToString(capsule)
-                                showOneTimeOpenDialog = false
-                                activity.startActivity(
-                                    com.morneven.kron.sharing.viewer.SecureViewerActivity.createIntent(
-                                        activity, capsule.manifest.capsuleId, encoded
-                                    )
-                                )
-                            } else {
-                                viewModel.showMessage("Kode tidak valid atau kapsul sudah dibuka")
+                            val code = capsuleOpenCode.trim()
+                            val fileId = com.morneven.kron.capsule.CapsuleCodec.extractFileId(code)
+                            if (fileId == null) {
+                                viewModel.showMessage("Kode Kapsul tidak valid")
+                                capsuleOpenBusy = false
+                                return@launch
+                            }
+                            val probe = capsuleDriveScopeProbe
+                            if (probe == null) {
+                                viewModel.showMessage("Google Drive tidak tersedia")
+                                capsuleOpenBusy = false
+                                return@launch
+                            }
+                            when (val picker = probe.openFilePicker(fileId)) {
+                                is com.morneven.kron.sync.DrivePickerStartResult.UserActionRequired -> {
+                                    pendingCapsulePickerResolution = picker.resolutionId
+                                    capsuleOpenBusy = false
+                                }
+                                is com.morneven.kron.sync.DrivePickerStartResult.Failed -> {
+                                    viewModel.showMessage(picker.message)
+                                    capsuleOpenBusy = false
+                                }
                             }
                         }
                     },
-                    enabled = oneTimeCapsuleCode.startsWith("KRONCP1."),
+                    enabled = !capsuleOpenBusy && capsuleOpenCode.startsWith("KRONCAP2."),
                 ) { Text("Buka") }
             },
             dismissButton = {
-                TextButton(onClick = { showOneTimeOpenDialog = false }) { Text("Batal") }
+                TextButton(onClick = { showCapsuleOpenDialog = false }) { Text("Batal") }
             },
+        )
+    }
+    if (showCapsuleSentDialog) {
+        AlertDialog(
+            onDismissRequest = { showCapsuleSentDialog = false },
+            title = { Text("Kapsul Dikirim") },
+            text = {
+                if (capsuleSentRecords.isEmpty()) {
+                    Text("Belum ada Kapsul yang dikirim.")
+                } else {
+                    Column {
+                        capsuleSentRecords.forEach { record ->
+                            Text(record.sourceAccountName, style = MaterialTheme.typography.bodyMedium)
+                            Text("→ ${record.targetEmail}", style = MaterialTheme.typography.bodySmall)
+                            Text("Batas klaim: ${java.time.Instant.ofEpochMilli(record.claimExpiresAt).toString().take(10)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showCapsuleSentDialog = false }) { Text("Tutup") } },
+        )
+    }
+    if (showCapsuleReceivedDialog) {
+        var now by remember { mutableStateOf(System.currentTimeMillis()) }
+        LaunchedEffect(Unit) {
+            while (true) {
+                now = System.currentTimeMillis()
+                kotlinx.coroutines.delay(1000)
+            }
+        }
+        AlertDialog(
+            onDismissRequest = { showCapsuleReceivedDialog = false },
+            title = { Text("Kapsul Diterima") },
+            text = {
+                if (capsuleReceivedRecords.isEmpty()) {
+                    Text("Belum ada Kapsul yang diterima.")
+                } else {
+                    Column {
+                        capsuleReceivedRecords.forEach { record ->
+                            Text(record.sourceAccountName, style = MaterialTheme.typography.bodyMedium)
+                            Text("Status: ${record.status.name}", style = MaterialTheme.typography.bodySmall)
+                            record.openedAt?.let {
+                                Text("Dibuka: ${java.time.Instant.ofEpochMilli(it).toString().take(10)}", style = MaterialTheme.typography.bodySmall)
+                            }
+                            record.expiresAt?.let { exp ->
+                                val remaining = exp - now
+                                if (remaining > 0) {
+                                    val hours = remaining / 3600000
+                                    val minutes = (remaining % 3600000) / 60000
+                                    val seconds = (remaining % 60000) / 1000
+                                    Text(
+                                        "Kedaluwarsa dalam: %02d:%02d:%02d".format(hours, minutes, seconds),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (remaining < 3600000) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                } else {
+                                    Text("Kedaluwarsa", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showCapsuleReceivedDialog = false }) { Text("Tutup") } },
         )
     }
     auditId?.let { id ->
