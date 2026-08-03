@@ -5,6 +5,7 @@ import com.morneven.kron.sync.DriveApiException
 import com.morneven.kron.sync.DriveHttpConnectionFactory
 import com.morneven.kron.sync.DriveJson
 import com.morneven.kron.sync.DriveSnapshotManifest
+import com.morneven.kron.sync.KronDriveNamespace
 import com.morneven.kron.sync.RemoteDriveSnapshot
 import com.morneven.kron.sync.SnapshotManifestCodec
 import com.morneven.kron.sync.readLimited
@@ -50,19 +51,15 @@ class TeamDriveRestClient(
         it.openConnection() as HttpURLConnection
     },
 ) {
+    private val namespace = KronDriveNamespace(endpoint, connectionFactory)
+
     suspend fun createWorkspace(accessToken: String, teamId: String): TeamDriveWorkspace = withContext(Dispatchers.IO) {
         requireIdentifier(teamId, "Team ID")
-        val body = JSONObject()
-            .put("name", "KRON Team")
-            .put("mimeType", FOLDER_MIME_TYPE)
-            .put("writersCanShare", false)
-            .put("appProperties", JSONObject().put("product", "KRON").put("teamId", teamId))
-            .toString()
-        val response = requestJson(
+        val folderId = namespace.ensureTeamWorkspace(accessToken, teamId)
+        val response = request(
             accessToken,
-            URL("$endpoint/drive/v3/files?fields=id,writersCanShare,capabilities(canEdit,canShare,canAddChildren)"),
-            "POST",
-            body,
+            URL("$endpoint/drive/v3/files/${path(folderId)}?fields=id,writersCanShare,capabilities(canEdit,canShare,canAddChildren)"),
+            "GET",
         )
         parseWorkspace(response)
     }

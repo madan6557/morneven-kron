@@ -42,6 +42,11 @@ internal object TeamGraphImporter {
                 "Schema database target Team tidak sesuai"
             }
             db.execSQL("PRAGMA foreign_keys=ON")
+            // The exported live database may still contain sync/append-only
+            // triggers while its sync_state is SYNCING. This file is a
+            // disposable candidate, so remove those triggers before the
+            // import and let Room recreate them after activation.
+            dropStagingTriggers(db)
             db.execSQL("ATTACH DATABASE ? AS team_source", arrayOf(source.absolutePath))
             try {
                 db.beginTransaction()

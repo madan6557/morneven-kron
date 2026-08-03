@@ -66,6 +66,39 @@ class DriveSyncPolicyTest {
     }
 
     @Test
+    fun accountSwitchAuthorizationDoesNotPersistBeforeCommit() = runBlocking {
+        val oldAccount = GoogleAccountIdentity("subject-old", "old@example.com")
+        val newAccount = GoogleAccountIdentity("subject-new", "new@example.com")
+        val store = InMemoryAccountStore(oldAccount)
+        val session = AuthorizationClientDriveSession(
+            accountSelector = null,
+            authorizationClient = object : AuthorizationClientBridge {
+                override suspend fun authorize(
+                    account: GoogleAccountIdentity?,
+                    requestedScopes: Set<String>,
+                    interactive: Boolean,
+                ) = AuthorizationClientResult.Granted("token", 10_000, requestedScopes)
+
+                override suspend fun revokeAccess(account: GoogleAccountIdentity) = Unit
+                override suspend fun clearToken(accessToken: String) = Unit
+            },
+            accountStore = store,
+        )
+
+        assertEquals(
+            DriveConnectResult.Connected(newAccount),
+            session.acceptConnectionResult(
+                newAccount,
+                AuthorizationClientResult.Granted("token", 10_000, setOf(DRIVE_APPDATA_SCOPE)),
+                persistAccount = false,
+            ),
+        )
+        assertEquals(oldAccount, store.read())
+        session.commitSelectedAccount(newAccount)
+        assertEquals(newAccount, store.read())
+    }
+
+    @Test
     fun billingClassifierDoesNotConfuseRateLimitWithBilling() {
         assertTrue(DriveErrorClassifier.toException(403, "billingNotEnabled") is DriveBillingRequiredException)
         val rateLimit = DriveErrorClassifier.toException(429, "rateLimitExceeded")
@@ -158,6 +191,57 @@ class DriveSyncPolicyTest {
         assertEquals(1, applyCalls)
         assertEquals(SyncStatus.SYNCED, stateStore.read().status)
         assertEquals("snapshot-2", stateStore.read().lastSnapshotId)
+    }
+
+    @Test
+    fun malformedPendingSnapshotReturnsInitialChoiceInsteadOfConflict() = runBlocking {
+        val payload = "corrupt-graph".toByteArray()
+        val manifest = DriveSnapshotManifest(
+            datasetId = "remote-dataset",
+            snapshotId = "remote-snapshot",
+            parentSnapshotId = null,
+            generation = 1,
+            sourceDeviceId = "remote-device",
+            schemaVersion = 14,
+            minimumAppVersionCode = 89,
+            createdAtEpochMillis = 1,
+            payloadSha256 = AesGcmDriveSnapshotCryptor.sha256(payload),
+        )
+        val passphrase = "passphrase-aman".toCharArray()
+        val cryptor = AesGcmDriveSnapshotCryptor()
+        val envelope = cryptor.encrypt(manifest, payload, passphrase)
+        val remote = RemoteDriveSnapshot(
+            fileId = "remote-file",
+            name = "snapshot.bin",
+            manifest = manifest,
+            createdAt = java.time.Instant.ofEpochMilli(1),
+            sizeBytes = envelope.size.toLong(),
+        )
+        val stateStore = InMemoryStateStore()
+        val coordinator = DriveSyncCoordinator(
+            authorization = grantedAuthorization(),
+            drive = object : DriveAppDataClient {
+                override suspend fun listSnapshots(accessToken: String) = listOf(remote)
+                override suspend fun uploadSnapshot(accessToken: String, manifest: DriveSnapshotManifest, encryptedEnvelope: ByteArray) = error("Tidak boleh upload")
+                override suspend fun downloadSnapshot(accessToken: String, fileId: String) = envelope.copyOf()
+                override suspend fun deleteSnapshot(accessToken: String, fileId: String) = Unit
+            },
+            local = object : LocalSnapshotSource {
+                override suspend fun describe() = LocalDatasetSnapshot("local-dataset", 1, 14, true)
+                override suspend fun exportSnapshotPayload() = error("Tidak boleh ekspor")
+                override suspend fun previewRemotePayload(payload: ByteArray, manifest: DriveSnapshotManifest): ConflictPreview =
+                    error("FOREIGN KEY constraint failed")
+                override suspend fun applyRemoteAtomically(payload: ByteArray, manifest: DriveSnapshotManifest, account: GoogleAccountIdentity) =
+                    error("Tidak boleh diterapkan")
+            },
+            stateStore = stateStore,
+            secretProvider = SyncSecretProvider { passphrase.copyOf() },
+            cryptor = cryptor,
+            currentAppVersionCode = 91,
+        )
+
+        assertEquals(SyncRunResult.InitialSyncChoiceRequired, coordinator.syncPendingAccount())
+        assertEquals(SyncStatus.DISCONNECTED, stateStore.read().status)
     }
 
     @Test
@@ -257,8 +341,8 @@ class DriveSyncPolicyTest {
         }
     }
 
-    private class InMemoryAccountStore : SelectedGoogleAccountStore {
-        private var value: GoogleAccountIdentity? = null
+    private class InMemoryAccountStore(initial: GoogleAccountIdentity? = null) : SelectedGoogleAccountStore {
+        private var value: GoogleAccountIdentity? = initial
         override suspend fun read() = value
         override suspend fun write(account: GoogleAccountIdentity?) {
             value = account

@@ -25,9 +25,7 @@ class CapsuleDriveScopeProbe internal constructor(
     suspend fun ensureAuthorized(interactive: Boolean = true): DriveAccessTokenResult {
         val account = driveSyncRuntime?.currentAccount()
             ?: return DriveAccessTokenResult.Disconnected
-        android.util.Log.e("KRON_CAPSULE", "ensureAuthorized: interactive=$interactive, account=${account.email}")
         val result = authorizationBridge.authorize(account, setOf(DRIVE_FILE_SCOPE), interactive)
-        android.util.Log.e("KRON_CAPSULE", "ensureAuthorized result: ${result::class.simpleName}")
         return when (result) {
             is AuthorizationClientResult.Granted -> DriveAccessTokenResult.Granted(account, result.accessToken)
             is AuthorizationClientResult.UserActionRequired -> DriveAccessTokenResult.UserActionRequired(result.resolutionId)

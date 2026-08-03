@@ -10,7 +10,9 @@ import com.morneven.kron.BuildConfig
 import com.morneven.kron.backup.BackupManager
 import com.morneven.kron.data.KronDatabase
 import com.morneven.kron.security.DatabaseRuntime
+import com.morneven.kron.team.TeamSyncScheduler
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -37,6 +39,17 @@ class DriveSyncRuntime internal constructor(
     private val factory: DriveSyncRuntimeFactory,
 ) {
     private val passphraseOperationMutex = Mutex()
+    private var pendingAccountSwitch: PendingAccountSwitch? = null
+
+    private data class PendingAccountSwitch(
+        var account: GoogleAccountIdentity?,
+        val previousAccount: GoogleAccountIdentity?,
+        val previousState: SyncState,
+        val previousPassphrase: CharArray?,
+        val previousPrivateSyncReady: Boolean,
+        val previousPrivateTeamInfo: Boolean,
+        var resetDataset: Boolean,
+    )
 
     suspend fun currentAccount(): GoogleAccountIdentity? = authorization.currentAccount()
 
@@ -51,36 +64,59 @@ class DriveSyncRuntime internal constructor(
             return DriveConnectResult.Failed("Konfigurasi OAuth Drive belum tersedia", retryable = false)
         }
         return try {
-            passphraseOperationMutex.withLock { secretStore.stage(passphrase) }
+            // Credential Manager selection is another account-switch entry
+            // point. Prepare the same pending/reset state as the manual
+            // picker before authorization can replace the selected account.
+            val previousAccount = authorization.currentAccount()
+            if (previousAccount == null) {
+                passphraseOperationMutex.withLock { secretStore.stage(passphrase) }
+            } else {
+                prepareAccountSwitch(previousAccount, passphrase)
+            }
             val result = try {
                 authorization.connect()
             } catch (cancelled: CancellationException) {
-                discardUncommittedPassphrase()
+                if (pendingAccountSwitch != null) abortAccountSwitch() else discardUncommittedPassphrase()
                 throw cancelled
             } catch (error: IllegalStateException) {
-                discardUncommittedPassphrase()
+                if (pendingAccountSwitch != null) abortAccountSwitch() else discardUncommittedPassphrase()
                 return DriveConnectResult.Failed(
                     error.message ?: "Akun Google tidak dapat dihubungkan",
                     retryable = false,
                 )
             } catch (_: Exception) {
-                discardUncommittedPassphrase()
+                if (pendingAccountSwitch != null) abortAccountSwitch() else discardUncommittedPassphrase()
                 return DriveConnectResult.Failed(
                     "Akun Google tidak dapat dihubungkan",
                     retryable = true,
                 )
             }
             when (result) {
-                is DriveConnectResult.Connected -> factory.activateAfterConnection()
-                is DriveConnectResult.Failed -> discardUncommittedPassphrase()
-                is DriveConnectResult.UserActionRequired -> Unit
+                is DriveConnectResult.Connected -> {
+                    pendingAccountSwitch?.let {
+                        it.account = result.account
+                        it.resetDataset = accountChanged(previousAccount, result.account)
+                        completeAccountSwitch(result.account)
+                    } ?: factory.activateAfterConnection()
+                }
+                is DriveConnectResult.Failed -> {
+                    if (pendingAccountSwitch != null) abortAccountSwitch() else discardUncommittedPassphrase()
+                }
+                is DriveConnectResult.UserActionRequired -> {
+                    pendingAccountSwitch?.account = result.account
+                    pendingAccountSwitch?.resetDataset = result.account?.let {
+                        accountChanged(previousAccount, it)
+                    } ?: false
+                }
             }
             result
         } catch (cancelled: CancellationException) {
-            kotlinx.coroutines.withContext(NonCancellable) { discardUncommittedPassphrase() }
+            kotlinx.coroutines.withContext(NonCancellable) {
+                if (pendingAccountSwitch != null) abortAccountSwitch() else discardUncommittedPassphrase()
+            }
             throw cancelled
         } catch (error: IllegalStateException) {
-            discardUncommittedPassphrase()
+            if (pendingAccountSwitch != null) abortAccountSwitch() else discardUncommittedPassphrase()
             DriveConnectResult.Failed(
                 error.message ?: "Passphrase Drive tidak dapat disiapkan",
                 retryable = false,
@@ -102,47 +138,88 @@ class DriveSyncRuntime internal constructor(
         }
         val account = GoogleAccountIdentity(email, email, null)
         return try {
-            passphraseOperationMutex.withLock {
-                val hadStored = secretStore.isStored() || secretStore.hasStaged()
-                if (hadStored) {
-                    secretStore.clear()
+            val previousAccount = authorization.currentAccount()
+            if (previousAccount != null) {
+                val resetDataset = !previousAccount.email.equals(account.email, ignoreCase = true) &&
+                    previousAccount.subjectId != account.subjectId
+                passphraseOperationMutex.withLock {
+                    check(pendingAccountSwitch == null) { "Pergantian akun Google masih berlangsung" }
+                    val previousState = factory.readSyncState()
+                    val previousPrivateSyncReady = DriveSyncSwitchGate.isPrivateReady(factory.contextForScheduling())
+                    val previousPrivateTeamInfo = DriveSyncSwitchGate.hasPrivateTeamInfo(factory.contextForScheduling())
+                    val previousPassphrase = secretStore.acquirePassphrase()
+                    try {
+                        factory.beginAccountSwitch()
+                        secretStore.stageReplacement(passphrase)
+                        pendingAccountSwitch = PendingAccountSwitch(
+                            account = account,
+                            previousAccount = previousAccount,
+                            previousState = previousState,
+                            previousPassphrase = previousPassphrase,
+                            previousPrivateSyncReady = previousPrivateSyncReady,
+                            previousPrivateTeamInfo = previousPrivateTeamInfo,
+                            resetDataset = resetDataset,
+                        )
+                    } catch (error: Throwable) {
+                        previousPassphrase?.fill('\u0000')
+                        factory.restoreSyncState(
+                            previousState,
+                            previousPrivateSyncReady,
+                            previousPrivateTeamInfo,
+                        )
+                        factory.endAccountSwitch()
+                        throw error
+                    }
                 }
-                secretStore.stage(passphrase)
+            } else {
+                passphraseOperationMutex.withLock { secretStore.stage(passphrase) }
             }
             val authResult = try {
-                (authorization as? AuthorizationClientDriveSession)?.authorizeAccount(account, interactive = true)
-                    ?: throw IllegalStateException("Authorization session tidak mendukung authorizeAccount")
+                authorization.authorizeAccount(account, interactive = true)
             } catch (cancelled: CancellationException) {
-                discardUncommittedPassphrase()
+                if (previousAccount != null) abortAccountSwitch()
+                else discardUncommittedPassphrase()
                 throw cancelled
             } catch (error: IllegalStateException) {
-                discardUncommittedPassphrase()
+                if (previousAccount != null) abortAccountSwitch()
+                else discardUncommittedPassphrase()
                 return DriveConnectResult.Failed(
                     error.message ?: "Akun Google tidak dapat dihubungkan",
                     retryable = false,
                 )
             } catch (_: Exception) {
-                discardUncommittedPassphrase()
+                if (previousAccount != null) abortAccountSwitch()
+                else discardUncommittedPassphrase()
                 return DriveConnectResult.Failed(
                     "Akun Google tidak dapat dihubungkan",
                     retryable = true,
                 )
             }
-            val result = authorization.acceptConnectionResult(account, authResult)
+            val result = authorization.acceptConnectionResult(
+                account,
+                authResult,
+                persistAccount = previousAccount == null,
+            )
             when (result) {
                 is DriveConnectResult.Connected -> {
-                    factory.updateSyncAccount(account)
-                    factory.activateAfterConnection()
+                    if (previousAccount == null) {
+                        factory.updateSyncAccount(account)
+                        factory.activateAfterConnection()
+                    } else {
+                        completeAccountSwitch(result.account)
+                    }
                 }
-                is DriveConnectResult.Failed -> discardUncommittedPassphrase()
+                is DriveConnectResult.Failed -> if (previousAccount != null) abortAccountSwitch() else discardUncommittedPassphrase()
                 is DriveConnectResult.UserActionRequired -> Unit
             }
             result
         } catch (cancelled: CancellationException) {
-            kotlinx.coroutines.withContext(NonCancellable) { discardUncommittedPassphrase() }
+            kotlinx.coroutines.withContext(NonCancellable) {
+                if (pendingAccountSwitch != null) abortAccountSwitch() else discardUncommittedPassphrase()
+            }
             throw cancelled
         } catch (error: IllegalStateException) {
-            discardUncommittedPassphrase()
+            if (pendingAccountSwitch != null) abortAccountSwitch() else discardUncommittedPassphrase()
             DriveConnectResult.Failed(
                 error.message ?: "Passphrase Drive tidak dapat disiapkan",
                 retryable = false,
@@ -162,34 +239,15 @@ class DriveSyncRuntime internal constructor(
         }
     }
 
-    /**
-     * Switch to a different Google account without clearing the stored passphrase.
-     * The user picks a new account; authorization is re-established for it.
-     * The passphrase on disk is preserved so no re-entry is needed.
-     */
+    /** Switches the selected Google Drive account using the supplied passphrase. */
     suspend fun switchAccount(newEmail: String): DriveConnectResult {
-        if (!BuildConfig.DRIVE_SYNC_CONFIGURED) {
-            return DriveConnectResult.Failed("Konfigurasi OAuth Drive belum tersedia", retryable = false)
+        val passphrase = secretStore.acquirePassphrase()
+            ?: return DriveConnectResult.Failed("Masukkan passphrase Drive untuk akun tujuan", retryable = false)
+        return try {
+            connectWithAccountEmail(newEmail, passphrase)
+        } finally {
+            passphrase.fill('\u0000')
         }
-        val account = GoogleAccountIdentity(newEmail, newEmail, null)
-        val authResult = try {
-            (authorization as? AuthorizationClientDriveSession)?.authorizeAccount(account, interactive = true)
-                ?: return DriveConnectResult.Failed("Authorization session tidak mendukung", retryable = false)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            return DriveConnectResult.Failed("Akun Google tidak dapat dihubungkan", retryable = true)
-        }
-        val result = authorization.acceptConnectionResult(account, authResult)
-        when (result) {
-            is DriveConnectResult.Connected -> {
-                factory.updateSyncAccount(account)
-                factory.activateAfterConnection()
-            }
-            is DriveConnectResult.Failed -> Unit
-            is DriveConnectResult.UserActionRequired -> Unit
-        }
-        return result
     }
 
     fun authorizationRequest(resolutionId: String): IntentSenderRequest =
@@ -202,16 +260,29 @@ class DriveSyncRuntime internal constructor(
         data: Intent?,
     ): DriveConnectResult {
         val bridgeResult = authorizationBridge.completeResolution(resolutionId, resultCode, data)
-        val result = authorization.acceptConnectionResult(account, bridgeResult)
+        val switching = pendingAccountSwitch
+        val result = authorization.acceptConnectionResult(
+            account ?: switching?.account,
+            bridgeResult,
+            persistAccount = switching == null,
+        )
         when (result) {
             is DriveConnectResult.Connected -> {
                 val connectedAccount = result.account
-                factory.updateSyncAccount(connectedAccount)
-                factory.activateAfterConnection()
+                if (switching == null) {
+                    factory.updateSyncAccount(connectedAccount)
+                    factory.activateAfterConnection()
+                } else {
+                    completeAccountSwitch(connectedAccount)
+                }
             }
             is DriveConnectResult.Failed -> {
-                discardUncommittedPassphrase()
-                factory.deactivate()
+                if (switching == null) {
+                    discardUncommittedPassphrase()
+                    factory.deactivate()
+                } else {
+                    abortAccountSwitch()
+                }
             }
             is DriveConnectResult.UserActionRequired -> Unit
         }
@@ -220,8 +291,12 @@ class DriveSyncRuntime internal constructor(
 
     suspend fun cancelAuthorization(resolutionId: String) {
         authorizationBridge.discardResolution(resolutionId)
-        discardUncommittedPassphrase()
-        factory.deactivate()
+        if (pendingAccountSwitch != null) {
+            abortAccountSwitch()
+        } else {
+            discardUncommittedPassphrase()
+            factory.deactivate()
+        }
     }
 
     suspend fun supplyPassphrase(passphrase: CharArray): SyncRunResult = try {
@@ -251,9 +326,53 @@ class DriveSyncRuntime internal constructor(
     suspend fun syncNow(): SyncRunResult = passphraseOperationMutex.withLock { syncNowLocked() }
 
     private suspend fun syncNowLocked(): SyncRunResult {
+        if (factory.isAccountSwitching()) {
+            return SyncRunResult.Error("Pergantian akun Google sedang berlangsung", retryable = true)
+        }
         factory.networkBlockedResult()?.let { return it }
         if (!secretStore.isStored() && !secretStore.hasStaged()) return SyncRunResult.PassphraseRequired
-        return finalizeStagedPassphrase(coordinator.syncNow())
+        ensureSelectedAccountDataset()
+        val pending = DriveSyncSwitchGate.isPending(factory.contextForScheduling())
+        val accountSwitch = DriveSyncSwitchGate.isAccountSwitchPending(factory.contextForScheduling())
+        // A first connection with no account switch still needs an explicit
+        // empty-remote choice. A real account switch is handled separately:
+        // an existing remote dataset is selected as the source of truth.
+        val uninitialized = factory.readSyncState().lastSyncedAtEpochMillis == null
+        val rawResult = if (pending || uninitialized) {
+            coordinator.syncPendingAccount(accountSwitch = accountSwitch)
+        } else {
+            coordinator.syncNow()
+        }
+        if (rawResult == SyncRunResult.InitialSyncChoiceRequired) return rawResult
+        if (pending) {
+            when (rawResult) {
+                is SyncRunResult.Synchronized,
+                is SyncRunResult.Applied,
+                SyncRunResult.NoChanges,
+                SyncRunResult.NoData,
+                -> factory.confirmPendingInitialUpload()
+                else -> Unit
+            }
+        }
+        val result = finalizeStagedPassphrase(rawResult)
+        factory.recordPrivateSyncResult(result)
+        return result
+    }
+
+    /**
+     * A previous APK could persist the old Drive identity before resetting its
+     * dataset metadata. Repair that state at the single sync boundary instead
+     * of letting the decision engine classify the first sync as a conflict.
+     */
+    private suspend fun ensureSelectedAccountDataset() {
+        val selected = authorization.currentAccount() ?: return
+        val state = factory.readSyncState()
+        val changed = state.accountSubject != null &&
+            (state.accountSubject != selected.subjectId ||
+                !state.accountEmail.equals(selected.email, ignoreCase = true))
+        if (changed && !factory.isAccountSwitching()) {
+            factory.switchSyncAccount(selected)
+        }
     }
 
     fun isWifiOnly(): Boolean = factory.isWifiOnly()
@@ -280,7 +399,9 @@ class DriveSyncRuntime internal constructor(
             )
             if (validation != SyncRunResult.NoChanges) return validation
         }
-        finalizeStagedPassphrase(coordinator.resolveConflict(conflict, resolution))
+        val result = finalizeStagedPassphrase(coordinator.resolveConflict(conflict, resolution))
+        factory.recordPrivateSyncResult(result)
+        result
     }
 
     suspend fun previewConflict(conflict: SyncConflict): ConflictPreviewResult = passphraseOperationMutex.withLock {
@@ -299,7 +420,9 @@ class DriveSyncRuntime internal constructor(
             return SyncRunResult.PassphraseRequired
         }
         val result = coordinator.downloadLatestSnapshot()
-        finalizeStagedPassphrase(result)
+        val applied = finalizeStagedPassphrase(result)
+        factory.recordPrivateSyncResult(applied)
+        applied
     }
 
     suspend fun disconnect() = passphraseOperationMutex.withLock {
@@ -376,6 +499,7 @@ class DriveSyncRuntime internal constructor(
                 verifiedResult
             }
             SyncRunResult.AuthorizationRequired,
+            SyncRunResult.InitialSyncChoiceRequired,
             is SyncRunResult.Conflict,
             -> verifiedResult
         }
@@ -384,6 +508,150 @@ class DriveSyncRuntime internal constructor(
     private suspend fun discardUncommittedPassphrase() = passphraseOperationMutex.withLock {
         secretStore.discardStaged()
     }
+
+    /** Uses the local graph as the first dataset for a newly selected account. */
+    suspend fun confirmPendingInitialUpload(): SyncRunResult {
+        return try {
+            val result = passphraseOperationMutex.withLock {
+                factory.networkBlockedResult()?.let { return@withLock it }
+                if (!secretStore.isStored() && !secretStore.hasStaged()) {
+                    return@withLock SyncRunResult.PassphraseRequired
+                }
+                val applied = finalizeStagedPassphrase(coordinator.replaceRemoteWithLocal())
+                factory.recordPrivateSyncResult(applied)
+                applied
+            }
+            if (result is SyncRunResult.Synchronized) factory.confirmPendingInitialUpload()
+            result
+        } finally {
+            factory.installBackgroundIfReady(syncImmediately = false)
+        }
+    }
+
+    /** Keeps the local graph but intentionally starts the remote dataset empty. */
+    suspend fun startFreshPendingAccount(): SyncRunResult {
+        return try {
+            val result = passphraseOperationMutex.withLock {
+                factory.networkBlockedResult()?.let { return@withLock it }
+                // The first connection can still hold a staged passphrase.
+                // Commit it after the explicit empty-remote choice; otherwise
+                // the account appears connected but every later sync asks for
+                // the passphrase again.
+                val fresh = finalizeStagedPassphrase(
+                    coordinator.startFreshRemote(),
+                    noChangesValidated = true,
+                )
+                factory.recordPrivateSyncResult(fresh)
+                fresh
+            }
+            if (result == SyncRunResult.NoChanges) factory.confirmPendingInitialUpload()
+            result
+        } finally {
+            factory.installBackgroundIfReady(syncImmediately = false)
+        }
+    }
+
+    private suspend fun completeAccountSwitch(account: GoogleAccountIdentity) {
+        val pending = pendingAccountSwitch ?: return
+        try {
+            passphraseOperationMutex.withLock {
+                factory.withProcessSyncLock {
+                    check(secretStore.commitStaged()) { "Passphrase Drive tidak dapat disimpan" }
+                    try {
+                        authorization.commitSelectedAccount(account)
+                        if (pending.resetDataset) {
+                            factory.switchSyncAccount(account)
+                        } else {
+                            factory.updateSyncAccount(account)
+                            factory.confirmPendingInitialUpload()
+                        }
+                    } catch (error: Throwable) {
+                        restoreAccountSwitch(pending)
+                        throw error
+                    }
+                }
+            }
+            pending.previousPassphrase?.fill('\u0000')
+            pendingAccountSwitch = null
+            factory.endAccountSwitch()
+        } catch (cancelled: CancellationException) {
+            abortAccountSwitch()
+            throw cancelled
+        } catch (error: Throwable) {
+            abortAccountSwitch()
+            throw error
+        }
+    }
+
+    private suspend fun abortAccountSwitch() {
+        val pending = pendingAccountSwitch ?: run {
+            secretStore.discardStaged()
+            return
+        }
+        try {
+            passphraseOperationMutex.withLock {
+                factory.withProcessSyncLock {
+                    restoreAccountSwitch(pending)
+                }
+            }
+        } finally {
+            pending.previousPassphrase?.fill('\u0000')
+            pendingAccountSwitch = null
+            factory.endAccountSwitch()
+        }
+    }
+
+    private suspend fun restoreAccountSwitch(pending: PendingAccountSwitch) {
+        authorization.restoreSelectedAccount(pending.previousAccount)
+        if (pending.previousPassphrase == null) {
+            secretStore.clear()
+        } else {
+            secretStore.stageReplacement(pending.previousPassphrase)
+            check(secretStore.commitStaged()) { "Passphrase Drive lama tidak dapat dipulihkan" }
+        }
+        factory.restoreSyncState(
+            pending.previousState,
+            pending.previousPrivateSyncReady,
+            pending.previousPrivateTeamInfo,
+        )
+    }
+
+    private suspend fun prepareAccountSwitch(
+        previousAccount: GoogleAccountIdentity,
+        passphrase: CharArray,
+    ) {
+        passphraseOperationMutex.withLock {
+            check(pendingAccountSwitch == null) { "Pergantian akun Google masih berlangsung" }
+            val previousState = factory.readSyncState()
+            val previousPrivateSyncReady = DriveSyncSwitchGate.isPrivateReady(factory.contextForScheduling())
+            val previousPrivateTeamInfo = DriveSyncSwitchGate.hasPrivateTeamInfo(factory.contextForScheduling())
+            val previousPassphrase = secretStore.acquirePassphrase()
+            try {
+                factory.beginAccountSwitch()
+                secretStore.stageReplacement(passphrase)
+                pendingAccountSwitch = PendingAccountSwitch(
+                    account = null,
+                    previousAccount = previousAccount,
+                    previousState = previousState,
+                    previousPassphrase = previousPassphrase,
+                    previousPrivateSyncReady = previousPrivateSyncReady,
+                    previousPrivateTeamInfo = previousPrivateTeamInfo,
+                    resetDataset = false,
+                )
+            } catch (error: Throwable) {
+                previousPassphrase?.fill('\u0000')
+                factory.restoreSyncState(previousState, previousPrivateSyncReady, previousPrivateTeamInfo)
+                factory.endAccountSwitch()
+                throw error
+            }
+        }
+    }
+
+    private fun accountChanged(
+        previous: GoogleAccountIdentity?,
+        current: GoogleAccountIdentity,
+    ): Boolean = previous != null &&
+        (!previous.email.equals(current.email, ignoreCase = true) || previous.subjectId != current.subjectId)
 }
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -398,12 +666,13 @@ class DriveSyncRuntimeFactory @Inject constructor(
     private val syncPreferences = context.getSharedPreferences(SYNC_PREFERENCES, Context.MODE_PRIVATE)
     private val accountStore = PreferencesSelectedGoogleAccountStore(context)
     private val stateStore = RoomSyncStateStore(databaseRuntime)
-    private val localSnapshotSource = BackupManagerLocalSnapshotSource(backupManager, databaseRuntime)
+    private val localSnapshotSource = BackupManagerLocalSnapshotSource(backupManager, databaseRuntime, context)
     private val authorizationBridge = PlayServicesAuthorizationClientBridge(context)
     private val driveClient = DriveRestV3AppDataClient()
     private val lifecycleMutex = Mutex()
     private val processSyncMutex = Mutex()
     private val started = AtomicBoolean(false)
+    private val accountSwitchInProgress = AtomicBoolean(false)
 
     fun create(activity: Activity): DriveSyncRuntime {
         check(BuildConfig.DRIVE_SYNC_CONFIGURED) {
@@ -434,6 +703,7 @@ class DriveSyncRuntimeFactory @Inject constructor(
             return
         }
         applicationScope.launch {
+            initializePrivateSyncGate()
             installBackgroundIfReady(syncImmediately = true)
         }
         applicationScope.launch {
@@ -450,7 +720,8 @@ class DriveSyncRuntimeFactory @Inject constructor(
                     previousGeneration = localGeneration
                     if (watch.billingBlocked) {
                         deactivate()
-                    } else if (changed && localGeneration > lastSyncedGeneration && isReady()) {
+                    } else if (!isAccountSwitching() && !DriveSyncSwitchGate.isPending(context) &&
+                        changed && localGeneration > lastSyncedGeneration && isReady()) {
                         DriveSyncScheduler.scheduleAfterChange(context, isWifiOnly())
                     }
                 }
@@ -467,16 +738,144 @@ class DriveSyncRuntimeFactory @Inject constructor(
     internal suspend fun refreshAfterDatabaseActivation(): Boolean = installBackgroundIfReady(syncImmediately = false)
 
     internal suspend fun updateSyncAccount(account: GoogleAccountIdentity) {
-        stateStore.update { it.copy(accountSubject = account.subjectId, accountEmail = account.email) }
+        stateStore.update {
+            val normalizing = it.status in setOf(SyncStatus.SYNCING, SyncStatus.RESTART_REQUIRED)
+            it.copy(
+                accountSubject = account.subjectId,
+                accountEmail = account.email,
+                status = if (normalizing) SyncStatus.IDLE else it.status,
+                lastError = if (normalizing) null else it.lastError,
+            )
+        }
+    }
+
+    internal suspend fun recordPrivateSyncResult(result: SyncRunResult) {
+        val hasSynced = result is SyncRunResult.Synchronized ||
+            result is SyncRunResult.Applied ||
+            result == SyncRunResult.NoChanges ||
+            result == SyncRunResult.NoData
+        if (!hasSynced) return
+        val teamInfo = when (result) {
+            SyncRunResult.NoData -> false
+            is SyncRunResult.Applied -> DriveSyncSwitchGate.hasRemoteTeamInfo(context)
+            is SyncRunResult.Synchronized -> if (result.uploaded) {
+                database.kronDao().teamAccountCount() > 0
+            } else {
+                DriveSyncSwitchGate.hasRemoteTeamInfo(context)
+            }
+            SyncRunResult.NoChanges -> DriveSyncSwitchGate.hasRemoteTeamInfo(context)
+        }
+        DriveSyncSwitchGate.setPrivateSyncState(context, ready = true, teamInfo = teamInfo)
+        if (teamInfo && !DriveSyncSwitchGate.isPending(context)) {
+            TeamSyncScheduler.schedulePeriodic(context)
+            TeamSyncScheduler.syncNow(context)
+        }
+    }
+
+    private suspend fun initializePrivateSyncGate() {
+        if (DriveSyncSwitchGate.hasPrivateState(context) || DriveSyncSwitchGate.isPending(context)) return
+        val state = stateStore.read()
+        val ready = secretStore.isStored() && state.lastSyncedGeneration >= 0 &&
+            state.lastSyncedAtEpochMillis != null
+        val hasTeam = ready && database.kronDao().teamAccountCount() > 0
+        DriveSyncSwitchGate.setPrivateSyncState(
+            context,
+            ready = ready,
+            teamInfo = hasTeam,
+        )
+        if (hasTeam) {
+            TeamSyncScheduler.schedulePeriodic(context)
+            TeamSyncScheduler.syncNow(context)
+        }
+    }
+
+    internal suspend fun readSyncState(): SyncState = stateStore.read()
+
+    internal suspend fun switchSyncAccount(account: GoogleAccountIdentity) {
+        DriveSyncSwitchGate.setPending(context, true)
+        DriveSyncSwitchGate.setAccountSwitchPending(context, true)
+        DriveSyncSwitchGate.setRemoteTeamInfo(context, false)
+        stateStore.update {
+            it.copy(
+                datasetId = UUID.randomUUID().toString(),
+                lastSyncedGeneration = -1,
+                parentSnapshotId = null,
+                lastSnapshotId = null,
+                lastSyncedAtEpochMillis = null,
+                status = SyncStatus.IDLE,
+                lastError = null,
+                accountSubject = account.subjectId,
+                accountEmail = account.email,
+                conflictRemoteFileId = null,
+            )
+        }
+    }
+
+    internal suspend fun restoreSyncState(
+        state: SyncState,
+        privateReady: Boolean = false,
+        teamInfo: Boolean = false,
+    ) {
+        DriveSyncSwitchGate.setPending(context, false)
+        DriveSyncSwitchGate.setAccountSwitchPending(context, false)
+        DriveSyncSwitchGate.setRemoteTeamInfo(context, teamInfo)
+        DriveSyncSwitchGate.setPrivateSyncState(context, privateReady, teamInfo)
+        stateStore.update { state }
+    }
+
+    internal suspend fun confirmPendingInitialUpload() {
+        DriveSyncSwitchGate.setPending(context, false)
+        DriveSyncSwitchGate.setAccountSwitchPending(context, false)
+    }
+
+    internal suspend fun beginAccountSwitch() {
+        DriveSyncSwitchGate.setPending(context, true)
+        DriveSyncSwitchGate.setAccountSwitchPending(context, true)
+        DriveSyncSwitchGate.setRemoteTeamInfo(context, false)
+        DriveSyncSwitchGate.setPrivateSyncState(context, ready = false, teamInfo = false)
+        accountSwitchInProgress.set(true)
+        lifecycleMutex.withLock {
+            DriveSyncScheduler.cancelScheduledWork(context)
+            DriveSyncServiceLocator.clear()
+            TeamSyncScheduler.cancelScheduledWork(context)
+        }
+        processSyncMutex.withLock { Unit }
+    }
+
+    internal suspend fun endAccountSwitch() {
+        accountSwitchInProgress.set(false)
+        installBackgroundIfReady(syncImmediately = false)
+        if (DriveSyncSwitchGate.isPrivateReady(context) && DriveSyncSwitchGate.hasPrivateTeamInfo(context)) {
+            TeamSyncScheduler.schedulePeriodic(context)
+        } else {
+            TeamSyncScheduler.cancelScheduledWork(context)
+        }
+    }
+
+    internal fun isAccountSwitching(): Boolean = accountSwitchInProgress.get()
+
+    internal suspend fun <T> withProcessSyncLock(block: suspend () -> T): T {
+        processSyncMutex.lock()
+        return try {
+            block()
+        } finally {
+            processSyncMutex.unlock()
+        }
     }
 
     suspend fun installBackgroundIfReady(syncImmediately: Boolean = false): Boolean = lifecycleMutex.withLock {
+        if (isAccountSwitching()) return@withLock false
+        if (DriveSyncSwitchGate.isPending(context)) {
+            DriveSyncScheduler.cancelScheduledWork(context)
+            DriveSyncServiceLocator.clear()
+            return@withLock false
+        }
         if (!isReady()) {
             DriveSyncScheduler.cancel(context)
             return@withLock false
         }
         val coordinator = backgroundCoordinator()
-        DriveSyncServiceLocator.install { coordinator }
+        DriveSyncServiceLocator.install({ coordinator }, observer = ::recordPrivateSyncResult)
         DriveSyncScheduler.schedulePeriodic(context, isWifiOnly())
         if (syncImmediately) DriveSyncScheduler.syncNow(context, isWifiOnly())
         true
@@ -568,5 +967,64 @@ class DriveSyncRuntimeFactory @Inject constructor(
         const val SYNC_PREFERENCES = "kron_drive_sync_settings"
         const val KEY_WIFI_ONLY = "wifi_only"
     }
+
+    internal fun contextForScheduling(): Context = context
+}
+
+/** Blocks background workers between a Google-account switch and its first-upload confirmation. */
+internal object DriveSyncSwitchGate {
+    private const val PREFERENCES = "kron.drive.switch"
+    private const val KEY_PENDING = "pending_initial_upload"
+    private const val KEY_ACCOUNT_SWITCH = "account_switch_pending"
+    private const val KEY_PRIVATE_READY = "private_sync_ready"
+    private const val KEY_PRIVATE_TEAM_INFO = "private_team_info"
+    private const val KEY_REMOTE_TEAM_INFO = "remote_team_info"
+
+    fun setPending(context: Context, pending: Boolean) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_PENDING, pending).commit()
+    }
+
+    fun isPending(context: Context): Boolean = context
+        .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        .getBoolean(KEY_PENDING, false)
+
+    fun setAccountSwitchPending(context: Context, pending: Boolean) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_ACCOUNT_SWITCH, pending).commit()
+    }
+
+    fun isAccountSwitchPending(context: Context): Boolean = context
+        .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        .getBoolean(KEY_ACCOUNT_SWITCH, false)
+
+    fun setPrivateSyncState(context: Context, ready: Boolean, teamInfo: Boolean) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_PRIVATE_READY, ready)
+            .putBoolean(KEY_PRIVATE_TEAM_INFO, teamInfo)
+            .commit()
+    }
+
+    fun hasPrivateState(context: Context): Boolean = context
+        .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        .contains(KEY_PRIVATE_READY)
+
+    fun isPrivateReady(context: Context): Boolean = context
+        .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        .getBoolean(KEY_PRIVATE_READY, false)
+
+    fun hasPrivateTeamInfo(context: Context): Boolean = context
+        .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        .getBoolean(KEY_PRIVATE_TEAM_INFO, false)
+
+    fun setRemoteTeamInfo(context: Context, present: Boolean) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_REMOTE_TEAM_INFO, present).commit()
+    }
+
+    fun hasRemoteTeamInfo(context: Context): Boolean = context
+        .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        .getBoolean(KEY_REMOTE_TEAM_INFO, false)
 }
 

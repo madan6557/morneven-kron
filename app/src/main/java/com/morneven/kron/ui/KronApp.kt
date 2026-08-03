@@ -11,6 +11,10 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.view.WindowManager
 import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,8 +29,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -41,6 +45,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -66,6 +71,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -183,6 +189,34 @@ private val destinations = listOf(
 )
 
 private fun routePosition(route: String?): Int = destinations.indexOfFirst { it.route == route }.takeIf { it >= 0 } ?: 0
+
+@Composable
+private fun AccessCodeField(
+    code: String,
+    label: String,
+    onCopied: () -> Unit,
+) {
+    val clipboard = LocalClipboardManager.current
+    OutlinedTextField(
+        value = code,
+        onValueChange = {},
+        readOnly = true,
+        singleLine = true,
+        label = { Text(label) },
+        trailingIcon = {
+            IconButton(
+                onClick = {
+                    clipboard.setText(AnnotatedString(code))
+                    onCopied()
+                },
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(Icons.Outlined.ContentCopy, contentDescription = "Salin $label")
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
 
 @Composable
 fun KronApp(
@@ -392,6 +426,7 @@ private fun MainScaffold(
     var teamProbeMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var teamProbeBusy by remember { mutableStateOf(false) }
     var teamTokenBusy by remember { mutableStateOf(false) }
+    var privateSyncing by remember { mutableStateOf(false) }
     var recoveredTeamSyncAttempts by remember { mutableStateOf(emptySet<Long>()) }
     var teamGoogleAccountLabel by rememberSaveable { mutableStateOf<String?>(null) }
     var showConvertToTeamConfirm by rememberSaveable { mutableStateOf(false) }
@@ -427,6 +462,8 @@ private fun MainScaffold(
     var pendingCapsulePickerResolution by rememberSaveable { mutableStateOf<String?>(null) }
     var capsuleOpenToken by remember { mutableStateOf<String?>(null) }
     var isAccountSwitching by remember { mutableStateOf(false) }
+    var awaitingDriveConnectionConfirmation by rememberSaveable { mutableStateOf(false) }
+    var pendingDriveUploadConfirmation by rememberSaveable { mutableStateOf(false) }
     var restartRequired by rememberSaveable { mutableStateOf(false) }
     var applyingSnapshot by remember { mutableStateOf(false) }
     val capsuleManager = remember {
@@ -447,7 +484,13 @@ private fun MainScaffold(
         scope.launch {
             val error = onApplyStagedSnapshot().exceptionOrNull()
             if (error == null) {
-                activity.recreate()
+                applyingSnapshot = false
+                cloudConflict = null
+                cloudConflictPreview = null
+                cloudConflictPreviewError = null
+                viewModel.dismissTeamConflict()
+                viewModel.refreshForCurrentDate()
+                viewModel.showMessage("Pembaruan terenkripsi berhasil diterapkan")
             } else {
                 applyingSnapshot = false
                 viewModel.showMessage(error.message ?: "Pembaruan tersinkron tidak dapat diterapkan")
@@ -489,6 +532,7 @@ private fun MainScaffold(
             is SyncRunResult.Applied -> applyStagedSnapshot()
             SyncRunResult.NoChanges -> viewModel.showMessage("Data perangkat dan Drive sudah sama")
             SyncRunResult.NoData -> viewModel.showMessage("Belum ada data yang perlu disinkronkan")
+            SyncRunResult.InitialSyncChoiceRequired -> pendingDriveUploadConfirmation = true
             SyncRunResult.Disabled -> viewModel.showMessage("Sinkronisasi Drive dinonaktifkan")
             SyncRunResult.AuthorizationRequired -> {
                 viewModel.showMessage("Otorisasi Drive perlu diperbarui")
@@ -537,17 +581,32 @@ private fun MainScaffold(
         }
     }
 
+    fun handleCloudConflictResolution(result: SyncRunResult) {
+        // Keep the conflict visible while a staged candidate is activated.
+        // A failed activation must leave the resolver available for retry.
+        when (result) {
+            is SyncRunResult.Synchronized,
+            SyncRunResult.NoChanges,
+            SyncRunResult.NoData,
+            -> {
+                cloudConflict = null
+                cloudConflictPreview = null
+                cloudConflictPreviewError = null
+            }
+            else -> Unit
+        }
+        handleSyncResult(result)
+    }
+
     fun handleConnectResult(result: DriveConnectResult) {
         when (result) {
             is DriveConnectResult.Connected -> {
                 driveSyncRuntime?.let { runtime ->
                     scope.launch {
-                        if (!isAccountSwitching) viewModel.showMessage("Terhubung ke ${result.account.email}")
-                        handleSyncResult(
-                            if (isAccountSwitching) runtime.downloadAndApplyLatest()
-                            else runtime.syncNow()
-                        )
                         isAccountSwitching = false
+                        awaitingDriveConnectionConfirmation = false
+                        viewModel.showMessage("Terhubung ke ${result.account.email}")
+                        handleSyncResult(runtime.syncNow())
                     }
                 }
             }
@@ -555,7 +614,11 @@ private fun MainScaffold(
                 launchedAuthorizationId = null
                 viewModel.setPendingDriveAuthorization(result.account, result.resolutionId)
             }
-            is DriveConnectResult.Failed -> viewModel.showMessage(result.message)
+            is DriveConnectResult.Failed -> {
+                isAccountSwitching = false
+                awaitingDriveConnectionConfirmation = false
+                viewModel.showMessage(result.message)
+            }
         }
     }
 
@@ -672,6 +735,8 @@ private fun MainScaffold(
                     )
                 }.onSuccess(::handleConnectResult)
                     .onFailure {
+                        awaitingDriveConnectionConfirmation = false
+                        isAccountSwitching = false
                         driveSyncRuntime.cancelAuthorization(pending.resolutionId)
                         viewModel.showMessage("Persetujuan Drive tidak dapat diselesaikan. Silakan hubungkan ulang.")
                     }
@@ -688,6 +753,8 @@ private fun MainScaffold(
             .onFailure {
                 viewModel.clearPendingDriveAuthorization()
                 launchedAuthorizationId = null
+                awaitingDriveConnectionConfirmation = false
+                isAccountSwitching = false
                 runtime.cancelAuthorization(pending.resolutionId)
                 viewModel.showMessage("Permintaan otorisasi Drive sudah tidak berlaku")
             }
@@ -731,7 +798,6 @@ private fun MainScaffold(
     val capsuleAuthorizationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult(),
     ) { result ->
-        android.util.Log.e("KRON_CAPSULE", "capsuleAuthLauncher: code=${result.resultCode}, data=${result.data != null}")
         val pending = pendingCapsuleAuthorization
         pendingCapsuleAuthorization = null
         if (pending != null && capsuleDriveScopeProbe != null) {
@@ -744,14 +810,12 @@ private fun MainScaffold(
                         data = result.data,
                     )
                 }.onSuccess { connectResult ->
-                    android.util.Log.e("KRON_CAPSULE", "completeAuth success: ${connectResult::class.simpleName}")
                     if (connectResult is DriveConnectResult.Connected) {
                         viewModel.showMessage("Akun Google terhubung untuk Kapsul")
                     } else if (connectResult is DriveConnectResult.Failed) {
                         viewModel.showMessage(connectResult.message)
                     }
                 }.onFailure { error ->
-                    android.util.Log.e("KRON_CAPSULE", "completeAuth failed", error)
                     capsuleDriveScopeProbe.cancelAuthorization(pending.resolutionId)
                     viewModel.showMessage(error.message ?: "Gagal mendapatkan izin Drive")
                 }
@@ -761,14 +825,9 @@ private fun MainScaffold(
     LaunchedEffect(pendingCapsuleAuthorization?.resolutionId) {
         val pending = pendingCapsuleAuthorization ?: return@LaunchedEffect
         val probe = capsuleDriveScopeProbe ?: return@LaunchedEffect
-        android.util.Log.e("KRON_CAPSULE", "LaunchedEffect: resolutionId=${pending.resolutionId}")
         runCatching { probe.authorizationRequest(pending.resolutionId) }
-            .onSuccess { intentSender ->
-                android.util.Log.e("KRON_CAPSULE", "LaunchedEffect: launching intentSender")
-                capsuleAuthorizationLauncher.launch(intentSender)
-            }
+            .onSuccess(capsuleAuthorizationLauncher::launch)
             .onFailure {
-                android.util.Log.e("KRON_CAPSULE", "LaunchedEffect: failed", it)
                 pendingCapsuleAuthorization = null
                 probe.cancelAuthorization(pending.resolutionId)
             }
@@ -919,22 +978,6 @@ private fun MainScaffold(
                 viewModel.showMessage("Izin file Team sudah tidak berlaku")
             }
     }
-    val accountSwitchLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode != Activity.RESULT_OK || result.data == null) {
-            viewModel.showMessage("Pemilihan akun dibatalkan")
-            return@rememberLauncherForActivityResult
-        }
-        val email = result.data!!.getStringExtra(android.accounts.AccountManager.KEY_ACCOUNT_NAME)
-        val runtime = driveSyncRuntime
-        if (runtime == null) {
-            viewModel.showMessage("Konfigurasi OAuth Drive belum tersedia")
-        } else if (email.isNullOrBlank()) {
-            viewModel.showMessage("Akun tidak dipilih")
-        } else {
-            isAccountSwitching = true
-            scope.launch { handleConnectResult(runtime.switchAccount(email)) }
-        }
-    }
     LaunchedEffect(state.message) {
         state.message?.let {
             snackbar.showSnackbar(it)
@@ -954,17 +997,44 @@ private fun MainScaffold(
     LaunchedEffect(manualRestoreReady) {
         if (manualRestoreReady) restartRequired = true
     }
-    Scaffold(
+        Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
             NavigationBar {
-                destinations.forEach { destination ->
-                    NavigationBarItem(
-                        selected = current == destination.route,
-                        onClick = { navController.navigate(destination.route) { popUpTo("home"); launchSingleTop = true } },
-                        icon = { Icon(destination.icon, contentDescription = destination.label) },
-                        label = { Text(destination.label) },
+                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    val cellWidth = maxWidth / destinations.size
+                    val selectedIndex = routePosition(current).coerceAtLeast(0)
+                    val pillWidth = 64.dp
+                    val pillOffset by animateDpAsState(
+                        targetValue = cellWidth * selectedIndex + (cellWidth - pillWidth) / 2,
+                        animationSpec = tween(220, easing = FastOutSlowInEasing),
+                        label = "navigation-indicator",
                     )
+                    Box(
+                        Modifier
+                            .offset(x = pillOffset, y = 8.dp)
+                            .size(pillWidth, 32.dp)
+                            .background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(24.dp)),
+                    )
+                    Row(Modifier.fillMaxWidth()) {
+                        destinations.forEach { destination ->
+                            NavigationBarItem(
+                                selected = current == destination.route,
+                                onClick = {
+                                    if (current != destination.route) {
+                                        navController.navigate(destination.route) {
+                                            popUpTo("home")
+                                            launchSingleTop = true
+                                        }
+                                    }
+                                },
+                                icon = { Icon(destination.icon, contentDescription = destination.label) },
+                                label = { Text(destination.label) },
+                                colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent),
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
                 }
             }
         },
@@ -975,20 +1045,28 @@ private fun MainScaffold(
             startDestination = "home",
             modifier = Modifier.padding(padding),
             enterTransition = {
-                val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) AnimatedContentTransitionScope.SlideDirection.Left else AnimatedContentTransitionScope.SlideDirection.Right
-                slideIntoContainer(direction, tween(220))
+                if (targetState.destination.route == initialState.destination.route) EnterTransition.None else {
+                    val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) AnimatedContentTransitionScope.SlideDirection.Left else AnimatedContentTransitionScope.SlideDirection.Right
+                    slideIntoContainer(direction, tween(220))
+                }
             },
             exitTransition = {
-                val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) AnimatedContentTransitionScope.SlideDirection.Left else AnimatedContentTransitionScope.SlideDirection.Right
-                slideOutOfContainer(direction, tween(220))
+                if (targetState.destination.route == initialState.destination.route) ExitTransition.None else {
+                    val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) AnimatedContentTransitionScope.SlideDirection.Left else AnimatedContentTransitionScope.SlideDirection.Right
+                    slideOutOfContainer(direction, tween(220))
+                }
             },
             popEnterTransition = {
-                val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) AnimatedContentTransitionScope.SlideDirection.Left else AnimatedContentTransitionScope.SlideDirection.Right
-                slideIntoContainer(direction, tween(220))
+                if (targetState.destination.route == initialState.destination.route) EnterTransition.None else {
+                    val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) AnimatedContentTransitionScope.SlideDirection.Left else AnimatedContentTransitionScope.SlideDirection.Right
+                    slideIntoContainer(direction, tween(220))
+                }
             },
             popExitTransition = {
-                val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) AnimatedContentTransitionScope.SlideDirection.Left else AnimatedContentTransitionScope.SlideDirection.Right
-                slideOutOfContainer(direction, tween(220))
+                if (targetState.destination.route == initialState.destination.route) ExitTransition.None else {
+                    val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) AnimatedContentTransitionScope.SlideDirection.Left else AnimatedContentTransitionScope.SlideDirection.Right
+                    slideOutOfContainer(direction, tween(220))
+                }
             },
         ) {
             composable("home") {
@@ -1101,16 +1179,25 @@ private fun MainScaffold(
                         if (driveSyncRuntime == null) viewModel.showMessage("Konfigurasi OAuth Drive belum tersedia")
                         else passwordMode = "DRIVE_CONNECT"
                     },
-                     onSyncNow = if (state.activeAccount?.sharingMode != AccountSharingMode.TEAM) {
+                    onSyncNow = if (state.activeAccount?.sharingMode != AccountSharingMode.TEAM) {
                          {
-                             driveSyncRuntime?.let { runtime -> scope.launch { handleSyncResult(runtime.syncNow()) } }
+                             if (privateSyncing || applyingSnapshot) return@SettingsScreen
+                             val runtime = driveSyncRuntime ?: return@SettingsScreen
+                             privateSyncing = true
+                             scope.launch {
+                                 try {
+                                     handleSyncResult(runtime.syncNow())
+                                 } finally {
+                                     privateSyncing = false
+                                 }
+                             }
                          }
                      } else null,
                     onSyncTeam = if (state.activeAccount?.sharingMode == AccountSharingMode.TEAM) {
                          {
+                             if (teamTokenBusy || teamSyncing || applyingSnapshot) return@SettingsScreen
+                             teamTokenBusy = true
                              scope.launch {
-                                 if (teamTokenBusy) return@launch
-                                 teamTokenBusy = true
                                  try {
                                  driveSyncRuntime?.teamNetworkBlockMessage()?.let {
                                      viewModel.markTeamWaitingNetwork(it)
@@ -1160,7 +1247,8 @@ private fun MainScaffold(
                              }
                          }
                     } else null,
-                    teamSyncing = teamSyncing || teamTokenBusy,
+                    teamSyncing = teamSyncing || teamTokenBusy || applyingSnapshot,
+                    privateSyncing = privateSyncing || applyingSnapshot,
                     teamSyncDetail = teamSyncDetail,
                     teamSyncFailed = teamSyncFailed,
                     teamWaitingNetwork = teamWaitingNetwork,
@@ -1512,7 +1600,6 @@ private fun MainScaffold(
         )
     }
     if (showCreateInvite) {
-        val clipboard = LocalClipboardManager.current
         var inviteEmail by rememberSaveable { mutableStateOf("") }
         var inviteRole by rememberSaveable { mutableStateOf("EDITOR") }
         var inviteBusy by remember { mutableStateOf(false) }
@@ -1527,14 +1614,7 @@ private fun MainScaffold(
                     Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
                         Text("Kode akses berhasil dibuat:", style = MaterialTheme.typography.bodyMedium)
                         Spacer(Modifier.height(8.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            SelectionContainer(Modifier.weight(1f)) {
-                                Text(inviteCode!!, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(8.dp).background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small).padding(8.dp))
-                            }
-                            IconButton(onClick = { clipboard.setText(AnnotatedString(inviteCode!!)); inviteCopied = true }) {
-                                Icon(Icons.Outlined.ContentCopy, contentDescription = "Salin kode akses")
-                            }
-                        }
+                        AccessCodeField(inviteCode!!, "Kode akses") { inviteCopied = true }
                         Spacer(Modifier.height(4.dp))
                         Text("Bagikan kode ini kepada calon collaborator. Kode hanya berlaku 24 jam.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (inviteCopied) Text("Kode berhasil disalin", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
@@ -1843,11 +1923,8 @@ private fun MainScaffold(
                     Column {
                         Text("Kapsul berhasil dibuat!", style = MaterialTheme.typography.bodyMedium)
                         Spacer(Modifier.height(8.dp))
-                        SelectionContainer {
-                            Text(capsuleCreatedCode!!, style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(8.dp)
-                                    .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)
-                                    .padding(8.dp))
+                        AccessCodeField(capsuleCreatedCode!!, "Kode Kapsul") {
+                            viewModel.showMessage("Kode kapsul disalin")
                         }
                         Spacer(Modifier.height(8.dp))
                         Text("Bagikan kode ini kepada penerima. Kode hanya dapat diklaim dalam 7 hari.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1879,12 +1956,6 @@ private fun MainScaffold(
             },
             confirmButton = {
                 if (capsuleCreatedCode != null) {
-                    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
-                    TextButton(onClick = {
-                        clipboard.setText(androidx.compose.ui.text.AnnotatedString(capsuleCreatedCode!!))
-                        viewModel.showMessage("Kode kapsul disalin")
-                    }) { Text("Salin") }
-                    Spacer(Modifier.width(8.dp))
                     TextButton(onClick = {
                         val sendIntent = Intent().apply {
                             action = Intent.ACTION_SEND
@@ -1906,7 +1977,6 @@ private fun MainScaffold(
                                 val probe = capsuleDriveScopeProbe
                                 val tokenResult = probe?.ensureAuthorized()
                                     ?: com.morneven.kron.sync.DriveAccessTokenResult.Disconnected
-                                android.util.Log.e("KRON_CAPSULE", "ensureAuthorized result: ${tokenResult::class.simpleName}")
                                 if (tokenResult is com.morneven.kron.sync.DriveAccessTokenResult.UserActionRequired) {
                                     val account = probe?.getAccount()
                                     pendingCapsuleAuthorization = com.morneven.kron.sync.DriveConnectResult.UserActionRequired(account, tokenResult.resolutionId)
@@ -1915,7 +1985,6 @@ private fun MainScaffold(
                                 }
                                 val account = state.activeAccount ?: return@launch
                                 val result = capsuleManager.create(account, capsuleTargetEmail, "", { tokenResult })
-                                android.util.Log.e("KRON_CAPSULE", "create result: $result")
                                 if (result != null) {
                                     capsuleCreatedCode = result.code
                                 } else {
@@ -2195,6 +2264,7 @@ private fun MainScaffold(
                         if (mode == "DRIVE_UNLOCK") {
                             handleSyncResult(runtime.supplyPassphrase(passphrase))
                         } else {
+                            awaitingDriveConnectionConfirmation = runtime.currentAccount() == null
                             handleConnectResult(runtime.connect(passphrase))
                         }
                     }
@@ -2254,31 +2324,34 @@ private fun MainScaffold(
             valuesVisible = state.valuesVisible,
             onDismiss = { cloudConflict = null },
             onKeepBoth = {
-                cloudConflict = null
                 driveSyncRuntime?.let { runtime ->
-                    scope.launch { handleSyncResult(runtime.resolveConflict(conflict, ConflictResolution.KEEP_BOTH)) }
+                    scope.launch {
+                        handleCloudConflictResolution(runtime.resolveConflict(conflict, ConflictResolution.KEEP_BOTH))
+                    }
                 }
             },
             onUseDevice = {
-                cloudConflict = null
                 criticalAction = CriticalAction(
                     "Gunakan perangkat ini",
                     "Snapshot aktif Drive akan diganti oleh data perangkat ini. Snapshot pemulihan lama tetap mengikuti kebijakan retensi.",
                 ) {
                     driveSyncRuntime?.let { runtime ->
-                        scope.launch { handleSyncResult(runtime.resolveConflict(conflict, ConflictResolution.USE_THIS_DEVICE)) }
+                        scope.launch {
+                            handleCloudConflictResolution(runtime.resolveConflict(conflict, ConflictResolution.USE_THIS_DEVICE))
+                        }
                     }
                 }
                 criticalReason = ""
             },
             onUseDrive = {
-                cloudConflict = null
                 criticalAction = CriticalAction(
                     "Gunakan Drive",
                     "Data lokal diamankan sebagai snapshot pemulihan sebelum data Drive diterapkan.",
                 ) {
                     driveSyncRuntime?.let { runtime ->
-                        scope.launch { handleSyncResult(runtime.resolveConflict(conflict, ConflictResolution.USE_DRIVE)) }
+                        scope.launch {
+                            handleCloudConflictResolution(runtime.resolveConflict(conflict, ConflictResolution.USE_DRIVE))
+                        }
                     }
                 }
                 criticalReason = ""
@@ -2352,6 +2425,28 @@ private fun MainScaffold(
                 }
             }
         }
+    }
+    if (pendingDriveUploadConfirmation) {
+        AlertDialog(
+            onDismissRequest = { pendingDriveUploadConfirmation = false },
+            title = { Text("Pilih awal akun Google ini") },
+            text = { Text("Database lokal tidak dihapus. Gunakan data lokal untuk menghapus snapshot privat akun tujuan lalu mengunggah salinan lokal. Mulai fresh akan menghapus snapshot privat akun tujuan dan membiarkan Drive kosong.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDriveUploadConfirmation = false
+                    driveSyncRuntime?.let { runtime -> scope.launch { handleSyncResult(runtime.confirmPendingInitialUpload()) } }
+                }) { Text("Gunakan data lokal") }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = {
+                        pendingDriveUploadConfirmation = false
+                        driveSyncRuntime?.let { runtime -> scope.launch { handleSyncResult(runtime.startFreshPendingAccount()) } }
+                    }) { Text("Mulai fresh") }
+                    TextButton(onClick = { pendingDriveUploadConfirmation = false }) { Text("Nanti") }
+                }
+            },
+        )
     }
     LaunchedEffect(restartRequired) {
         if (!restartRequired) return@LaunchedEffect

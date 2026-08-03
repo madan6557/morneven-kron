@@ -1,6 +1,7 @@
 package com.morneven.kron.data
 
 import androidx.room.withTransaction
+import com.morneven.kron.security.SnapshotOperationLock
 import com.morneven.kron.audit.LedgerPostingEngine
 import java.time.LocalDate
 import java.time.YearMonth
@@ -102,6 +103,7 @@ class KronRepository private constructor(
 
     private val database get() = databaseProvider()
     private val dao get() = database.kronDao()
+    private val snapshotOperationLock = SnapshotOperationLock()
     private fun <T> observe(block: (KronDao) -> Flow<T>): Flow<T> =
         databaseEpoch.flatMapLatest { block(database.kronDao()) }
 
@@ -245,22 +247,17 @@ class KronRepository private constructor(
         assertInvariant()
     }
 
-    suspend fun activateAccount(accountId: Long) = database.withTransaction {
-        val account = requireNotNull(dao.accountById(accountId)) { "Akun tidak ditemukan" }
-        teamAccessGuard.require(accountId, TeamCapability.READ)
-        require(!account.isArchived) { "Akun sudah diarsipkan" }
-        if (account.isActive) return@withTransaction
-        val previous = dao.activeAccount()
-        dao.activateOnly(accountId)
-        if (account.sharingMode == AccountSharingMode.TEAM &&
-            dao.teamWorkspace(accountId)?.localRole == TeamRole.VIEWER
-        ) {
-            return@withTransaction
+    suspend fun activateAccount(accountId: Long) = snapshotOperationLock.withLock {
+        database.withTransaction {
+            val account = requireNotNull(dao.accountById(accountId)) { "Akun tidak ditemukan" }
+            teamAccessGuard.require(accountId, TeamCapability.READ)
+            require(!account.isArchived) { "Akun sudah diarsipkan" }
+            if (account.isActive) return@withTransaction
+            // Account selection is UI state, not a financial event. Keep this
+            // transaction limited to the active flag so it remains safe while
+            // sync guards transition between states.
+            dao.activateOnly(accountId)
         }
-        val eventId = UUID.randomUUID().toString()
-        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.SYSTEM, "Akun aktif diganti", "${previous?.name ?: "Tanpa akun"} → ${account.name}", "USER", LocalDate.now().toEpochDay(), accountId = accountId))
-        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = "Mengganti ruang kerja akun aktif", beforeJson = "{\"accountId\":${previous?.id}}", afterJson = "{\"accountId\":$accountId}"))
-        assertInvariant()
     }
 
     suspend fun archiveAccount(accountId: Long, reason: String) = database.withTransaction {

@@ -498,8 +498,10 @@ class DatabaseEncryptionManager @Inject constructor(
                     }
                     valid
                 }
-                val foreignKeysValid = opened.query("PRAGMA foreign_key_check").use { cursor -> !cursor.moveToFirst() }
-                cipherValid && foreignKeysValid
+                // Key detection must not classify a readable database with a
+                // logical FK problem as an unknown encryption format. The
+                // strict FK gate runs before activation/open.
+                cipherValid && opened.query("SELECT COUNT(*) FROM sqlite_schema").use { it.moveToFirst() }
             }
         }.getOrDefault(false)
     }
@@ -514,13 +516,21 @@ class DatabaseEncryptionManager @Inject constructor(
             val integrity = opened.rawQuery("PRAGMA integrity_check", null).use { cursor ->
                 cursor.moveToFirst() && cursor.getString(0).equals("ok", ignoreCase = true)
             }
-            val foreignKeys = opened.rawQuery("PRAGMA foreign_key_check", null).use { cursor -> !cursor.moveToFirst() }
-            integrity && foreignKeys
+            integrity && opened.rawQuery("SELECT COUNT(*) FROM sqlite_master", null).use { it.moveToFirst() }
         }
     }.getOrDefault(false)
 
     private fun validatePlaintextDatabase(file: File) {
         require(canOpenPlaintext(file)) { "Database KRON bukan SQLite plaintext yang valid" }
+        android.database.sqlite.SQLiteDatabase.openDatabase(
+            file.absolutePath,
+            null,
+            android.database.sqlite.SQLiteDatabase.OPEN_READONLY,
+        ).use { opened ->
+            require(opened.rawQuery("PRAGMA foreign_key_check", null).use { !it.moveToFirst() }) {
+                "Relasi database KRON tidak valid"
+            }
+        }
     }
 
     private fun exportToPlaintext(source: File, sourceKey: ByteArray, target: File) {
@@ -599,6 +609,17 @@ class DatabaseEncryptionManager @Inject constructor(
     private fun validateEncrypted(file: File, key: ByteArray) {
         try {
             require(canOpenEncrypted(file, key)) { "Integritas database terenkripsi tidak valid" }
+            SQLiteDatabase.openDatabase(
+                file.absolutePath,
+                key,
+                null,
+                SQLiteDatabase.OPEN_READONLY,
+                null,
+            ).use { opened ->
+                require(opened.query("PRAGMA foreign_key_check").use { !it.moveToFirst() }) {
+                    "Relasi database terenkripsi tidak valid"
+                }
+            }
         } finally {
             key.fill(0)
         }

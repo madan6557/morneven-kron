@@ -2,11 +2,13 @@ package com.morneven.kron.sharing.viewer
 
 import android.content.Context
 import android.content.Intent
+import android.app.KeyguardManager
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.biometric.BiometricPrompt
+import androidx.biometric.BiometricManager
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -36,6 +38,8 @@ import com.morneven.kron.ui.components.formatIdr
 class SecureViewerActivity : FragmentActivity() {
     private var capsuleId: String = ""
     private var snapshot: CapsuleSnapshot? = null
+    private var authenticationLaunched = false
+    private var authenticated = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,25 +64,73 @@ class SecureViewerActivity : FragmentActivity() {
 
     override fun onStart() {
         super.onStart()
-        if (capsuleId.isNotEmpty()) authenticateAndLoad()
+        if (capsuleId.isNotEmpty() && !authenticationLaunched && !authenticated) authenticateAndLoad()
     }
 
     override fun onStop() { super.onStop(); zeroize() }
     override fun onDestroy() { super.onDestroy(); zeroize() }
 
     private fun authenticateAndLoad() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) { loadSnapshot(); return }
+        authenticationLaunched = true
+        val keyguard = getSystemService(KeyguardManager::class.java)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            if (!keyguard.isKeyguardSecure) {
+                Toast.makeText(this, "Kunci layar perangkat diperlukan", Toast.LENGTH_LONG).show()
+                finish()
+                return
+            }
+            val credentialIntent = keyguard.createConfirmDeviceCredentialIntent(
+                "Buka Kapsul",
+                "Verifikasi untuk membuka kapsul",
+            )
+            if (credentialIntent == null) {
+                Toast.makeText(this, "Autentikasi perangkat tidak tersedia", Toast.LENGTH_LONG).show()
+                finish()
+            } else {
+                startActivityForResult(credentialIntent, DEVICE_CREDENTIAL_REQUEST)
+            }
+            return
+        }
         val executor = ContextCompat.getMainExecutor(this)
         val prompt = BiometricPrompt(this, executor, object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = loadSnapshot()
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                authenticated = true
+                loadSnapshot()
+            }
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                 Toast.makeText(this@SecureViewerActivity, errString, Toast.LENGTH_LONG).show(); finish()
             }
             override fun onAuthenticationFailed() = Toast.makeText(this@SecureViewerActivity, "Gagal", Toast.LENGTH_SHORT).show()
         })
-        prompt.authenticate(BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Buka Kapsul").setSubtitle("Verifikasi untuk membuka kapsul")
-            .setNegativeButtonText("Batal").build())
+        val builder = BiometricPrompt.PromptInfo.Builder()
+            .setTitle("Buka Kapsul")
+            .setSubtitle("Gunakan biometrik atau PIN perangkat")
+        val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            builder.setAllowedAuthenticators(
+                BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                    BiometricManager.Authenticators.DEVICE_CREDENTIAL,
+            ).build()
+        } else {
+            builder.setDeviceCredentialAllowed(true).build()
+        }
+        runCatching { prompt.authenticate(info) }
+            .onFailure {
+                Toast.makeText(this, "Autentikasi perangkat tidak tersedia", Toast.LENGTH_LONG).show()
+                finish()
+            }
+    }
+
+    @Deprecated("Kept for API 27 device credential fallback")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != DEVICE_CREDENTIAL_REQUEST) return
+        if (resultCode == RESULT_OK) {
+            authenticated = true
+            loadSnapshot()
+        } else {
+            Toast.makeText(this, "Autentikasi dibatalkan", Toast.LENGTH_LONG).show()
+            finish()
+        }
     }
 
     private fun loadSnapshot() {
@@ -186,6 +238,7 @@ class SecureViewerActivity : FragmentActivity() {
     companion object {
         private const val EXTRA_CAPSULE_ID = "capsule_id"
         private const val EXTRA_SNAPSHOT_FILE = "snapshot_file"
+        private const val DEVICE_CREDENTIAL_REQUEST = 4107
 
         fun createIntent(context: Context, capsuleId: String, snapshotFile: String): Intent =
             Intent(context, SecureViewerActivity::class.java).apply {

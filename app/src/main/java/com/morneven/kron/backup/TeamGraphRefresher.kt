@@ -29,6 +29,7 @@ internal object TeamGraphRefresher {
                 "Schema database target Team tidak sesuai"
             }
             db.execSQL("PRAGMA foreign_keys=ON")
+            dropStagingTriggers(db)
             db.execSQL("ATTACH DATABASE ? AS team_source", arrayOf(source.absolutePath))
             try {
                 db.beginTransaction()
@@ -93,6 +94,7 @@ internal object TeamGraphRefresher {
                 "Schema database target Team tidak sesuai"
             }
             db.execSQL("PRAGMA foreign_keys=ON")
+            dropStagingTriggers(db)
             db.execSQL("ATTACH DATABASE ? AS team_source", arrayOf(source.absolutePath))
             try {
                 db.beginTransaction()
@@ -368,6 +370,17 @@ internal object TeamGraphRefresher {
 
     private fun requireNoForeignKeyViolations(db: SQLiteDatabase, message: String) {
         require(!db.rawQuery("PRAGMA foreign_key_check", null).use { it.moveToFirst() }) { message }
+    }
+
+    private fun dropStagingTriggers(db: SQLiteDatabase) {
+        db.rawQuery("SELECT name FROM sqlite_master WHERE type='trigger'", null).use { cursor ->
+            val triggers = buildList {
+                while (cursor.moveToNext()) add(cursor.getString(0))
+            }
+            triggers.forEach { trigger ->
+                db.execSQL("DROP TRIGGER IF EXISTS `${trigger.replace("`", "``")}`")
+            }
+        }
     }
 
     private fun scalar(db: SQLiteDatabase, sql: String, args: Array<String>? = null): Long =

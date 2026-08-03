@@ -1172,6 +1172,19 @@ abstract class KronDatabase : RoomDatabase() {
         }
 
         private fun createSyncGenerationTriggers(db: SupportSQLiteDatabase) {
+            // Older releases used broader trigger definitions. Remove the
+            // whole sync namespace before recreating it so an upgraded file
+            // cannot retain a stale guard by name.
+            db.query(
+                "SELECT name FROM sqlite_master WHERE type='trigger' AND (name LIKE 'sync_generation_%' OR name LIKE 'sync_write_guard_%')",
+            ).use { cursor ->
+                val names = buildList {
+                    while (cursor.moveToNext()) add(cursor.getString(0))
+                }
+                names.forEach { name ->
+                    db.execSQL("DROP TRIGGER IF EXISTS `${name.replace("`", "``")}`")
+                }
+            }
             val generationTables = listOf(
                 "accounts",
                 "categories",
@@ -1202,9 +1215,14 @@ abstract class KronDatabase : RoomDatabase() {
                         "(${privateScopes.getValue(table).replace("{row}", row)})"
                     }
                     db.execSQL("DROP TRIGGER IF EXISTS sync_generation_${table}_$suffix")
+                    val updateColumns = if (table == "accounts" && operation == "UPDATE") {
+                        " OF name,isArchived,archivedAt,sharingMode,teamId,revision,updatedAt,lastWriterId"
+                    } else {
+                        ""
+                    }
                     db.execSQL("""
                         CREATE TRIGGER sync_generation_${table}_$suffix
-                        AFTER $operation ON $table
+                        AFTER $operation$updateColumns ON $table
                         WHEN $privateScope
                         BEGIN
                             UPDATE sync_state
@@ -1241,9 +1259,14 @@ abstract class KronDatabase : RoomDatabase() {
             guardedTables.filter { db.hasTable(it) }.forEach { table ->
                 listOf("INSERT", "UPDATE", "DELETE").forEach { operation ->
                     val suffix = operation.lowercase()
+                    val updateColumns = if (table == "accounts" && operation == "UPDATE") {
+                        " OF name,isArchived,archivedAt,sharingMode,teamId,revision,updatedAt,lastWriterId"
+                    } else {
+                        ""
+                    }
                     db.execSQL("""
-                        CREATE TRIGGER IF NOT EXISTS sync_write_guard_${table}_$suffix
-                        BEFORE $operation ON $table
+                        CREATE TRIGGER sync_write_guard_${table}_$suffix
+                        BEFORE $operation$updateColumns ON $table
                         WHEN EXISTS(
                             SELECT 1 FROM sync_state
                             WHERE id = 1 AND status IN ('SYNCING','RESTART_REQUIRED')
@@ -1259,9 +1282,20 @@ abstract class KronDatabase : RoomDatabase() {
         private fun createTeamGenerationTriggers(db: SupportSQLiteDatabase) {
             if (!db.hasTable("team_workspaces")) return
 
+            db.query(
+                "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'team_generation_%'",
+            ).use { cursor ->
+                val names = buildList {
+                    while (cursor.moveToNext()) add(cursor.getString(0))
+                }
+                names.forEach { name ->
+                    db.execSQL("DROP TRIGGER IF EXISTS `${name.replace("`", "``")}`")
+                }
+            }
+
             db.execSQL(
                 """
-                CREATE TRIGGER IF NOT EXISTS team_generation_accounts_update
+                CREATE TRIGGER team_generation_accounts_update
                 AFTER UPDATE ON accounts
                 WHEN OLD.name IS NOT NEW.name
                   OR OLD.isArchived IS NOT NEW.isArchived
@@ -1300,7 +1334,7 @@ abstract class KronDatabase : RoomDatabase() {
                     }
                     db.execSQL(
                         """
-                        CREATE TRIGGER IF NOT EXISTS team_generation_${table}_${operation.lowercase()}
+                        CREATE TRIGGER team_generation_${table}_${operation.lowercase()}
                         AFTER $operation ON $table
                         BEGIN
                             UPDATE team_workspaces
@@ -1320,7 +1354,7 @@ abstract class KronDatabase : RoomDatabase() {
             ).filterKeys { db.hasTable(it) }.forEach { (table, accountId) ->
                 db.execSQL(
                     """
-                    CREATE TRIGGER IF NOT EXISTS team_generation_${table}_insert
+                    CREATE TRIGGER team_generation_${table}_insert
                     AFTER INSERT ON $table
                     BEGIN
                         UPDATE team_workspaces

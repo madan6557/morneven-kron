@@ -56,6 +56,22 @@ class EncryptedSyncSecretStore @Inject constructor(
         }
     }
 
+    /**
+     * Stages a replacement while keeping the currently committed secret intact.
+     * The crash-safe file keeps the old value in its backup until the new value
+     * has been verified and atomically committed.
+     */
+    suspend fun stageReplacement(passphrase: CharArray) = withContext(Dispatchers.IO) {
+        require(passphrase.size in MIN_PASSPHRASE_LENGTH..MAX_PASSPHRASE_LENGTH) {
+            "Passphrase sinkronisasi harus 12 sampai 1024 karakter"
+        }
+        mutex.withLock {
+            crashSafeFile.recover()
+            stagedPassphrase?.fill('\u0000')
+            stagedPassphrase = passphrase.copyOf()
+        }
+    }
+
     suspend fun commitStaged(): Boolean = withContext(Dispatchers.IO) {
         mutex.withLock {
             val staged = stagedPassphrase ?: return@withLock false

@@ -6,6 +6,7 @@ import com.morneven.kron.backup.BackupManager
 import com.morneven.kron.data.KronDatabase
 import com.morneven.kron.team.TeamAtomicSwap
 import com.morneven.kron.team.TeamKeyStore
+import com.morneven.kron.sync.DataRefreshBridge
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -64,9 +65,9 @@ class DatabaseRuntime @Inject constructor(
     suspend fun activatePendingSnapshot(): Result<Unit> = withContext(Dispatchers.IO) {
         activationMutex.withLock {
             snapshotOperationLock.withLock {
-                runCatching {
                 val hasRestore = BackupManager.hasPendingRestore(context)
                 val hasTeamSwap = TeamAtomicSwap.hasPendingSwap(context)
+                runCatching {
                 require(hasRestore || hasTeamSwap) {
                     "Tidak ada pembaruan tersinkron yang siap diterapkan"
                 }
@@ -85,12 +86,21 @@ class DatabaseRuntime @Inject constructor(
                     teamKeyStore?.clearOrphaned(reopened.kronDao().allTeamWorkspaceIds())
                 }
                 mutableEpoch.value += 1
+                DataRefreshBridge.emit()
                 preferences.edit().remove(KEY_PENDING_SYNC_ACTIVATION).commit()
                 mutablePendingSyncActivation.value = false
                 DatabaseAccessGate.markReady()
                 }.onFailure {
                     runCatching { KronDatabase.closeAndForget() }
-                    runCatching { current() }.onSuccess { DatabaseAccessGate.markReady() }
+                    runCatching { current() }.onSuccess { reopened ->
+                        // A quarantined Team candidate is no longer pending.
+                        // Clear APPLY_PENDING so the UI does not keep opening
+                        // a resolver for a swap that already rolled back.
+                        if (hasTeamSwap && !TeamAtomicSwap.hasPendingSwap(context)) {
+                            reopened.kronDao().markFailedTeamActivations(System.currentTimeMillis())
+                        }
+                        DatabaseAccessGate.markReady()
+                    }
                 }
             }
         }

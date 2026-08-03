@@ -138,4 +138,35 @@ class TeamWorkspaceStateTest {
             context.deleteDatabase(name)
         }
     }
+
+    @Test
+    fun localAccountSwitchOnlyChangesIsActiveWhilePrivateSyncRuns() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "account-switch-guard.db"
+        context.deleteDatabase(name)
+        val database = KronDatabase.openPlaintextValidationDatabase(context, name)
+        try {
+            database.openHelper.writableDatabase.apply {
+                execSQL("INSERT INTO accounts(id,name,isActive,isArchived,createdAt,sharingMode,revision,updatedAt) VALUES(1,'A',1,0,1,'PRIVATE',0,1)")
+                execSQL("INSERT INTO accounts(id,name,isActive,isArchived,createdAt,sharingMode,revision,updatedAt) VALUES(2,'B',0,0,1,'PRIVATE',0,1)")
+                execSQL("INSERT INTO sync_state(id,datasetId,deviceId,localGeneration,lastSyncedGeneration,status,disabledDueToBilling,updatedAt) VALUES(1,'private','device',0,0,'IDLE',0,1)")
+            }
+            val dao = database.kronDao()
+            listOf("IDLE", "SYNCING", "RESTART_REQUIRED").forEach { status ->
+                database.openHelper.writableDatabase.execSQL("UPDATE sync_state SET status=? WHERE id=1", arrayOf(status))
+                dao.activateOnly(if (dao.activeAccount()?.id == 1L) 2L else 1L)
+                assertEquals(1, dao.activeAccountCount())
+            }
+            val triggerSql = database.openHelper.writableDatabase.query(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='sync_write_guard_accounts_update'",
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                cursor.getString(0)
+            }
+            assertTrue(triggerSql.contains("OF name,isArchived,archivedAt,sharingMode,teamId,revision,updatedAt,lastWriterId"))
+        } finally {
+            database.close()
+            context.deleteDatabase(name)
+        }
+    }
 }

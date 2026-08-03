@@ -60,7 +60,7 @@ class BudgetArchiveUiTest {
                     onResolve = {},
                     onFund = {},
                     onChannelTransfer = {},
-                    onReleaseRollover = {},
+                    onToggleRollover = { _, _ -> },
                     onDetail = { _, readOnly -> detailReadOnly = readOnly },
                     onHistory = {},
                     onPause = {},

@@ -38,6 +38,22 @@ class DriveSyncDecisionEngineTest {
     }
 
     @Test
+    fun accountSwitchUsesSingleRemoteDatasetInsteadOfComparingWithOldLocalGraph() {
+        val remote = remote("remote-file", "remote", generation = 4, dataset = "dataset-b")
+
+        assertEquals(
+            SyncDecision.Download(remote),
+            DriveSyncDecisionEngine.decide(
+                state(accountSubject = account.subjectId),
+                local,
+                account,
+                listOf(remote),
+                accountSwitch = true,
+            ),
+        )
+    }
+
+    @Test
     fun concurrentRemoteHeadsAreNeverChosenSilently() {
         val root = remote("root-file", "root", 1)
         val left = remote("left-file", "left", 2, parent = "root")
@@ -91,6 +107,21 @@ class DriveSyncDecisionEngineTest {
         assertEquals(
             SyncConflictReason.REMOTE_FORK_DETECTED,
             (decision as SyncDecision.Conflict).reason,
+        )
+    }
+
+    @Test
+    fun freshSeededDatabaseDownloadsTheSingleRemoteDataset() {
+        val remote = remote("remote-file", "remote", generation = 1, dataset = "dataset-b")
+
+        assertEquals(
+            SyncDecision.Download(remote),
+            DriveSyncDecisionEngine.decide(
+                state(accountSubject = null),
+                local.copy(hasFinancialData = false),
+                account,
+                listOf(remote),
+            ),
         )
     }
 

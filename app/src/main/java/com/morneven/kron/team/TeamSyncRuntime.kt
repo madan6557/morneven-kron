@@ -22,6 +22,7 @@ import com.morneven.kron.sync.DriveAccessTokenResult
 import com.morneven.kron.sync.DriveApiException
 import com.morneven.kron.sync.PlayServicesAuthorizationClientBridge
 import com.morneven.kron.sync.PreferencesSelectedGoogleAccountStore
+import com.morneven.kron.sync.DriveSyncSwitchGate
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -146,8 +147,12 @@ class TeamSyncRuntime @Inject constructor(
             return
         }
         TeamSyncServiceLocator.install { syncInBackground() }
-        TeamSyncScheduler.schedulePeriodic(context)
-        TeamSyncScheduler.syncNow(context)
+        if (canAutoSync()) {
+            TeamSyncScheduler.schedulePeriodic(context)
+            TeamSyncScheduler.syncNow(context)
+        } else {
+            TeamSyncScheduler.cancelScheduledWork(context)
+        }
         applicationScope.launch {
             var previousGenerations: Map<Long, Long>? = null
             databaseRuntime.epoch
@@ -157,7 +162,9 @@ class TeamSyncRuntime @Inject constructor(
                 .collect { generations ->
                     val changed = previousGenerations?.let { it != generations } ?: false
                     previousGenerations = generations
-                    if (changed && generations.isNotEmpty()) TeamSyncScheduler.scheduleAfterChange(context)
+                    if (canAutoSync() && changed && generations.isNotEmpty()) {
+                        TeamSyncScheduler.scheduleAfterChange(context)
+                    }
                 }
         }
     }
@@ -166,12 +173,17 @@ class TeamSyncRuntime @Inject constructor(
     fun refreshAfterDatabaseActivation() {
         if (!enabled()) return
         TeamSyncServiceLocator.install { syncInBackground() }
-        TeamSyncScheduler.schedulePeriodic(context)
-        TeamSyncScheduler.syncNow(context)
+        if (canAutoSync()) {
+            TeamSyncScheduler.schedulePeriodic(context)
+            TeamSyncScheduler.syncNow(context)
+        } else {
+            TeamSyncScheduler.cancelScheduledWork(context)
+        }
     }
 
     private suspend fun syncInBackground(): Result = syncMutex.withLock {
         if (!DatabaseAccessGate.isReady() || databaseRuntime.hasPendingSyncActivation()) return@withLock Result.success()
+        if (!canAutoSync()) return@withLock Result.success()
         val dao = database.kronDao()
         val workspaces = dao.autoSyncTeamWorkspaces()
         if (workspaces.isEmpty()) return@withLock Result.success()
@@ -271,4 +283,7 @@ class TeamSyncRuntime @Inject constructor(
     }
 
     private fun enabled(): Boolean = BuildConfig.DRIVE_SYNC_CONFIGURED && BuildConfig.TEAM_ACCOUNT_ENABLED
+
+    private fun canAutoSync(): Boolean =
+        DriveSyncSwitchGate.isPrivateReady(context) && DriveSyncSwitchGate.hasPrivateTeamInfo(context)
 }

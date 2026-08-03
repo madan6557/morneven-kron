@@ -706,8 +706,6 @@ class MainViewModel @Inject constructor(
     ) = viewModelScope.launch {
         try {
             teamSnapshotCoordinator.resolveUseTeam(accessToken, accountId, remoteSnapshotId)
-            mutableTeamConflictAccount.value = null
-            mutableTeamConflictPreview.value = null
             onApplied()
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -724,8 +722,6 @@ class MainViewModel @Inject constructor(
     ) = viewModelScope.launch {
         try {
             teamSnapshotCoordinator.resolveMerge(accessToken, accountId, remoteSnapshotId)
-            mutableTeamConflictAccount.value = null
-            mutableTeamConflictPreview.value = null
             onApplied()
         } catch (cancelled: CancellationException) {
             throw cancelled

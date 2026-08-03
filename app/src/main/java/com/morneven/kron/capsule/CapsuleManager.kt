@@ -52,7 +52,6 @@ class CapsuleManager(
 
         val categories = dao.categoriesForAccount(account.id)
         val portfolios = dao.portfoliosForAccount(account.id)
-        android.util.Log.e("KRON_CAPSULE", "portfolios: ${portfolios.size}, categories: ${categories.size}")
         val periods = if (portfolios.isEmpty()) emptyList() else dao.periodsForPortfolios(portfolios.map { it.id })
         val allocations = dao.allocationBalancesForAccount(account.id)
         val activities = dao.activitiesForAccount(account.id)
@@ -121,15 +120,12 @@ class CapsuleManager(
         val envBytes = CapsuleCodec.serializeEnvelope(manifestJson, certBase64, nonce, ciphertext, signatureBase64)
 
         val tokenResult = getAccessToken()
-        android.util.Log.e("KRON_CAPSULE", "token result: ${tokenResult::class.simpleName}")
         val token = when (tokenResult) {
             is DriveAccessTokenResult.Granted -> tokenResult.accessToken
             else -> return@runCatching null
         }
 
-        android.util.Log.e("KRON_CAPSULE", "uploading to Drive...")
         val driveFile = driveClient.upload(token, targetEmail, envBytes)
-        android.util.Log.e("KRON_CAPSULE", "upload done: ${driveFile.fileId}")
         driveClient.grantReader(token, driveFile.fileId, targetEmail)
 
         val updatedManifest = org.json.JSONObject(manifestJson).apply { put("fileId", driveFile.fileId) }.toString()
@@ -150,7 +146,7 @@ class CapsuleManager(
         ))
 
         CreateResult(capsuleId, generateCode(capsuleId, driveFile.fileId, secret), driveFile.fileId)
-    }.onFailure { android.util.Log.e("KRON_CAPSULE", "create failed", it) }.getOrNull()
+    }.getOrNull()
 
     suspend fun receive(
         code: String,
@@ -184,15 +180,11 @@ class CapsuleManager(
             is DriveAccessTokenResult.Granted -> result.accessToken
             else -> return@runCatching OpenResult(null, "Otorisasi Google Drive diperlukan")
         }
-        android.util.Log.e("KRON_CAPSULE", "receive: fileId=${codeData.fileId}, secret=${codeData.secret.size} bytes")
-
         val envelopeBytes = try {
             driveClient.download(token, codeData.fileId)
         } catch (_: Exception) {
             return@runCatching OpenResult(null, "Kapsul tidak ditemukan di Drive atau akses dicabut")
         }
-        android.util.Log.e("KRON_CAPSULE", "receive: downloaded ${envelopeBytes.size} bytes")
-
         val envelope = CapsuleCodec.deserializeEnvelope(envelopeBytes) ?: return@runCatching OpenResult(null, "Envelope Kapsul rusak")
 
         val mf = org.json.JSONObject(envelope.manifestJson)
@@ -223,7 +215,7 @@ class CapsuleManager(
         ))
 
         OpenResult(snapshot, null)
-    }.onFailure { android.util.Log.e("KRON_CAPSULE", "receive failed", it) }.getOrNull() ?: OpenResult(null, "Gagal membuka Kapsul")
+    }.getOrNull() ?: OpenResult(null, "Gagal membuka Kapsul")
 
     suspend fun openLocally(capsuleId: String): CapsuleSnapshot? {
         val env = store.loadEnvelope(capsuleId) ?: return null

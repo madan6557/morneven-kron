@@ -56,6 +56,12 @@ internal class TeamAtomicSwap private constructor(private val context: Context) 
                     copySidecars(oldDb, liveDb)
                 }
                 writeSynced(transactionFile, "failed")
+                // A failed candidate must not be retried on every foreground
+                // resume. The live database has already been restored; keep
+                // the disposable candidate in a quarantine directory so the
+                // runtime can clear its pending flag and the resolver can be
+                // retried only after a new, validated staging operation.
+                quarantineFailedSwap()
                 throw e
             }
         } else {
@@ -129,6 +135,24 @@ internal class TeamAtomicSwap private constructor(private val context: Context) 
         swapDir.delete()
     }
 
+    private fun quarantineFailedSwap() {
+        if (!swapDir.exists()) return
+        val quarantine = File(context.filesDir, "team-swap-failed-${System.nanoTime()}")
+        runCatching {
+            Files.move(swapDir.toPath(), quarantine.toPath(), StandardCopyOption.ATOMIC_MOVE)
+        }.recoverCatching {
+            Files.move(swapDir.toPath(), quarantine.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }.onFailure {
+            // The candidate is disposable. If the filesystem refuses a move,
+            // remove only the known staging files so it cannot be re-applied.
+            stagingDb.delete()
+            deleteSidecars(stagingDb)
+            readyFile.delete()
+            transactionFile.delete()
+            swapDir.delete()
+        }
+    }
+
     private data class SwapMetadata(val dbSha256: String)
 
     companion object {
@@ -140,7 +164,8 @@ internal class TeamAtomicSwap private constructor(private val context: Context) 
 
         fun applyPendingSwap(context: Context): Boolean = TeamAtomicSwap(context).applySwap()
 
-        fun hasPendingSwap(context: Context): Boolean = File(context.filesDir, SWAP_DIR_NAME).exists()
+        fun hasPendingSwap(context: Context): Boolean =
+            File(context.filesDir, SWAP_DIR_NAME).let { File(it, READY_FILE).isFile }
 
         fun stageReplaceForRestart(context: Context, database: File) {
             TeamAtomicSwap(context).stageReplace(database)

@@ -109,12 +109,13 @@ class AuthorizationClientDriveSession(
     suspend fun acceptConnectionResult(
         account: GoogleAccountIdentity?,
         result: AuthorizationClientResult,
+        persistAccount: Boolean = true,
     ): DriveConnectResult = when (result) {
             is AuthorizationClientResult.Granted -> {
                 if (account == null) {
                     DriveConnectResult.Failed("Pilih akun Google sebelum memberi izin Drive", retryable = true)
                 } else {
-                    accountStore.write(account)
+                    if (persistAccount) accountStore.write(account)
                     cachedGrant = CachedGrant(account.subjectId, result.accessToken, result.expiresAtEpochMillis)
                     DriveConnectResult.Connected(account)
                 }
@@ -125,6 +126,13 @@ class AuthorizationClientDriveSession(
             }
             is AuthorizationClientResult.Failed -> DriveConnectResult.Failed(result.message, result.retryable)
         }
+
+    suspend fun commitSelectedAccount(account: GoogleAccountIdentity) = accountStore.write(account)
+
+    suspend fun restoreSelectedAccount(account: GoogleAccountIdentity?) {
+        accountStore.write(account)
+        if (account == null) cachedGrant = null
+    }
 
     override suspend fun accessToken(interactive: Boolean): DriveAccessTokenResult {
         val account = accountStore.read() ?: return DriveAccessTokenResult.Disconnected

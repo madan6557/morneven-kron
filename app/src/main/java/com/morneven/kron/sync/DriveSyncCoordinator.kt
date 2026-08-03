@@ -76,6 +76,7 @@ internal object DriveSyncDecisionEngine {
         local: LocalDatasetSnapshot,
         account: GoogleAccountIdentity,
         remoteFiles: List<RemoteDriveSnapshot>,
+        accountSwitch: Boolean = false,
     ): SyncDecision {
         val active = remoteFiles.filter { it.manifest.kind == SnapshotKind.ACTIVE }
         val datasets = active.groupBy { it.manifest.datasetId }
@@ -99,6 +100,18 @@ internal object DriveSyncDecisionEngine {
             )
         }
         val latestForLocal = localHeads.singleOrNull()
+
+        if (accountSwitch) {
+            return when {
+                datasets.isEmpty() -> SyncDecision.NoData
+                datasets.size > 1 -> SyncDecision.Conflict(
+                    SyncConflictReason.DATASET_MISMATCH,
+                    latestAny,
+                    remoteHeads,
+                )
+                else -> SyncDecision.Download(requireNotNull(latestAny))
+            }
+        }
 
         if (state.accountSubject != null && state.accountSubject != account.subjectId) {
             return if (local.hasFinancialData) {
@@ -210,8 +223,136 @@ class DriveSyncCoordinator(
 ) {
     companion object {
         private const val SYNC_TIMEOUT_MILLIS = 180_000L
+        // 1.6.6 keeps the 1.6.4 payload, key, and Room schema contracts.
+        private const val MINIMUM_COMPATIBLE_APP_VERSION_CODE = 89
     }
     suspend fun syncNow(): SyncRunResult = syncMutex.withLock { syncNowLocked() }
+
+    /** Explicitly starts the selected Drive dataset from the local graph. */
+    suspend fun syncPendingAccount(accountSwitch: Boolean = false): SyncRunResult = syncMutex.withLock {
+        val tokenResult = authorization.accessToken(interactive = false)
+        if (tokenResult !is DriveAccessTokenResult.Granted) return@withLock handleTokenFailure(tokenResult)
+        // Only an ACTIVE snapshot is a dataset. Recovery copies are private
+        // safety artifacts and must not force a new-account conflict.
+        val hasRemoteSnapshot = drive.listSnapshots(tokenResult.accessToken)
+            .any { it.manifest.kind == SnapshotKind.ACTIVE }
+        // An empty remote dataset is ambiguous even when the local database
+        // already has accounts. Ask explicitly before uploading or deleting
+        // anything; normal sync is reserved for an existing remote dataset.
+        if (!hasRemoteSnapshot) {
+            SyncRunResult.InitialSyncChoiceRequired
+        } else {
+            val candidate = drive.listSnapshots(tokenResult.accessToken)
+                .filter { it.manifest.kind == SnapshotKind.ACTIVE }
+                .maxWithOrNull(compareBy<RemoteDriveSnapshot>({ it.manifest.generation }, { it.createdAt }))
+                ?: return@withLock SyncRunResult.InitialSyncChoiceRequired
+            // A Google-account switch is not a merge with the previous local
+            // dataset. The selected Drive snapshot is the source of truth;
+            // only a fork or multiple remote datasets needs a conflict.
+            if (!accountSwitch) {
+                preflightPendingCandidate(tokenResult, candidate)?.let { return@withLock it }
+            }
+            syncNowLocked(accountSwitch)
+        }
+    }
+
+    /**
+     * Validate a pending account's newest snapshot in disposable staging
+     * before the decision engine can open the conflict center. A malformed
+     * legacy snapshot is treated as an initial-choice case so the user can
+     * keep local data or start the remote dataset over; it must never mutate
+     * the active database or surface a raw trigger failure from the resolver.
+     */
+    private suspend fun preflightPendingCandidate(
+        token: DriveAccessTokenResult.Granted,
+        candidate: RemoteDriveSnapshot,
+    ): SyncRunResult? {
+        val passphrase = secretProvider.acquirePassphrase() ?: return SyncRunResult.PassphraseRequired
+        val envelope = try {
+            drive.downloadSnapshot(token.accessToken, candidate.fileId)
+        } catch (error: Throwable) {
+            passphrase.fill('\u0000')
+            return when (error) {
+                is CancellationException -> throw error
+                is DriveAuthorizationException,
+                is DriveBillingRequiredException,
+                is DriveApiException,
+                is IOException,
+                -> handleFailure(error)
+                else -> SyncRunResult.InitialSyncChoiceRequired
+            }
+        }
+        return try {
+            val decrypted = cryptor.decrypt(envelope, passphrase)
+            try {
+                require(decrypted.manifest == candidate.manifest) { "Metadata snapshot Drive tidak cocok" }
+                local.previewRemotePayload(decrypted.payload, decrypted.manifest)
+            } finally {
+                decrypted.payload.fill(0)
+            }
+            null
+        } catch (error: Throwable) {
+            when (error) {
+                is CancellationException -> throw error
+                is InvalidDrivePassphraseException,
+                is DriveAuthorizationException,
+                is DriveBillingRequiredException,
+                is DriveApiException,
+                is IOException,
+                -> handleFailure(error)
+                else -> SyncRunResult.InitialSyncChoiceRequired
+            }
+        } finally {
+            envelope.fill(0)
+            passphrase.fill('\u0000')
+        }
+    }
+
+    /** Explicitly starts the selected Drive dataset from the local graph. */
+    suspend fun replaceRemoteWithLocal(): SyncRunResult = syncMutex.withLock {
+        val tokenResult = authorization.accessToken(interactive = false)
+        if (tokenResult !is DriveAccessTokenResult.Granted) return@withLock handleTokenFailure(tokenResult)
+        try {
+            val uploaded = uploadActive(tokenResult, local.describe(), parentSnapshotId = null)
+            if (uploaded is SyncRunResult.Synchronized) {
+                drive.listSnapshots(tokenResult.accessToken)
+                    .filter { it.manifest.snapshotId != uploaded.snapshotId }
+                    .forEach { snapshot -> drive.deleteSnapshot(tokenResult.accessToken, snapshot.fileId) }
+            }
+            uploaded
+        } catch (error: Throwable) {
+            handleFailure(error)
+        }
+    }
+
+    /** Explicitly leaves the selected Drive dataset empty while preserving local data. */
+    suspend fun startFreshRemote(): SyncRunResult = syncMutex.withLock {
+        val tokenResult = authorization.accessToken(interactive = false)
+        if (tokenResult !is DriveAccessTokenResult.Granted) return@withLock handleTokenFailure(tokenResult)
+        try {
+            drive.listSnapshots(tokenResult.accessToken).forEach { snapshot ->
+                drive.deleteSnapshot(tokenResult.accessToken, snapshot.fileId)
+            }
+            val descriptor = local.describe()
+            stateStore.update {
+                it.copy(
+                    localGeneration = descriptor.generation,
+                    lastSyncedGeneration = descriptor.generation,
+                    parentSnapshotId = null,
+                    lastSnapshotId = null,
+                    lastSyncedAtEpochMillis = nowEpochMillis(),
+                    status = SyncStatus.SYNCED,
+                    lastError = null,
+                    conflictRemoteFileId = null,
+                    accountSubject = tokenResult.account.subjectId,
+                    accountEmail = tokenResult.account.email,
+                )
+            }
+            SyncRunResult.NoChanges
+        } catch (error: Throwable) {
+            handleFailure(error)
+        }
+    }
 
     suspend fun validatePassphrase(remoteHint: RemoteDriveSnapshot? = null): SyncRunResult = syncMutex.withLock {
         val state = stateStore.read()
@@ -257,7 +398,7 @@ class DriveSyncCoordinator(
         }
     }
 
-    private suspend fun syncNowLocked(): SyncRunResult {
+    private suspend fun syncNowLocked(accountSwitch: Boolean = false): SyncRunResult {
         val initialState = stateStore.read()
         if (initialState.status == SyncStatus.DISABLED) return SyncRunResult.Disabled
         if (initialState.status == SyncStatus.RESTART_REQUIRED) stateStore.update { it.copy(status = SyncStatus.IDLE, lastError = null) }
@@ -288,7 +429,13 @@ class DriveSyncCoordinator(
                 )
             }
             val remote = drive.listSnapshots(tokenResult.accessToken)
-            when (val decision = DriveSyncDecisionEngine.decide(state, descriptor, tokenResult.account, remote)) {
+            when (val decision = DriveSyncDecisionEngine.decide(
+                state = state,
+                local = descriptor,
+                account = tokenResult.account,
+                remoteFiles = remote,
+                accountSwitch = accountSwitch,
+            )) {
                 is SyncDecision.Upload -> {
                     uploadActive(tokenResult, descriptor, decision.parentSnapshotId)
                 }
@@ -299,6 +446,13 @@ class DriveSyncCoordinator(
                     recordConflict(state, descriptor, decision)
                 }
                 SyncDecision.NoChanges -> {
+                    val head = remote
+                        .filter { it.manifest.kind == SnapshotKind.ACTIVE && it.manifest.datasetId == descriptor.datasetId }
+                        .maxWithOrNull(compareBy<RemoteDriveSnapshot>({ it.manifest.generation }, { it.createdAt }))
+                    if (head != null && head.manifest.minimumAppVersionCode > MINIMUM_COMPATIBLE_APP_VERSION_CODE) {
+                        // Repair snapshots written by the incompatible 1.6.6 build.
+                        return@withTimeout uploadActive(tokenResult, descriptor, head.manifest.snapshotId)
+                    }
                     stateStore.update {
                         it.copy(
                             status = SyncStatus.SYNCED,
@@ -338,26 +492,33 @@ class DriveSyncCoordinator(
                 "Drive memiliki ${conflict.remoteHeads.size} kandidat snapshot aktif. Semua tindakan dikunci sampai diff multi-head tersedia.",
             )
         }
+        // A Drive request must not leave the conflict dialog spinning forever.
+        // The same bounded window as a normal sync gives the user a retryable
+        // error while keeping the resolver state intact.
+        withTimeout(SYNC_TIMEOUT_MILLIS) { previewConflictLocked(conflict) }
+    }
+
+    private suspend fun previewConflictLocked(conflict: SyncConflict): ConflictPreviewResult {
         val token = authorization.accessToken(interactive = false)
         if (token !is DriveAccessTokenResult.Granted) {
-            return@withLock when (handleTokenFailure(token)) {
+            return when (handleTokenFailure(token)) {
                 SyncRunResult.AuthorizationRequired -> ConflictPreviewResult.AuthorizationRequired
                 else -> ConflictPreviewResult.Error("Otorisasi Drive tidak tersedia")
             }
         }
         val expected = conflict.remote
-            ?: return@withLock ConflictPreviewResult.Error("Snapshot Drive untuk konflik tidak tersedia")
-        try {
+            ?: return ConflictPreviewResult.Error("Snapshot Drive untuk konflik tidak tersedia")
+        return try {
             val before = drive.listSnapshots(token.accessToken)
             val remote = before.firstOrNull { it.fileId == expected.fileId }
-                ?: return@withLock stalePreview(conflict)
+                ?: return stalePreview(conflict)
             val dagBefore = SnapshotDag.inspect(before, remote.manifest.datasetId)
             if (!dagBefore.valid || dagBefore.heads.singleOrNull()?.fileId != remote.fileId) {
-                return@withLock stalePreview(conflict)
+                return stalePreview(conflict)
             }
 
             val passphrase = secretProvider.acquirePassphrase()
-                ?: return@withLock ConflictPreviewResult.PassphraseRequired
+                ?: return ConflictPreviewResult.PassphraseRequired
             val envelope = drive.downloadSnapshot(token.accessToken, remote.fileId)
             try {
                 val decrypted = cryptor.decrypt(envelope, passphrase)
@@ -369,7 +530,7 @@ class DriveSyncCoordinator(
                 }
                 val dagAfter = SnapshotDag.inspect(drive.listSnapshots(token.accessToken), remote.manifest.datasetId)
                 if (!dagAfter.valid || dagAfter.heads.singleOrNull()?.fileId != remote.fileId) {
-                    return@withLock stalePreview(conflict)
+                    return stalePreview(conflict)
                 }
                 ConflictPreviewResult.Ready(preview)
             } finally {
@@ -553,7 +714,7 @@ class DriveSyncCoordinator(
                 generation = descriptor.generation,
                 sourceDeviceId = stateStore.read().deviceId,
                 schemaVersion = descriptor.schemaVersion,
-                minimumAppVersionCode = currentAppVersionCode,
+                minimumAppVersionCode = MINIMUM_COMPATIBLE_APP_VERSION_CODE,
                 createdAtEpochMillis = nowEpochMillis(),
                 payloadSha256 = AesGcmDriveSnapshotCryptor.sha256(payload),
                 kind = kind,

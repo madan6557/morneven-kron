@@ -4,6 +4,7 @@ import com.morneven.kron.sync.DriveApiException
 import com.morneven.kron.sync.DriveAuthorizationException
 import com.morneven.kron.sync.DriveErrorClassifier
 import com.morneven.kron.sync.DriveHttpConnectionFactory
+import com.morneven.kron.sync.KronDriveNamespace
 import com.morneven.kron.sync.readLimited
 import java.net.HttpURLConnection
 import java.net.URL
@@ -18,6 +19,8 @@ class CapsuleDriveClient(
         it.openConnection() as HttpURLConnection
     },
 ) {
+    private val namespace = KronDriveNamespace(endpoint, connectionFactory)
+
     data class CapsuleDriveFile(val fileId: String, val name: String, val sizeBytes: Long)
 
     suspend fun upload(
@@ -29,7 +32,8 @@ class CapsuleDriveClient(
         val name = "kron-capsule-${UUID.randomUUID()}.kroncapsule"
         val mimeType = "application/octet-stream"
         val boundary = "kron-${UUID.randomUUID()}"
-        val metadata = """{"name":"${escape(name)}","mimeType":"$mimeType"}""".toByteArray(Charsets.UTF_8)
+        val capsuleRoot = namespace.ensureCapsuleRoot(accessToken)
+        val metadata = """{"name":"${escape(name)}","mimeType":"$mimeType","parents":["${escape(capsuleRoot)}"],"appProperties":{"product":"KRON","kind":"capsule"}}""".toByteArray(Charsets.UTF_8)
         val prefix = ("--$boundary\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n").toByteArray() +
             metadata + ("\r\n--$boundary\r\nContent-Type: application/octet-stream\r\n\r\n").toByteArray()
         val suffix = "\r\n--$boundary--\r\n".toByteArray()

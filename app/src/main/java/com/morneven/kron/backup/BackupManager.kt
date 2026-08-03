@@ -27,6 +27,7 @@ import com.morneven.kron.team.TeamAtomicSwap
 import com.morneven.kron.team.TeamKeyStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
+import java.io.ByteArrayInputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
@@ -291,6 +292,7 @@ class BackupManager @Inject constructor(
         val encrypted = File(context.cacheDir, "team-transform-${UUID.randomUUID()}.encrypted")
         try {
             databaseEncryption.exportPlaintext(live, plaintext)
+            dropStagingTriggers(plaintext)
             transform(plaintext)
             validateDatabase(plaintext)
             databaseEncryption.encryptPortableDatabaseUsingCurrentMode(plaintext, live, encrypted)
@@ -1228,6 +1230,43 @@ class BackupManager @Inject constructor(
             validationDatabase.close()
         }
         validateDatabase(candidate)
+        // Room's validation open recreates production triggers. The file is
+        // still disposable and will be mutated by restore/import code, so it
+        // must be trigger-free until it becomes the active database.
+        dropStagingTriggers(candidate)
+    }
+
+    /** Reads only package metadata so Team sync can follow a successful Private sync. */
+    fun payloadContainsTeamRecovery(payload: ByteArray): Boolean = runCatching {
+        ZipInputStream(ByteArrayInputStream(payload)).use { zip ->
+            var entry = zip.nextEntry
+            while (entry != null) {
+                if (entry.name == TEAM_RECOVERY_INDEX_ENTRY) return@runCatching true
+                if (entry.name == MANIFEST_ENTRY) {
+                    val manifest = zip.readBytes().toString(Charsets.UTF_8)
+                    if (manifest.contains("\"teamRecoveryVersion\"") ||
+                        manifest.contains("\"teamRecoveryIndexSha256\"")) {
+                        return@runCatching true
+                    }
+                }
+                zip.closeEntry()
+                entry = zip.nextEntry
+            }
+            false
+        }
+    }.getOrDefault(false)
+
+    private fun dropStagingTriggers(file: File) {
+        SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            db.rawQuery("SELECT name FROM sqlite_master WHERE type='trigger'", null).use { cursor ->
+                val triggers = buildList {
+                    while (cursor.moveToNext()) add(cursor.getString(0))
+                }
+                triggers.forEach { trigger ->
+                    db.execSQL("DROP TRIGGER IF EXISTS `${trigger.replace("`", "``")}`")
+                }
+            }
+        }
     }
 
     private fun installReceiptPayloads(

@@ -119,6 +119,9 @@ interface KronDao {
         updatedAt: Long,
     ): Int
 
+    @Query("UPDATE team_workspaces SET status = 'FAILED', updatedAt = :updatedAt WHERE status = 'APPLY_PENDING'")
+    suspend fun markFailedTeamActivations(updatedAt: Long): Int
+
     @Query("""UPDATE team_workspaces SET liveFileId=:fileId, updatedAt=:updatedAt
         WHERE accountId=:accountId AND teamId=:teamId AND liveFileId IS NULL""")
     suspend fun setTeamLiveFileId(

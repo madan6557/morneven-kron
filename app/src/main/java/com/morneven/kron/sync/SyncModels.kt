@@ -192,6 +192,7 @@ sealed interface SyncRunResult {
     data object Disabled : SyncRunResult
     data object AuthorizationRequired : SyncRunResult
     data object PassphraseRequired : SyncRunResult
+    data object InitialSyncChoiceRequired : SyncRunResult
     data object FreeOnlyBlocked : SyncRunResult
     data class Conflict(val value: SyncConflict) : SyncRunResult
     data class Error(val message: String, val retryable: Boolean) : SyncRunResult

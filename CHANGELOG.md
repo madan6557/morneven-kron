@@ -1,5 +1,10 @@
 # KRON Changelog
 
+## 1.6.6 - 2026-08-03
+
+- Kembali ke fondasi 1.6.4 tanpa perubahan schema atau arsitektur.
+- Snapshot baru tetap dapat dibuka oleh APK 1.6.4; snapshot yang sudah terlanjur memakai metadata 1.6.6 dipulihkan ulang saat sinkronisasi berikutnya.
+
 ## 1.6.4 - 2026-08-01
 
 - "Aktivitas terbaru" di beranda kini hanya menampilkan aktivitas jenis uang (sama dengan filter "Uang" di halaman transaksi): pemasukan, pengeluaran, pengeluaran tak terduga, transfer, saldo awal, dan transfer kanal. Aktivitas budget tidak lagi tampil di beranda.

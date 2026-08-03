@@ -49,6 +49,7 @@ import com.morneven.kron.security.DatabaseRuntime
 import com.morneven.kron.sync.DriveSyncRuntime
 import com.morneven.kron.sync.DriveSyncRuntimeFactory
 import com.morneven.kron.sync.DriveSyncScheduler
+import com.morneven.kron.sync.DataRefreshBridge
 import com.morneven.kron.automation.AutomationWorker
 import com.morneven.kron.capsule.CapsuleDriveScopeProbe
 import com.morneven.kron.capsule.CapsuleDriveScopeProbeFactory
@@ -65,6 +66,8 @@ import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 @AndroidEntryPoint
@@ -86,6 +89,7 @@ class MainActivity : FragmentActivity() {
     private var databaseOpening = false
     private var freshInstall = false
     private var pendingSyncActivation = false
+    private val stagedActivationMutex = Mutex()
 
     private val createPreUpgradeBackup = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream"),
@@ -161,7 +165,7 @@ class MainActivity : FragmentActivity() {
         lifecycleScope.launch {
             val result = applyStagedSnapshot()
             if (result.isSuccess) {
-                recreate()
+                viewModel.refreshForCurrentDate()
             } else {
                 viewModel.showMessage(
                     result.exceptionOrNull()?.message
@@ -239,16 +243,23 @@ class MainActivity : FragmentActivity() {
     }
 
     private suspend fun applyStagedSnapshot(): Result<Unit> {
-        DriveSyncScheduler.cancel(this)
-        TeamSyncScheduler.cancelScheduledWork(this)
-        androidx.work.WorkManager.getInstance(this).cancelUniqueWork(AutomationWorker.UNIQUE_WORK_NAME)
-        val result = databaseRuntime.activatePendingSnapshot()
-        if (result.isSuccess) {
-            driveSyncRuntimeFactory.get().refreshAfterDatabaseActivation()
-            teamSyncRuntime.get().refreshAfterDatabaseActivation()
-            (application as KronApplication).startDataServices()
+        return stagedActivationMutex.withLock {
+            // A foreground observer and an interactive resolver can see the
+            // same candidate. Once the first activation consumes it, the
+            // second caller is a harmless no-op instead of a false failure.
+            if (!databaseRuntime.hasPendingSyncActivation()) return@withLock Result.success(Unit)
+            DriveSyncScheduler.cancel(this)
+            TeamSyncScheduler.cancelScheduledWork(this)
+            androidx.work.WorkManager.getInstance(this).cancelUniqueWork(AutomationWorker.UNIQUE_WORK_NAME)
+            val result = databaseRuntime.activatePendingSnapshot()
+            if (result.isSuccess) {
+                driveSyncRuntimeFactory.get().refreshAfterDatabaseActivation()
+                teamSyncRuntime.get().refreshAfterDatabaseActivation()
+                (application as KronApplication).startDataServices()
+                DataRefreshBridge.emit()
+            }
+            result
         }
-        return result
     }
 
     private fun showRecoveryScreen(

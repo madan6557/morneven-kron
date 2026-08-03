@@ -114,6 +114,7 @@ data class SyncCardUiState(
     val lastSyncedAt: Long? = null,
     val wifiOnly: Boolean = false,
     val detail: String? = null,
+    val busy: Boolean = false,
 )
 
 @Composable
@@ -139,6 +140,7 @@ fun SettingsScreen(
     onSyncNow: (() -> Unit)? = null,
     onSyncTeam: (() -> Unit)? = null,
     teamSyncing: Boolean = false,
+    privateSyncing: Boolean = false,
     teamSyncDetail: String? = null,
     teamSyncFailed: Boolean = false,
     teamWaitingNetwork: Boolean = false,
@@ -213,12 +215,18 @@ fun SettingsScreen(
                         onEditAccount = onEditAccount,
                         onArchiveAccount = onArchiveAccount,
                         onActivateAccount = onActivateAccount,
+                        interactionBlocked = teamSyncing || privateSyncing,
                     )
                 }
             }
             item {
-                HudCard(modifier = Modifier.fillMaxWidth().clickable(onClick = onAddAccount)) {
-                    SettingRow(Icons.Outlined.Add, "Tambah akun", "Setiap akun memiliki kanal Cash dan eBudget", onClick = onAddAccount)
+                HudCard(modifier = Modifier.fillMaxWidth().clickable(enabled = !teamSyncing && !privateSyncing, onClick = onAddAccount)) {
+                    SettingRow(
+                        Icons.Outlined.Add,
+                        "Tambah akun",
+                        "Setiap akun memiliki kanal Cash dan eBudget",
+                        onClick = onAddAccount.takeUnless { teamSyncing || privateSyncing },
+                    )
                 }
             }
         } else if (state.archivedAccounts.isEmpty()) {
@@ -243,7 +251,7 @@ fun SettingsScreen(
                     Text("Riwayat dan audit tetap tersimpan.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = onViewAudit) { Text("Lihat audit") }
-                        TextButton(onClick = { onRestoreAccount(account) }) {
+                        TextButton(onClick = { onRestoreAccount(account) }, enabled = !teamSyncing && !privateSyncing) {
                             Icon(Icons.Outlined.Restore, contentDescription = null)
                             Text("Pulihkan")
                         }
@@ -290,12 +298,12 @@ fun SettingsScreen(
                 } else if (account?.sharingMode != AccountSharingMode.TEAM) {
                     Button(
                         onClick = { onConvertToTeam?.invoke() },
-                        enabled = onConvertToTeam != null && driveSyncConnected,
+                        enabled = onConvertToTeam != null && driveSyncConnected && !teamSyncing && !privateSyncing,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     ) { Text("Ubah menjadi Team") }
                     TextButton(
                         onClick = { onJoinTeam?.invoke() },
-                        enabled = onJoinTeam != null,
+                        enabled = onJoinTeam != null && !teamSyncing && !privateSyncing,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     ) {
                         Icon(Icons.Outlined.Key, contentDescription = null)
@@ -304,23 +312,23 @@ fun SettingsScreen(
                 } else if (workspace?.localRole == TeamRole.OWNER) {
                     Button(
                         onClick = { onManageCollaborators?.invoke() },
-                        enabled = onManageCollaborators != null && workspace.canShare,
+                        enabled = onManageCollaborators != null && workspace.canShare && !teamSyncing && !privateSyncing,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     ) { Text("Kelola collaborator") }
                     TextButton(
                         onClick = { onCreateTeamInvite?.invoke() },
-                        enabled = onCreateTeamInvite != null && workspace.canShare,
+                        enabled = onCreateTeamInvite != null && workspace.canShare && !teamSyncing && !privateSyncing,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     ) { Text("Buat kode akses") }
                     TextButton(
                         onClick = { onConvertToPrivate?.invoke() },
-                        enabled = onConvertToPrivate != null,
+                        enabled = onConvertToPrivate != null && !teamSyncing && !privateSyncing,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     ) { Text("Kembalikan menjadi privat") }
                 } else {
                     TextButton(
                         onClick = { onLeaveTeam?.invoke() },
-                        enabled = onLeaveTeam != null,
+                        enabled = onLeaveTeam != null && !teamSyncing && !privateSyncing,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     ) { Text("Tinggalkan Team") }
                 }
@@ -428,6 +436,7 @@ fun SettingsScreen(
                             "Snapshot Team telah dihapus oleh Owner atau akses Anda telah dicabut. Data lokal dipertahankan."
                         } else null
                     } else cloudBackupState.detail,
+                    busy = if (teamMode) teamSyncing else privateSyncing,
                 ),
                 onConnect = onConnectCloud,
                 onSyncNow = if (teamMode && state.teamWorkspace?.status != "REVOKED") onSyncTeam else onSyncNow,
@@ -619,6 +628,7 @@ private fun AccountCarousel(
     onEditAccount: (AccountEntity) -> Unit,
     onArchiveAccount: (AccountEntity) -> Unit,
     onActivateAccount: (AccountEntity) -> Unit,
+    interactionBlocked: Boolean,
 ) {
     val listState = rememberLazyListState()
     LazyRow(
@@ -651,12 +661,12 @@ private fun AccountCarousel(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    IconButton(onClick = { entity?.let(onEditAccount) }, enabled = entity != null && !readOnly) {
+                    IconButton(onClick = { entity?.let(onEditAccount) }, enabled = entity != null && !readOnly && !interactionBlocked) {
                         Icon(Icons.Outlined.Edit, contentDescription = "Edit akun ${account.name}")
                     }
                     IconButton(
                         onClick = { entity?.let(onArchiveAccount) },
-                        enabled = entity != null && !readOnly && !account.isActive && entity.sharingMode == AccountSharingMode.PRIVATE,
+                        enabled = entity != null && !readOnly && !interactionBlocked && !account.isActive && entity.sharingMode == AccountSharingMode.PRIVATE,
                     ) {
                         Icon(Icons.Outlined.Archive, contentDescription = "Hapus akun ${account.name} dari daftar aktif")
                     }
@@ -673,7 +683,11 @@ private fun AccountCarousel(
                     )
                 }
                 if (!account.isActive && entity != null) {
-                    TextButton(onClick = { onActivateAccount(entity) }, modifier = Modifier.heightIn(min = 48.dp)) {
+                    TextButton(
+                        onClick = { onActivateAccount(entity) },
+                        enabled = !interactionBlocked,
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) {
                         Text("Jadikan akun aktif")
                     }
                 }
@@ -724,14 +738,15 @@ private fun SyncCard(
 ) {
     val team = state.mode == SyncMode.TEAM
     val connected = if (team) state.teamRole != null else state.status !in setOf(CloudSyncStatus.NOT_CONNECTED, CloudSyncStatus.UNAVAILABLE)
-    val actionsBlocked = state.status in setOf(CloudSyncStatus.SYNCING, CloudSyncStatus.RESTART_REQUIRED)
-    val (defaultStatusLabel, statusColor) = cloudStatusPresentation(state.status)
-    val statusLabel = if (team && state.teamRole != null && state.status == CloudSyncStatus.NOT_CONNECTED) {
+    val effectiveStatus = if (state.busy) CloudSyncStatus.SYNCING else state.status
+    val actionsBlocked = state.busy || effectiveStatus in setOf(CloudSyncStatus.SYNCING, CloudSyncStatus.RESTART_REQUIRED)
+    val (defaultStatusLabel, statusColor) = cloudStatusPresentation(effectiveStatus)
+    val statusLabel = if (team && state.teamRole != null && effectiveStatus == CloudSyncStatus.NOT_CONNECTED) {
         "Belum tersinkron"
     } else defaultStatusLabel
     HudCard(accent = statusColor.copy(alpha = 0.55f)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
-            if (state.status == CloudSyncStatus.SYNCING) {
+            if (effectiveStatus == CloudSyncStatus.SYNCING) {
                 CircularProgressIndicator(
                     modifier = Modifier.width(28.dp).height(28.dp),
                     color = statusColor,
@@ -753,7 +768,7 @@ private fun SyncCard(
                 }
             }
         }
-        state.lastSyncedAt?.takeIf { state.status == CloudSyncStatus.SYNCED }?.let { timestamp ->
+        state.lastSyncedAt?.takeIf { effectiveStatus == CloudSyncStatus.SYNCED }?.let { timestamp ->
             Text(
                 "Sinkron terakhir ${Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault()).format(syncDateFormat)}",
                 style = MaterialTheme.typography.bodySmall,
@@ -762,7 +777,9 @@ private fun SyncCard(
             )
         }
         Text(
-            state.detail ?: when (state.status) {
+            if (state.busy) {
+                "Sinkronisasi sedang berjalan. KRON sedang memeriksa, mengirim, atau menerapkan pembaruan terenkripsi."
+            } else state.detail ?: when (effectiveStatus) {
                 CloudSyncStatus.UNAVAILABLE -> "Sinkronisasi belum dikonfigurasi pada build ini. Backup lokal tetap tersedia."
                 CloudSyncStatus.NOT_CONNECTED -> "Opsional. Data disimpan terenkripsi pada Drive akun yang dipilih."
                 CloudSyncStatus.CONFLICT -> "Data perangkat dan ${if (team) "Team" else "Drive"} sama-sama berubah. Tinjau perbedaannya sebelum melanjutkan."
@@ -804,10 +821,14 @@ private fun SyncCard(
                 enabled = !actionsBlocked && state.status != CloudSyncStatus.FREE_ONLY_BLOCKED,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
             ) {
-                Icon(Icons.Outlined.Sync, contentDescription = null)
+                if (state.busy) {
+                    CircularProgressIndicator(modifier = Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Outlined.Sync, contentDescription = null)
+                }
                 Text(
-                    when {
-                        state.status == CloudSyncStatus.CONFLICT -> "Buka Pusat Konflik"
+                    if (state.busy) "Sedang memproses..." else when {
+                        effectiveStatus == CloudSyncStatus.CONFLICT -> "Buka Pusat Konflik"
                         team && state.teamRole == TeamRole.VIEWER -> "Ambil pembaruan Team"
                         team -> "Sinkronkan Team"
                         else -> "Sinkronkan"

@@ -22,15 +22,22 @@ import com.morneven.kron.team.TeamAtomicSwap
 object DriveSyncServiceLocator {
     @Volatile
     var coordinatorProvider: (() -> DriveSyncCoordinator)? = null
+    @Volatile
+    var resultObserver: (suspend (SyncRunResult) -> Unit)? = null
 
     fun coordinator(): DriveSyncCoordinator? = coordinatorProvider?.invoke()
 
-    fun install(provider: () -> DriveSyncCoordinator) {
+    fun install(
+        provider: () -> DriveSyncCoordinator,
+        observer: (suspend (SyncRunResult) -> Unit)? = null,
+    ) {
         coordinatorProvider = provider
+        resultObserver = observer
     }
 
     fun clear() {
         coordinatorProvider = null
+        resultObserver = null
     }
 }
 
@@ -44,8 +51,17 @@ class DriveSyncWorker(
         if (BackupManager.hasPendingRestore(applicationContext) || TeamAtomicSwap.hasPendingSwap(applicationContext)) {
             return Result.retry()
         }
+        if (DriveSyncSwitchGate.isPending(applicationContext)) return Result.success()
         val coordinator = DriveSyncServiceLocator.coordinator() ?: return Result.success()
-        return when (val result = coordinator.syncNow()) {
+        val result = coordinator.syncNow()
+        try {
+            DriveSyncServiceLocator.resultObserver?.invoke(result)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // Sync already completed; an optional Team scheduling callback must not retry it.
+        }
+        return when (result) {
             is SyncRunResult.Error -> if (result.retryable) Result.retry() else Result.failure()
             SyncRunResult.FreeOnlyBlocked -> {
                 DriveSyncScheduler.cancelScheduledWork(applicationContext)

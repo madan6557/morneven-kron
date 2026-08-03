@@ -277,20 +277,15 @@ object CapsuleCodec {
         signingManager: EvidenceSigningKeyManager,
     ): ByteArray? = runCatching {
         val manifest = JSONObject(envelope.manifestJson)
-        android.util.Log.e("KRON_CAPSULE", "verifyAndDecrypt: manifest ok, salt=\"${manifest.optString("salt").take(8)}\"")
 
         val toVerify = (envelope.manifestJson + envelope.ownerCertificateBase64).toByteArray() + envelope.nonce + "\n".toByteArray()
         val sigOk = signingManager.verify(toVerify, envelope.signatureBase64, envelope.ownerCertificateBase64)
-        android.util.Log.e("KRON_CAPSULE", "verifyAndDecrypt: sigOk=$sigOk")
         if (!sigOk) return null
 
         val salt = Base64.getDecoder().decode(manifest.getString("salt"))
         val key = deriveKey(secret, salt)
         val decrypted = decrypt(envelope.ciphertext, key, envelope.nonce)
-        android.util.Log.e("KRON_CAPSULE", "verifyAndDecrypt: decrypt ok, size=${decrypted.size}")
-        val out = decompress(decrypted)
-        android.util.Log.e("KRON_CAPSULE", "verifyAndDecrypt: decompress ok, size=${out.size}")
-        out
+        decompress(decrypted)
     }.getOrNull()
 
     fun serializeEnvelope(
