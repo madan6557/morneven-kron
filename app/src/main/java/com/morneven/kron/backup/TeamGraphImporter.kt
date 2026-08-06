@@ -169,6 +169,8 @@ internal object TeamGraphImporter {
         )
         db.execSQL("DELETE FROM recurring_occurrences WHERE ruleId IN (SELECT id FROM recurring_rules WHERE accountId=$accountId)")
         db.execSQL("DELETE FROM recurring_rules WHERE accountId=$accountId")
+        db.execSQL("DELETE FROM debt_entries WHERE debtId IN (SELECT id FROM debts WHERE accountId=$accountId)")
+        db.execSQL("DELETE FROM debts WHERE accountId=$accountId")
         db.execSQL("DELETE FROM portfolio_allocation_templates WHERE portfolioId IN (SELECT id FROM portfolios WHERE accountId=$accountId)")
         db.execSQL("DELETE FROM allocations WHERE periodId IN (SELECT id FROM budget_periods WHERE portfolioId IN (SELECT id FROM portfolios WHERE accountId=$accountId))")
         db.execSQL("DELETE FROM budget_periods WHERE portfolioId IN (SELECT id FROM portfolios WHERE accountId=$accountId)")
@@ -213,6 +215,18 @@ internal object TeamGraphImporter {
             "SELECT COUNT(*) FROM team_source.recurring_rules s WHERE s.syncId='' OR EXISTS(SELECT 1 FROM recurring_rules t WHERE t.id=s.id OR t.syncId=s.syncId)",
             null,
             "Automation Team bertabrakan",
+        )
+        requireZero(
+            db,
+            "SELECT COUNT(*) FROM team_source.debts s WHERE s.syncId='' OR EXISTS(SELECT 1 FROM debts t WHERE t.id=s.id OR t.syncId=s.syncId)",
+            null,
+            "Sync ID hutang Team bertabrakan",
+        )
+        requireZero(
+            db,
+            "SELECT COUNT(*) FROM team_source.debt_entries s WHERE EXISTS(SELECT 1 FROM debt_entries t WHERE t.id=s.id OR t.eventId=s.eventId)",
+            null,
+            "Riwayat hutang Team bertabrakan",
         )
         requireZero(
             db,
@@ -323,6 +337,13 @@ internal object TeamGraphImporter {
         )
 
         db.execSQL(
+            """INSERT INTO debts(id,accountId,role,counterparty,title,principalOriginal,principalOutstanding,interestOutstanding,interestRateBps,interestIntervalMonths,interestAnchorEpochDay,dueEpochDay,status,createdAt,revision,updatedAt,lastWriterId,syncId)
+               SELECT id,?,role,counterparty,title,principalOriginal,principalOutstanding,interestOutstanding,interestRateBps,interestIntervalMonths,interestAnchorEpochDay,dueEpochDay,status,createdAt,revision,updatedAt,lastWriterId,syncId
+               FROM team_source.debts""",
+            arrayOf(accountId),
+        )
+
+        db.execSQL(
             """INSERT INTO activity_events(id,type,title,note,source,effectiveEpochDay,createdAt,relatedEventId,reversedByEventId,targetAllocationId,accountId)
                SELECT s.id,s.type,s.title,s.note,s.source,s.effectiveEpochDay,s.createdAt,s.relatedEventId,s.reversedByEventId,am.targetId,?
                FROM team_source.activity_events s LEFT JOIN team_allocation_map am ON am.sourceId=s.targetAllocationId""",
@@ -357,6 +378,12 @@ internal object TeamGraphImporter {
             """INSERT INTO receipts(eventId,localPath,storageId,displayName,mimeType,byteSize,sha256,encryptionNonce,encryptionVersion,createdAt,capturedAt,latitude,longitude,origin,evidenceEventId)
                SELECT eventId,NULL,storageId,displayName,mimeType,byteSize,sha256,encryptionNonce,encryptionVersion,createdAt,capturedAt,latitude,longitude,origin,evidenceEventId
                FROM team_source.receipts""",
+        )
+        db.execSQL(
+            """INSERT INTO debt_entries(id,debtId,accountId,eventId,type,principalAmount,interestAmount,effectiveEpochDay,note,createdAt)
+               SELECT id,debtId,?,eventId,type,principalAmount,interestAmount,effectiveEpochDay,note,createdAt
+               FROM team_source.debt_entries""",
+            arrayOf(accountId),
         )
 
         importEvidenceKeys(db)

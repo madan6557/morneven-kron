@@ -1,6 +1,8 @@
 package com.morneven.kron.ui.dialogs
 
 import android.net.Uri
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -47,6 +50,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -56,12 +60,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.morneven.kron.data.AccountEntity
 import com.morneven.kron.data.ActivityRow
+import com.morneven.kron.data.AuditSnapshotEntity
 import com.morneven.kron.data.AllocationBalanceRow
 import com.morneven.kron.data.AllocationDraft
 import com.morneven.kron.data.CategoryEntity
@@ -69,6 +76,8 @@ import com.morneven.kron.data.ExpenseSplitInput
 import com.morneven.kron.data.FundingChannel
 import com.morneven.kron.data.PeriodStatus
 import com.morneven.kron.data.TransactionDirection
+import com.morneven.kron.data.ReceiptEntity
+import com.morneven.kron.data.ResolutionAudit
 import com.morneven.kron.evidence.EvidenceHealth
 import com.morneven.kron.evidence.EvidencePackageManager
 import com.morneven.kron.evidence.EvidenceVerificationResult
@@ -878,6 +887,7 @@ fun EditAccountDialog(account: AccountEntity, onDismiss: () -> Unit, onSubmit: (
 fun AuditDialog(
     event: ActivityRow,
     state: KronUiState,
+    auditDetails: List<AuditSnapshotEntity> = emptyList(),
     onDismiss: () -> Unit,
     onGalleryPick: (String) -> Unit,
     onCameraCapture: (String) -> Unit,
@@ -885,6 +895,8 @@ fun AuditDialog(
     onRevert: (String, String) -> Unit,
     onCorrect: (String, String, String, String) -> Unit,
     onRestoreReversal: ((String) -> Unit)? = null,
+    onReceiptPreview: suspend (ReceiptEntity) -> Bitmap? = { null },
+    onOpenReceipt: (ReceiptEntity) -> Unit = {},
     reversalRestored: Boolean = false,
     readOnly: Boolean = false,
 ) {
@@ -892,7 +904,7 @@ fun AuditDialog(
     var correctionMode by rememberSaveable(event.id) { mutableStateOf(false) }
     var correctedTitle by rememberSaveable(event.id) { mutableStateOf(event.title) }
     var correctedNote by rememberSaveable(event.id) { mutableStateOf(event.note) }
-    val lifecycleEvent = event.type in setOf("ARCHIVE", "RESTORE")
+    val lifecycleEvent = event.type in setOf("ARCHIVE", "RESTORE", "DEBT_OPEN", "DEBT_ARCHIVE")
     val isAttachEvidence = event.type == "ATTACH_EVIDENCE"
     val parentEvent = if (isAttachEvidence && event.relatedEventId != null) {
         state.activities.firstOrNull { it.id == event.relatedEventId }
@@ -904,6 +916,9 @@ fun AuditDialog(
     }
     val actionEnabled = !readOnly && !lifecycleEvent && event.reversedByEventId == null && event.type != "REVERSAL" &&
         reason.isNotBlank() && (!correctionMode || correctedTitle.isNotBlank())
+    val resolutionDetail = auditDetails.asSequence()
+        .mapNotNull { ResolutionAudit.parse(it.beforeJson, it.afterJson) }
+        .firstOrNull()
     FormDialog(
         "Detail audit",
         onDismiss,
@@ -936,9 +951,26 @@ fun AuditDialog(
                 if (parentEvent.cashImpact != 0L) Text("Dampak akun: ${displayMoney(parentEvent.cashImpact, state.valuesVisible)}", style = MaterialTheme.typography.bodySmall)
             }
         } else {
+            resolutionDetail?.let { detail ->
+                HorizontalDivider()
+                Text("Ringkasan resolusi", style = MaterialTheme.typography.titleMedium)
+                Text("${displayMoney(detail.amount, state.valuesVisible)} · ${detail.channel}", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.tertiary)
+                Text("Akun: ${detail.account}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Alur dana", style = MaterialTheme.typography.labelLarge)
+                AuditFlowNode("Sumber", detail.source.label, detail.source.detail, detail.source.before, detail.source.after, state.valuesVisible)
+                Text("↓", modifier = Modifier.padding(start = 12.dp), color = MaterialTheme.colorScheme.tertiary)
+                AuditFlowNode("Tujuan", detail.target.label, detail.target.detail, detail.target.before, detail.target.after, state.valuesVisible)
+            }
+            HorizontalDivider()
             Text("Dampak akun: ${displayMoney(event.cashImpact, state.valuesVisible)}")
             Text("Dampak Vault: ${displayMoney(event.vaultImpact, state.valuesVisible)}")
-            Text("Dampak kategori: ${displayMoney(event.budgetImpact, state.valuesVisible)}")
+            Text("Dampak rollover: ${displayMoney(event.rolloverImpact, state.valuesVisible)}")
+            Text("Dampak belum dialokasikan: ${displayMoney(event.unallocatedImpact, state.valuesVisible)}")
+            if (resolutionDetail == null) {
+                Text("Dampak kategori: ${displayMoney(event.budgetImpact, state.valuesVisible)}")
+            } else {
+                Text("Mutasi kategori ditampilkan per sumber dan tujuan di atas.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             Text("Debit: ${displayMoney(event.ledgerDebit, state.valuesVisible)}")
             Text("Kredit: ${displayMoney(event.ledgerCredit, state.valuesVisible)}")
         }
@@ -950,22 +982,7 @@ fun AuditDialog(
             Text("Belum ada foto bukti untuk event ini.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
             receipts.take(10).forEach { receipt ->
-                val missing = receipt.localPath?.let { java.io.File(it).isFile } != true
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(receipt.displayName, style = MaterialTheme.typography.bodyLarge)
-                        if (missing) {
-                            Surface(color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f), shape = MaterialTheme.shapes.extraSmall) {
-                                Text("Hilang", modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
-                            }
-                        }
-                    }
-                    Text(
-                        "${receipt.mimeType} · ${receipt.byteSize.coerceAtLeast(0) / 1024} KB · ${receipt.origin}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                ReceiptEvidenceItem(receipt, onReceiptPreview, onOpenReceipt)
             }
             if (receipts.size > 10) Text("${receipts.size - 10} bukti lain tersedia di Pusat Bukti.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -988,7 +1005,14 @@ fun AuditDialog(
             }
         }
         if (readOnly) Text("Role Viewer hanya dapat membaca audit transaksi.", color = MaterialTheme.colorScheme.tertiary)
-        else if (lifecycleEvent) Text("Event lifecycle bersifat read-only. Gunakan tab Arsip untuk memulihkan atau mengarsipkan kembali.", color = MaterialTheme.colorScheme.tertiary)
+        else if (lifecycleEvent) Text(
+            if (event.type in setOf("DEBT_OPEN", "DEBT_ARCHIVE")) {
+                "Event tracker hutang bersifat read-only. Gunakan detail hutang untuk melihat riwayatnya."
+            } else {
+                "Event lifecycle bersifat read-only. Gunakan tab Arsip untuk memulihkan atau mengarsipkan kembali."
+            },
+            color = MaterialTheme.colorScheme.tertiary,
+        )
         else if (event.reversedByEventId != null) Text("Event sudah dibatalkan dengan reversal", color = MaterialTheme.colorScheme.error)
         else if (event.type == "REVERSAL" && onRestoreReversal != null && event.relatedEventId != null) {
             if (reversalRestored) {
@@ -1028,6 +1052,80 @@ fun AuditDialog(
                 Text("KRON membuat reversal dan event pengganti. Event lama tidak diubah.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             OutlinedTextField(reason, { reason = it }, label = { Text(if (correctionMode) "Alasan koreksi" else "Alasan pembatalan") }, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+@Composable
+private fun AuditFlowNode(
+    heading: String,
+    label: String,
+    detail: String,
+    before: Long,
+    after: Long,
+    valuesVisible: Boolean,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        shape = MaterialTheme.shapes.medium,
+    ) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(heading, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
+            Text(label, style = MaterialTheme.typography.bodyLarge)
+            if (detail.isNotBlank()) Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                "${displayMoney(before, valuesVisible)} → ${displayMoney(after, valuesVisible)}",
+                style = MaterialTheme.typography.titleSmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReceiptEvidenceItem(
+    receipt: ReceiptEntity,
+    previewLoader: suspend (ReceiptEntity) -> Bitmap?,
+    onOpen: (ReceiptEntity) -> Unit,
+) {
+    val available = receipt.localPath?.let { java.io.File(it).isFile } == true
+    val preview by produceState<Bitmap?>(initialValue = null, receipt.id, receipt.localPath) {
+        value = if (available) previewLoader(receipt) else null
+    }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = available) { onOpen(receipt) },
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+        shape = MaterialTheme.shapes.medium,
+    ) {
+        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            preview?.let { bitmap ->
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = "Bukti ${receipt.displayName}",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(156.dp),
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(receipt.displayName, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                if (!available) {
+                    Surface(color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f), shape = MaterialTheme.shapes.extraSmall) {
+                        Text("Belum tersedia", modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+            Text(
+                "${receipt.mimeType} · ${receipt.byteSize.coerceAtLeast(0) / 1024} KB · ${receipt.origin}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (available && preview == null) {
+                Text("Ketuk untuk membuka bukti", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+            }
         }
     }
 }
@@ -1093,7 +1191,7 @@ fun EvidenceCenterDialog(
 }
 
 @Composable
-private fun FormDialog(title: String, onDismiss: () -> Unit, confirmText: String = "Simpan", confirmEnabled: Boolean, onConfirm: () -> Unit, content: @Composable () -> Unit) {
+internal fun FormDialog(title: String, onDismiss: () -> Unit, confirmText: String = "Simpan", confirmEnabled: Boolean, onConfirm: () -> Unit, content: @Composable () -> Unit) {
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),

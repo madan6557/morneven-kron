@@ -38,6 +38,8 @@ interface KronDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertTeamMembers(values: List<TeamMemberEntity>)
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertTeamInvitationUse(value: TeamInvitationUseEntity): Long
     @Insert suspend fun insertTeamEventProof(value: TeamEventProofEntity)
+    @Insert suspend fun insertDebt(value: DebtEntity)
+    @Insert suspend fun insertDebtEntry(value: DebtEntryEntity)
     @RawQuery suspend fun executeRaw(query: SupportSQLiteQuery): Int
 
     @Update suspend fun updatePeriod(value: BudgetPeriodEntity)
@@ -46,6 +48,7 @@ interface KronDao {
     @Update suspend fun updateSyncState(value: SyncStateEntity)
     @Update suspend fun updateCategory(value: CategoryEntity)
     @Update suspend fun updateAllocationTemplate(value: PortfolioAllocationTemplateEntity)
+    @Update suspend fun updateDebt(value: DebtEntity)
 
     @Query("SELECT COUNT(*) FROM accounts") suspend fun accountCount(): Int
     @Query("SELECT COUNT(*) FROM accounts WHERE sharingMode = 'TEAM'") suspend fun teamAccountCount(): Int
@@ -79,6 +82,10 @@ interface KronDao {
     suspend fun autoSyncTeamWorkspaces(): List<TeamWorkspaceEntity>
     @Query("SELECT * FROM team_members WHERE accountId = :accountId ORDER BY role, displayName, email")
     fun observeTeamMembers(accountId: Long): Flow<List<TeamMemberEntity>>
+    @Query("SELECT * FROM debts WHERE accountId = :accountId ORDER BY CASE status WHEN 'ARCHIVED' THEN 1 ELSE 0 END, dueEpochDay IS NULL, dueEpochDay, createdAt DESC")
+    fun observeDebtsForAccount(accountId: Long): Flow<List<DebtEntity>>
+    @Query("SELECT * FROM debt_entries WHERE accountId = :accountId ORDER BY effectiveEpochDay DESC, createdAt DESC")
+    fun observeDebtEntriesForAccount(accountId: Long): Flow<List<DebtEntryEntity>>
 
     @Query("""
         UPDATE team_workspaces
@@ -234,6 +241,8 @@ interface KronDao {
                COALESCE((SELECT SUM(amount) FROM cash_journal_lines WHERE eventId = e.id), 0) AS cashImpact,
                COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'VAULT'), 0) AS vaultImpact,
                COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND allocationId IS NOT NULL), 0) AS budgetImpact,
+               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'ROLLOVER'), 0) AS rolloverImpact,
+               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'UNALLOCATED'), 0) AS unallocatedImpact,
                COALESCE((SELECT SUM(amount) FROM ledger_lines WHERE eventId = e.id AND side = 'DEBIT'), 0) AS ledgerDebit,
                COALESCE((SELECT SUM(amount) FROM ledger_lines WHERE eventId = e.id AND side = 'CREDIT'), 0) AS ledgerCredit,
                CASE
@@ -261,6 +270,8 @@ interface KronDao {
                COALESCE((SELECT SUM(amount) FROM cash_journal_lines WHERE eventId = e.id), 0) AS cashImpact,
                COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'VAULT'), 0) AS vaultImpact,
                COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND allocationId IS NOT NULL), 0) AS budgetImpact,
+               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'ROLLOVER'), 0) AS rolloverImpact,
+               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'UNALLOCATED'), 0) AS unallocatedImpact,
                COALESCE((SELECT SUM(amount) FROM ledger_lines WHERE eventId = e.id AND side = 'DEBIT'), 0) AS ledgerDebit,
                COALESCE((SELECT SUM(amount) FROM ledger_lines WHERE eventId = e.id AND side = 'CREDIT'), 0) AS ledgerCredit,
                CASE
@@ -322,6 +333,9 @@ interface KronDao {
     @Query("SELECT pf.* FROM allocations al JOIN budget_periods p ON p.id = al.periodId JOIN portfolios pf ON pf.id = p.portfolioId WHERE al.id = :allocationId") suspend fun portfolioForAllocation(allocationId: Long): PortfolioEntity?
     @Query("SELECT * FROM allocations WHERE periodId = :periodId AND categoryId = :categoryId AND fundingChannel = :channel LIMIT 1") suspend fun allocationFor(periodId: Long, categoryId: Long, channel: String): AllocationEntity?
     @Query("SELECT * FROM accounts WHERE id = :id") suspend fun accountById(id: Long): AccountEntity?
+    @Query("SELECT * FROM debts WHERE id = :id LIMIT 1") suspend fun debtById(id: String): DebtEntity?
+    @Query("SELECT * FROM debt_entries WHERE debtId = :debtId ORDER BY effectiveEpochDay, createdAt, rowid") suspend fun debtEntries(debtId: String): List<DebtEntryEntity>
+    @Query("SELECT * FROM debt_entries WHERE eventId = :eventId LIMIT 1") suspend fun debtEntryForEvent(eventId: String): DebtEntryEntity?
     @Query("SELECT * FROM team_workspaces WHERE accountId = :accountId LIMIT 1") suspend fun teamWorkspace(accountId: Long): TeamWorkspaceEntity?
     @Query("SELECT * FROM team_workspaces WHERE teamId = :teamId LIMIT 1") suspend fun teamWorkspaceByTeamId(teamId: String): TeamWorkspaceEntity?
     @Query("SELECT teamId FROM team_workspaces") suspend fun allTeamWorkspaceIds(): List<String>
@@ -407,6 +421,7 @@ interface KronDao {
     @Query("SELECT * FROM transaction_splits WHERE eventId IN (SELECT id FROM activity_events WHERE accountId = :accountId) ORDER BY id") fun observeSplitsForAccount(accountId: Long): Flow<List<TransactionSplitEntity>>
     @Query("SELECT * FROM audit_snapshots WHERE eventId = :eventId ORDER BY id") suspend fun auditsForEvent(eventId: String): List<AuditSnapshotEntity>
     @Query("SELECT * FROM recurring_rules ORDER BY createdAt") suspend fun allRules(): List<RecurringRuleEntity>
+    @Query("SELECT * FROM debts ORDER BY createdAt") suspend fun allDebts(): List<DebtEntity>
     @Query("SELECT COALESCE(SUM(amount), 0) FROM cash_journal_lines WHERE fundingChannel = :channel") suspend fun cashTotal(channel: String): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE fundingChannel = :channel AND (bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL)") suspend fun budgetAvailableTotal(channel: String): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'ROLLOVER' AND fundingChannel = :channel") suspend fun rolloverBalance(channel: String): Long
@@ -445,6 +460,8 @@ interface KronDao {
                COALESCE((SELECT SUM(amount) FROM cash_journal_lines WHERE eventId = e.id), 0) AS cashImpact,
                COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'VAULT'), 0) AS vaultImpact,
                COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND allocationId IS NOT NULL), 0) AS budgetImpact,
+               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'ROLLOVER'), 0) AS rolloverImpact,
+               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'UNALLOCATED'), 0) AS unallocatedImpact,
                COALESCE((SELECT SUM(amount) FROM ledger_lines WHERE eventId = e.id AND side = 'DEBIT'), 0) AS ledgerDebit,
                COALESCE((SELECT SUM(amount) FROM ledger_lines WHERE eventId = e.id AND side = 'CREDIT'), 0) AS ledgerCredit,
                CASE

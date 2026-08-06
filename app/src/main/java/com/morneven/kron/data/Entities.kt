@@ -5,6 +5,8 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import java.math.BigInteger
+import java.time.LocalDate
 import java.util.UUID
 
 object LedgerType {
@@ -29,6 +31,8 @@ object LedgerType {
     const val CORRECTION = "CORRECTION"
     const val RESTORE_REVERSAL = "RESTORE_REVERSAL"
     const val EVIDENCE_KEY_ROTATION = "EVIDENCE_KEY_ROTATION"
+    const val DEBT_OPEN = "DEBT_OPEN"
+    const val DEBT_ARCHIVE = "DEBT_ARCHIVE"
 }
 
 object LedgerSide {
@@ -99,6 +103,26 @@ object TeamWorkspaceStatus {
     const val CONFLICT = "CONFLICT"
     const val REVOKED = "REVOKED"
     const val ARCHIVED = "ARCHIVED"
+}
+
+object DebtRole {
+    const val DEBTOR = "DEBTOR"
+    const val CREDITOR = "CREDITOR"
+}
+
+object DebtStatus {
+    const val OPEN = "OPEN"
+    const val SETTLED = "SETTLED"
+    const val ARCHIVED = "ARCHIVED"
+}
+
+object DebtEntryType {
+    const val OPEN = "OPEN"
+    const val PAYMENT = "PAYMENT"
+    const val SETTLEMENT = "SETTLEMENT"
+    const val ADJUSTMENT = "ADJUSTMENT"
+    const val ARCHIVE = "ARCHIVE"
+    const val REVERSAL = "REVERSAL"
 }
 
 @Entity(tableName = "accounts", indices = [Index(value = ["teamId"], unique = true)])
@@ -655,6 +679,99 @@ data class RecurringOccurrenceEntity(
     val createdAt: Long = System.currentTimeMillis(),
 )
 
+/**
+ * A debt is a scoped tracker. Its linked payment event is the only part that
+ * changes Cash/eBudget, so opening a debt never changes financial balances.
+ */
+@Entity(
+    tableName = "debts",
+    foreignKeys = [ForeignKey(
+        entity = AccountEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["accountId"],
+        onDelete = ForeignKey.RESTRICT,
+    )],
+    indices = [Index("accountId"), Index(value = ["syncId"], unique = true), Index("status")],
+)
+data class DebtEntity(
+    @PrimaryKey val id: String = UUID.randomUUID().toString(),
+    val accountId: Long,
+    val role: String,
+    val counterparty: String,
+    val title: String,
+    val principalOriginal: Long,
+    val principalOutstanding: Long,
+    @ColumnInfo(defaultValue = "0") val interestOutstanding: Long = 0,
+    /** Basis points per interval: 150 = 1.50%. Zero disables interest. */
+    @ColumnInfo(defaultValue = "0") val interestRateBps: Int = 0,
+    @ColumnInfo(defaultValue = "1") val interestIntervalMonths: Int = 1,
+    val interestAnchorEpochDay: Long,
+    val dueEpochDay: Long? = null,
+    @ColumnInfo(defaultValue = "'OPEN'") val status: String = DebtStatus.OPEN,
+    val createdAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "0") val revision: Long = 0,
+    @ColumnInfo(defaultValue = "0") val updatedAt: Long = System.currentTimeMillis(),
+    val lastWriterId: String? = null,
+    @ColumnInfo(defaultValue = "''") val syncId: String = id,
+)
+
+/** Immutable debt history, including the financial event created for a payment. */
+@Entity(
+    tableName = "debt_entries",
+    foreignKeys = [
+        ForeignKey(
+            entity = DebtEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["debtId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+        ForeignKey(
+            entity = ActivityEventEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["eventId"],
+            onDelete = ForeignKey.RESTRICT,
+        ),
+    ],
+    indices = [Index("debtId"), Index("accountId"), Index(value = ["eventId"], unique = true)],
+)
+data class DebtEntryEntity(
+    @PrimaryKey val id: String = UUID.randomUUID().toString(),
+    val debtId: String,
+    val accountId: Long,
+    val eventId: String,
+    val type: String,
+    val principalAmount: Long = 0,
+    val interestAmount: Long = 0,
+    val effectiveEpochDay: Long,
+    val note: String = "",
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+object DebtCalculator {
+    fun currentInterest(debt: DebtEntity, onDate: LocalDate = LocalDate.now()): Long {
+        if (debt.status != DebtStatus.OPEN || debt.principalOutstanding <= 0L || debt.interestRateBps <= 0) {
+            return debt.interestOutstanding
+        }
+        var next = LocalDate.ofEpochDay(debt.interestAnchorEpochDay)
+            .plusMonths(debt.interestIntervalMonths.coerceAtLeast(1).toLong())
+        var intervals = 0L
+        while (!next.isAfter(onDate)) {
+            intervals++
+            next = next.plusMonths(debt.interestIntervalMonths.coerceAtLeast(1).toLong())
+        }
+        if (intervals == 0L) return debt.interestOutstanding
+        val accrued = BigInteger.valueOf(debt.principalOutstanding)
+            .multiply(BigInteger.valueOf(debt.interestRateBps.toLong()))
+            .multiply(BigInteger.valueOf(intervals))
+            .divide(BigInteger.valueOf(10_000L))
+        require(accrued <= BigInteger.valueOf(Long.MAX_VALUE)) { "Bunga hutang melebihi batas nilai" }
+        return Math.addExact(debt.interestOutstanding, accrued.toLong())
+    }
+
+    fun isOverdue(debt: DebtEntity, onDate: LocalDate = LocalDate.now()): Boolean =
+        debt.status == DebtStatus.OPEN && debt.dueEpochDay?.let { it < onDate.toEpochDay() } == true
+}
+
 @Entity(
     tableName = "audit_snapshots",
     foreignKeys = [ForeignKey(
@@ -767,6 +884,8 @@ data class ActivityRow(
     val cashImpact: Long,
     val vaultImpact: Long,
     val budgetImpact: Long,
+    val rolloverImpact: Long,
+    val unallocatedImpact: Long,
     val ledgerDebit: Long,
     val ledgerCredit: Long,
     val auditStatus: String,

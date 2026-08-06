@@ -1,12 +1,14 @@
 package com.morneven.kron.ui
 
 import android.content.Context
+import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.retry
 import androidx.lifecycle.SavedStateHandle
 import android.net.Uri
 import android.provider.OpenableColumns
+import androidx.core.content.FileProvider
 import com.morneven.kron.backup.BackupManager
 import com.morneven.kron.automation.BudgetNotifier
 import com.morneven.kron.data.AccountBalanceRow
@@ -18,6 +20,9 @@ import com.morneven.kron.data.BudgetPeriodEntity
 import com.morneven.kron.data.CashflowRow
 import com.morneven.kron.data.CategoryEntity
 import com.morneven.kron.data.ExpenseSplitInput
+import com.morneven.kron.data.DebtEntity
+import com.morneven.kron.data.DebtEntryEntity
+import com.morneven.kron.data.AuditSnapshotEntity
 import com.morneven.kron.data.EventChannelRow
 import com.morneven.kron.data.FundingChannel
 import com.morneven.kron.data.KronRepository
@@ -101,6 +106,8 @@ data class KronUiState(
     val syncState: SyncStateEntity? = null,
     val teamWorkspace: TeamWorkspaceEntity? = null,
     val teamMembers: List<TeamMemberEntity> = emptyList(),
+    val debts: List<DebtEntity> = emptyList(),
+    val debtEntries: List<DebtEntryEntity> = emptyList(),
     val splits: List<TransactionSplitEntity> = emptyList(),
     val rules: List<RecurringRuleEntity> = emptyList(),
     val cashflow: CashflowRow = CashflowRow(0, 0),
@@ -156,6 +163,8 @@ private data class MetadataSlice(
     val unallocated: Map<String, Long>,
     val teamWorkspace: TeamWorkspaceEntity? = null,
     val teamMembers: List<TeamMemberEntity> = emptyList(),
+    val debts: List<DebtEntity> = emptyList(),
+    val debtEntries: List<DebtEntryEntity> = emptyList(),
 )
 
 private data class PreferenceSlice(
@@ -218,6 +227,8 @@ class MainViewModel @Inject constructor(
     val evidenceHealth: StateFlow<EvidenceHealth?> = evidenceHealthState
     private val evidenceVerificationState = MutableStateFlow<EvidenceVerificationResult?>(null)
     val evidenceVerification: StateFlow<EvidenceVerificationResult?> = evidenceVerificationState
+    private val auditDetailsState = MutableStateFlow<List<AuditSnapshotEntity>>(emptyList())
+    val auditDetails: StateFlow<List<AuditSnapshotEntity>> = auditDetailsState
     val isManualRestoreReady: StateFlow<Boolean> = manualRestoreReady
     val pendingDriveSubjectId: StateFlow<String?> = savedStateHandle.getStateFlow(PENDING_DRIVE_SUBJECT, null)
     val pendingDriveEmail: StateFlow<String?> = savedStateHandle.getStateFlow(PENDING_DRIVE_EMAIL, null)
@@ -284,6 +295,10 @@ class MainViewModel @Inject constructor(
             metadata.copy(teamWorkspace = workspace)
         }.combine(repository.teamMembers) { metadata, members ->
             metadata.copy(teamMembers = members)
+        }.combine(repository.debts) { metadata, debts ->
+            metadata.copy(debts = debts)
+        }.combine(repository.debtEntries) { metadata, entries ->
+            metadata.copy(debtEntries = entries)
         }
     }
 
@@ -334,6 +349,8 @@ class MainViewModel @Inject constructor(
             syncState = ledger.syncState,
             teamWorkspace = metadata.teamWorkspace,
             teamMembers = metadata.teamMembers,
+            debts = metadata.debts,
+            debtEntries = metadata.debtEntries,
             splits = ledger.splits,
             rules = ledger.rules,
             cashflow = cashflow,
@@ -412,6 +429,25 @@ class MainViewModel @Inject constructor(
     fun completeOnboarding() = viewModelScope.launch { preferences.completeOnboarding() }
     fun clearMessage() { message.value = null }
     fun showMessage(value: String) { message.value = value }
+
+    fun loadAuditDetails(eventId: String) = viewModelScope.launch {
+        auditDetailsState.value = repository.auditsForEvent(eventId)
+    }
+
+    fun clearAuditDetails() { auditDetailsState.value = emptyList() }
+
+    suspend fun receiptPreview(receipt: ReceiptEntity): Bitmap? = receiptManager.preview(receipt)
+
+    fun openReceiptForViewing(receipt: ReceiptEntity, onReady: (Uri) -> Unit) = viewModelScope.launch {
+        try {
+            val file = receiptManager.materializeForViewing(receipt)
+            onReady(FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            message.value = "Foto bukti belum dapat dibuka"
+        }
+    }
 
     fun setPendingDriveAuthorization(account: GoogleAccountIdentity?, resolutionId: String) {
         savedStateHandle[PENDING_DRIVE_SUBJECT] = account?.subjectId
@@ -962,6 +998,47 @@ class MainViewModel @Inject constructor(
             ))
             }
         }
+    }
+
+    fun createDebt(
+        accountId: Long,
+        role: String,
+        counterparty: String,
+        title: String,
+        principal: Long,
+        interestRateBps: Int,
+        interestIntervalMonths: Int,
+        startDate: LocalDate,
+        dueDate: LocalDate?,
+        note: String,
+    ) = runAction("Hutang/piutang tercatat") {
+        repository.createDebt(
+            accountId,
+            role,
+            counterparty,
+            title,
+            principal,
+            interestRateBps,
+            interestIntervalMonths,
+            startDate,
+            dueDate,
+            note,
+        )
+    }
+
+    fun recordDebtPayment(
+        debtId: String,
+        channel: String,
+        amount: Long,
+        categoryId: Long?,
+        note: String,
+        effectiveDate: LocalDate = LocalDate.now(),
+    ) = runAction("Pembayaran hutang tercatat") {
+        repository.recordDebtPayment(debtId, channel, amount, categoryId, note, effectiveDate)
+    }
+
+    fun archiveDebt(debtId: String, note: String) = runAction("Hutang diarsipkan") {
+        repository.archiveDebt(debtId, note)
     }
 
     fun transfer(fromAccount: Long, fromChannel: String, toAccount: Long, toChannel: String, amount: Long, note: String) = runAction("Transfer tercatat") {

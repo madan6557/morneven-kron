@@ -65,7 +65,14 @@ class KronRepositoryTest {
         assertEquals(50L, dao.allocationBooked(allocationA.id))
         assertEquals(30L, dao.allocationBooked(allocationB.id))
         assertEquals(LedgerType.REALLOCATION, dao.eventById(eventId)?.type)
-        assertTrue(dao.auditsForEvent(eventId).single().beforeJson.contains("\"source\":20"))
+        val audit = ResolutionAudit.parse(
+            dao.auditsForEvent(eventId).single().beforeJson,
+            dao.auditsForEvent(eventId).single().afterJson,
+        )
+        assertEquals(20L, requireNotNull(audit).source.before)
+        assertEquals(10L, audit.source.after)
+        assertEquals(-10L, audit.target.before)
+        assertEquals(0L, audit.target.after)
         assertEquals(dao.cashTotal(), dao.budgetAvailableTotal())
         assertEquals(dao.cashTotal(FundingChannel.CASH), dao.budgetAvailableTotal(FundingChannel.CASH))
     }
@@ -260,6 +267,66 @@ class KronRepositoryTest {
         assertEquals(75L, dao.vaultBalance(FundingChannel.CASH))
         assertEquals(0L, dao.budgetBucketBalance(BudgetBucket.UNEXPECTED, FundingChannel.CASH))
         assertEquals(dao.cashTotal(), dao.budgetAvailableTotal())
+    }
+
+    @Test
+    fun debtPaymentsTrackInterestSettlementAndReversalWithoutChangingOpeningBalance() = runBlocking {
+        val account = dao.activeAccount() ?: error("Akun aktif tidak ditemukan")
+        val expenseCategory = dao.allCategories().first { it.direction == TransactionDirection.EXPENSE }
+        val incomeCategory = dao.allCategories().first { it.direction == TransactionDirection.INCOME }
+        val today = LocalDate.now()
+        repository.addIncome(account.id, FundingChannel.CASH, 200, incomeCategory.id, "Modal", "")
+
+        val debtorId = repository.createDebt(
+            accountId = account.id,
+            role = DebtRole.DEBTOR,
+            counterparty = "Pemberi",
+            title = "Pinjaman uji",
+            principal = 100,
+            interestRateBps = 1_000,
+            interestIntervalMonths = 1,
+            startDate = today.minusMonths(1),
+            dueDate = today.plusMonths(1),
+            note = "",
+        )
+        assertEquals(200L, dao.accountBalance(account.id, FundingChannel.CASH))
+        assertEquals(100L, dao.debtById(debtorId)?.principalOutstanding)
+        assertTrue(requireNotNull(dao.debtById(debtorId)).updatedAt > 0L)
+
+        repository.recordDebtPayment(debtorId, FundingChannel.CASH, 15, expenseCategory.id, "", today)
+        val afterPartial = requireNotNull(dao.debtById(debtorId))
+        assertEquals(95L, afterPartial.principalOutstanding)
+        assertEquals(0L, afterPartial.interestOutstanding)
+        assertEquals(DebtStatus.OPEN, afterPartial.status)
+        assertEquals(185L, dao.accountBalance(account.id, FundingChannel.CASH))
+
+        val settlementId = repository.recordDebtPayment(debtorId, FundingChannel.CASH, 95, expenseCategory.id, "", today)
+        assertEquals(DebtStatus.SETTLED, dao.debtById(debtorId)?.status)
+        assertEquals(90L, dao.accountBalance(account.id, FundingChannel.CASH))
+        assertEquals(DebtEntryType.SETTLEMENT, dao.debtEntryForEvent(settlementId)?.type)
+
+        repository.reverseEvent(settlementId, "Pembayaran terakhir salah")
+        assertEquals(DebtStatus.OPEN, dao.debtById(debtorId)?.status)
+        assertEquals(95L, dao.debtById(debtorId)?.principalOutstanding)
+        assertEquals(185L, dao.accountBalance(account.id, FundingChannel.CASH))
+        assertEquals(dao.cashTotal(FundingChannel.CASH), dao.budgetAvailableTotal(FundingChannel.CASH))
+
+        val creditorId = repository.createDebt(
+            accountId = account.id,
+            role = DebtRole.CREDITOR,
+            counterparty = "Peminjam",
+            title = "Piutang uji",
+            principal = 50,
+            interestRateBps = 0,
+            interestIntervalMonths = 1,
+            startDate = today,
+            dueDate = null,
+            note = "",
+        )
+        repository.recordDebtPayment(creditorId, FundingChannel.CASH, 50, incomeCategory.id, "", today)
+        assertEquals(DebtStatus.SETTLED, dao.debtById(creditorId)?.status)
+        assertEquals(235L, dao.accountBalance(account.id, FundingChannel.CASH))
+        postingEngine.validateAll()
     }
 
     @Test

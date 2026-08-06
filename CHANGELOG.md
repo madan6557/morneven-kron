@@ -1,5 +1,14 @@
 # KRON Changelog
 
+## 1.7.0 - 2026-08-06
+
+- Menambahkan pelacak Hutang dan Piutang per akun: pokok, tenggat, bunga bulanan opsional, pembayaran parsial, pelunasan, reversal pembayaran, dan arsip tanpa menghapus riwayat.
+- Pembayaran hutang/piutang kini membuat transaksi Cash atau eBudget yang seimbang secara atomik. Hutang hanya tampil sebagai informasi kewajiban atau piutang, bukan sebagai saldo Cash/eBudget utama.
+- Beranda memiliki tindakan cepat Hutang dan kartu Hutang & Piutang yang hanya tampil ketika masih ada data aktif. Tab Laporan menampilkan ringkasan dan histori hutang bila tersedia.
+- Room schema 17 menambahkan graph hutang yang ikut dalam backup, sinkronisasi Privat, Team, recovery, dan konflik dengan riwayat pembayaran append-only.
+- Audit resolusi budget kini mencatat nominal, akun, kanal, sumber, tujuan, saldo sebelum/sesudah, Main Vault, Rollover, dan Belum dialokasikan sehingga perpindahan dana dapat ditelusuri.
+- Detail audit menampilkan alur dana dan thumbnail bukti yang tersimpan lokal. Bukti dapat dibuka melalui penampil aman atau aplikasi Galeri tanpa menyimpan path atau isi bukti di log.
+
 ## 1.6.6 - 2026-08-03
 
 - Kembali ke fondasi 1.6.4 tanpa perubahan schema atau arsitektur.

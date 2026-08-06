@@ -38,8 +38,10 @@ import com.morneven.kron.security.SqlCipherLibrary
         TeamMemberEntity::class,
         TeamInvitationUseEntity::class,
         TeamEventProofEntity::class,
+        DebtEntity::class,
+        DebtEntryEntity::class,
     ],
-    version = 16,
+    version = 17,
     exportSchema = true,
 )
 abstract class KronDatabase : RoomDatabase() {
@@ -1064,6 +1066,67 @@ abstract class KronDatabase : RoomDatabase() {
             }
         }
 
+        /** Debt data is additive and never reinterprets historical journals. */
+        val MIGRATION_16_17: Migration = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS debts (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        accountId INTEGER NOT NULL,
+                        role TEXT NOT NULL,
+                        counterparty TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        principalOriginal INTEGER NOT NULL,
+                        principalOutstanding INTEGER NOT NULL,
+                        interestOutstanding INTEGER NOT NULL DEFAULT 0,
+                        interestRateBps INTEGER NOT NULL DEFAULT 0,
+                        interestIntervalMonths INTEGER NOT NULL DEFAULT 1,
+                        interestAnchorEpochDay INTEGER NOT NULL,
+                        dueEpochDay INTEGER,
+                        status TEXT NOT NULL DEFAULT 'OPEN',
+                        createdAt INTEGER NOT NULL,
+                        revision INTEGER NOT NULL DEFAULT 0,
+                        updatedAt INTEGER NOT NULL DEFAULT 0,
+                        lastWriterId TEXT,
+                        syncId TEXT NOT NULL DEFAULT '',
+                        FOREIGN KEY(accountId) REFERENCES accounts(id) ON UPDATE NO ACTION ON DELETE RESTRICT
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_debts_accountId ON debts(accountId)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_debts_syncId ON debts(syncId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_debts_status ON debts(status)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS debt_entries (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        debtId TEXT NOT NULL,
+                        accountId INTEGER NOT NULL,
+                        eventId TEXT NOT NULL,
+                        type TEXT NOT NULL,
+                        principalAmount INTEGER NOT NULL DEFAULT 0,
+                        interestAmount INTEGER NOT NULL DEFAULT 0,
+                        effectiveEpochDay INTEGER NOT NULL,
+                        note TEXT NOT NULL DEFAULT '',
+                        createdAt INTEGER NOT NULL,
+                        FOREIGN KEY(debtId) REFERENCES debts(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                        FOREIGN KEY(eventId) REFERENCES activity_events(id) ON UPDATE NO ACTION ON DELETE RESTRICT
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_debt_entries_debtId ON debt_entries(debtId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_debt_entries_accountId ON debt_entries(accountId)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_debt_entries_eventId ON debt_entries(eventId)")
+                check(db.query("PRAGMA foreign_key_check").use { !it.moveToFirst() }) {
+                    "Relasi database tidak valid setelah migrasi hutang"
+                }
+                check(db.query("PRAGMA integrity_check").use { it.moveToFirst() && it.getString(0).equals("ok", true) }) {
+                    "Database tidak utuh setelah migrasi hutang"
+                }
+            }
+        }
+
         private val ALL_MIGRATIONS = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
@@ -1080,6 +1143,7 @@ abstract class KronDatabase : RoomDatabase() {
             MIGRATION_13_14,
             MIGRATION_14_15,
             MIGRATION_15_16,
+            MIGRATION_16_17,
         )
 
         private fun addTeamSyncColumns(
@@ -1195,6 +1259,8 @@ abstract class KronDatabase : RoomDatabase() {
                 "activity_events",
                 "recurring_rules",
                 "receipts",
+                "debts",
+                "debt_entries",
             )
             val privateScopes = mapOf(
                 "accounts" to "{row}.sharingMode<>'TEAM'",
@@ -1206,6 +1272,8 @@ abstract class KronDatabase : RoomDatabase() {
                 "activity_events" to "EXISTS(SELECT 1 FROM accounts a WHERE a.id={row}.accountId AND a.sharingMode<>'TEAM')",
                 "recurring_rules" to "EXISTS(SELECT 1 FROM accounts a WHERE a.id={row}.accountId AND a.sharingMode<>'TEAM')",
                 "receipts" to "EXISTS(SELECT 1 FROM activity_events e JOIN accounts a ON a.id=e.accountId WHERE e.id={row}.eventId AND a.sharingMode<>'TEAM')",
+                "debts" to "EXISTS(SELECT 1 FROM accounts a WHERE a.id={row}.accountId AND a.sharingMode<>'TEAM')",
+                "debt_entries" to "EXISTS(SELECT 1 FROM debts d JOIN accounts a ON a.id=d.accountId WHERE d.id={row}.debtId AND a.sharingMode<>'TEAM')",
             )
             generationTables.filter { db.hasTable(it) }.forEach { table ->
                 listOf("INSERT", "UPDATE", "DELETE").forEach { operation ->
@@ -1321,6 +1389,7 @@ abstract class KronDatabase : RoomDatabase() {
                 "allocations" to "(SELECT f.accountId FROM budget_periods p JOIN portfolios f ON f.id=p.portfolioId WHERE p.id={row}.periodId)",
                 "portfolio_allocation_templates" to "(SELECT accountId FROM portfolios WHERE id={row}.portfolioId)",
                 "recurring_rules" to "{row}.accountId",
+                "debts" to "{row}.accountId",
             )
             accountExpressions.filterKeys { db.hasTable(it) }.forEach { (table, expression) ->
                 listOf("INSERT", "UPDATE", "DELETE").forEach { operation ->
@@ -1350,6 +1419,7 @@ abstract class KronDatabase : RoomDatabase() {
             mapOf(
                 "activity_events" to "NEW.accountId",
                 "receipts" to "(SELECT accountId FROM activity_events WHERE id=NEW.eventId)",
+                "debt_entries" to "NEW.accountId",
                 "team_invitation_uses" to "(SELECT accountId FROM team_workspaces WHERE teamId=NEW.teamId)",
             ).filterKeys { db.hasTable(it) }.forEach { (table, accountId) ->
                 db.execSQL(
@@ -1382,6 +1452,7 @@ abstract class KronDatabase : RoomDatabase() {
                 "evidence_keys",
                 "team_invitation_uses",
                 "team_event_proofs",
+                "debt_entries",
             )
             immutableTables.filter { db.hasTable(it) }.forEach { table ->
                 listOf("UPDATE", "DELETE").forEach { operation ->
@@ -1417,6 +1488,26 @@ abstract class KronDatabase : RoomDatabase() {
                 END
                 """.trimIndent(),
             )
+            if (db.hasTable("debt_entries")) {
+                db.execSQL("DROP TRIGGER IF EXISTS debt_entries_scope_insert")
+                db.execSQL(
+                    """
+                    CREATE TRIGGER debt_entries_scope_insert
+                    BEFORE INSERT ON debt_entries
+                    WHEN NOT EXISTS(
+                        SELECT 1
+                        FROM debts d
+                        JOIN activity_events e ON e.id=NEW.eventId
+                        WHERE d.id=NEW.debtId
+                          AND d.accountId=NEW.accountId
+                          AND e.accountId=NEW.accountId
+                    )
+                    BEGIN
+                        SELECT RAISE(ABORT, 'Riwayat hutang harus memakai akun dan event yang sama');
+                    END
+                    """.trimIndent(),
+                )
+            }
             db.execSQL(
                 """
                 CREATE TRIGGER IF NOT EXISTS append_only_receipts_delete
@@ -1441,6 +1532,31 @@ abstract class KronDatabase : RoomDatabase() {
             require(scalar(db, "SELECT COUNT(*) FROM accounts WHERE (sharingMode='PRIVATE' AND teamId IS NOT NULL) OR (sharingMode='TEAM' AND teamId IS NULL)") == 0L) {
                 "Identitas Team Account tidak konsisten"
             }
+            require(
+                scalar(
+                    db,
+                    "SELECT COUNT(*) FROM debts WHERE role NOT IN ('DEBTOR','CREDITOR') OR status NOT IN ('OPEN','SETTLED','ARCHIVED') OR principalOriginal<=0 OR principalOutstanding<0 OR interestOutstanding<0 OR interestRateBps<0 OR interestIntervalMonths<=0",
+                ) == 0L,
+            ) { "Data hutang tidak valid" }
+            require(
+                scalar(
+                    db,
+                    "SELECT COUNT(*) FROM debt_entries e " +
+                        "LEFT JOIN debts d ON d.id=e.debtId " +
+                        "LEFT JOIN activity_events a ON a.id=e.eventId " +
+                        "WHERE d.id IS NULL OR a.id IS NULL OR e.accountId<>d.accountId OR e.accountId<>a.accountId " +
+                        "OR e.type NOT IN ('OPEN','PAYMENT','SETTLEMENT','ADJUSTMENT','ARCHIVE','REVERSAL') " +
+                        "OR (e.type<>'REVERSAL' AND (e.principalAmount<0 OR e.interestAmount<0)) " +
+                        "OR (e.type='REVERSAL' AND (e.principalAmount>0 OR e.interestAmount>0))",
+                ) == 0L,
+            ) { "Riwayat hutang tidak konsisten" }
+            require(
+                scalar(
+                    db,
+                    "SELECT COUNT(*) FROM debts WHERE status='SETTLED' AND (principalOutstanding<>0 OR interestOutstanding<>0) " +
+                        "OR status='OPEN' AND principalOutstanding=0 AND interestOutstanding=0",
+                ) == 0L,
+            ) { "Status hutang tidak konsisten" }
             require(
                 scalar(
                     db,
@@ -1540,6 +1656,6 @@ abstract class KronDatabase : RoomDatabase() {
         }
 
         const val DATABASE_NAME = "kron-v4.db"
-        const val SCHEMA_VERSION = 16
+        const val SCHEMA_VERSION = 17
     }
 }

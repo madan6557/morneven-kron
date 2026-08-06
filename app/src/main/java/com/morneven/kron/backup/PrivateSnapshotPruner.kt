@@ -24,6 +24,8 @@ internal object PrivateSnapshotPruner {
                 db.execSQL("DELETE FROM ledger_lines WHERE eventId IN ($teamEvents)")
                 db.execSQL("DELETE FROM recurring_occurrences WHERE ruleId IN (SELECT id FROM recurring_rules WHERE accountId IN (SELECT id FROM accounts WHERE sharingMode='TEAM'))")
                 db.execSQL("DELETE FROM recurring_rules WHERE accountId IN (SELECT id FROM accounts WHERE sharingMode='TEAM')")
+                db.execSQL("DELETE FROM debt_entries WHERE debtId IN (SELECT id FROM debts WHERE accountId IN (SELECT id FROM accounts WHERE sharingMode='TEAM'))")
+                db.execSQL("DELETE FROM debts WHERE accountId IN (SELECT id FROM accounts WHERE sharingMode='TEAM')")
                 db.execSQL("DELETE FROM portfolio_allocation_templates WHERE portfolioId IN (SELECT id FROM portfolios WHERE accountId IN (SELECT id FROM accounts WHERE sharingMode='TEAM'))")
                 db.execSQL("DELETE FROM allocations WHERE periodId IN (SELECT id FROM budget_periods WHERE portfolioId IN (SELECT id FROM portfolios WHERE accountId IN (SELECT id FROM accounts WHERE sharingMode='TEAM')))")
                 db.execSQL("DELETE FROM budget_periods WHERE portfolioId IN (SELECT id FROM portfolios WHERE accountId IN (SELECT id FROM accounts WHERE sharingMode='TEAM'))")

@@ -50,6 +50,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.morneven.kron.data.ActivityRow
 import com.morneven.kron.data.CategoryEntity
+import com.morneven.kron.data.DebtCalculator
+import com.morneven.kron.data.DebtRole
+import com.morneven.kron.data.DebtStatus
 import com.morneven.kron.data.FundingChannel
 import com.morneven.kron.data.PeriodStatus
 import com.morneven.kron.data.TransactionSplitEntity
@@ -122,6 +125,7 @@ private fun ChangeIndicator(
 fun ReportsScreen(
     state: KronUiState,
     onExport: () -> Unit,
+    onManageDebts: () -> Unit = {},
     modifier: Modifier = Modifier,
     eventChannels: ReportEventChannels = emptyMap(),
     readOnly: Boolean = false,
@@ -140,6 +144,13 @@ fun ReportsScreen(
     var showTable by rememberSaveable { mutableStateOf(false) }
 
     val today = LocalDate.now()
+    val reportDebts = state.debts
+    val debtPayable = reportDebts.filter { it.status == DebtStatus.OPEN && it.role == DebtRole.DEBTOR }
+        .sumOf { it.principalOutstanding + DebtCalculator.currentInterest(it, today) }
+    val debtReceivable = reportDebts.filter { it.status == DebtStatus.OPEN && it.role == DebtRole.CREDITOR }
+        .sumOf { it.principalOutstanding + DebtCalculator.currentInterest(it, today) }
+    val debtInterest = reportDebts.filter { it.status == DebtStatus.OPEN }
+        .sumOf { DebtCalculator.currentInterest(it, today) }
     val customStart = LocalDate.ofEpochDay(customStartDay)
     val customEnd = LocalDate.ofEpochDay(customEndDay)
     val end = if (range == ReportRange.CUSTOM) customEnd else today
@@ -376,6 +387,28 @@ fun ReportsScreen(
                 if (channel == ReportChannel.ALL) Spacer(Modifier.height(12.dp))
                 if (channel in setOf(ReportChannel.ALL, ReportChannel.EBUDGET)) {
                     AssetRow(FundingChannel.EBUDGET, state.totalEBudgetAssets, money)
+                }
+            }
+        }
+
+        if (reportDebts.isNotEmpty()) item {
+            HudCard(accent = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.65f)) {
+                SectionHeader("Laporan Hutang")
+                Text("Tracker ini tidak menambah saldo aset. Hanya pembayaran yang masuk ke cash flow.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(10.dp))
+                ReportMetric("Perlu dibayar", money(debtPayable), MaterialTheme.colorScheme.error)
+                ReportMetric("Akan diterima", money(debtReceivable), KronGreen)
+                ReportMetric("Bunga berjalan", money(debtInterest), KronGold)
+                Text("Aktif ${reportDebts.count { it.status == DebtStatus.OPEN }} · Lunas ${reportDebts.count { it.status == DebtStatus.SETTLED }} · Arsip ${reportDebts.count { it.status == DebtStatus.ARCHIVED }}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                reportDebts.filter { it.status == DebtStatus.OPEN }.sortedBy { it.dueEpochDay ?: Long.MAX_VALUE }.take(3).forEach { debt ->
+                    val interest = DebtCalculator.currentInterest(debt, today)
+                    HorizontalDivider(modifier = Modifier.padding(top = 8.dp, bottom = 6.dp))
+                    Text("${if (debt.role == DebtRole.DEBTOR) "Hutang" else "Piutang"} · ${debt.counterparty}", style = MaterialTheme.typography.bodyMedium)
+                    Text("${debt.title} · ${money(debt.principalOutstanding + interest)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    debt.dueEpochDay?.let { due -> Text("Tenggat ${shortDate(LocalDate.ofEpochDay(due))}", style = MaterialTheme.typography.labelSmall, color = if (LocalDate.ofEpochDay(due).isBefore(today)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary) }
+                }
+                TextButton(onClick = onManageDebts, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                    Text("Kelola hutang & piutang")
                 }
             }
         }

@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import org.json.JSONObject
 
 data class ExpenseSplitInput(
     val categoryId: Long?,
@@ -82,6 +83,7 @@ private fun PortfolioEntity.bumpRevision() = copy(revision = revision + 1, updat
 private fun BudgetPeriodEntity.bumpRevision() = copy(revision = revision + 1, updatedAt = System.currentTimeMillis())
 private fun AllocationEntity.bumpRevision() = copy(revision = revision + 1, updatedAt = System.currentTimeMillis())
 private fun RecurringRuleEntity.bumpRevision() = copy(revision = revision + 1, updatedAt = System.currentTimeMillis())
+private fun DebtEntity.bumpRevision() = copy(revision = revision + 1, updatedAt = System.currentTimeMillis())
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @Singleton
@@ -141,6 +143,8 @@ class KronRepository private constructor(
     val splits = activeAccountFlow.flatMapLatest { it?.let { id -> database.kronDao().observeSplitsForAccount(id) } ?: flowOf(emptyList()) }
     val teamWorkspace = activeAccountFlow.flatMapLatest { it?.let { id -> database.kronDao().observeTeamWorkspace(id) } ?: flowOf(null) }
     val teamMembers = activeAccountFlow.flatMapLatest { it?.let { id -> database.kronDao().observeTeamMembers(id) } ?: flowOf(emptyList()) }
+    val debts = activeAccountFlow.flatMapLatest { it?.let { id -> database.kronDao().observeDebtsForAccount(id) } ?: flowOf(emptyList()) }
+    val debtEntries = activeAccountFlow.flatMapLatest { it?.let { id -> database.kronDao().observeDebtEntriesForAccount(id) } ?: flowOf(emptyList()) }
 
     val vault = activeAccountFlow.flatMapLatest { accountId ->
         accountId?.let { database.kronDao().observeVaultBalance(it) } ?: flowOf(0L)
@@ -259,6 +263,8 @@ class KronRepository private constructor(
             dao.activateOnly(accountId)
         }
     }
+
+    suspend fun auditsForEvent(eventId: String): List<AuditSnapshotEntity> = dao.auditsForEvent(eventId)
 
     suspend fun archiveAccount(accountId: Long, reason: String) = database.withTransaction {
         require(reason.isNotBlank()) { "Alasan wajib diisi" }
@@ -447,6 +453,198 @@ class KronRepository private constructor(
         return eventId
     }
 
+    suspend fun createDebt(
+        accountId: Long,
+        role: String,
+        counterparty: String,
+        title: String,
+        principal: Long,
+        interestRateBps: Int,
+        interestIntervalMonths: Int,
+        startDate: LocalDate,
+        dueDate: LocalDate?,
+        note: String,
+    ): String = database.withTransaction {
+        requireActiveAccount(accountId)
+        require(role in setOf(DebtRole.DEBTOR, DebtRole.CREDITOR)) { "Tipe hutang tidak valid" }
+        require(counterparty.isNotBlank()) { "Nama pihak wajib diisi" }
+        require(title.isNotBlank()) { "Judul hutang wajib diisi" }
+        require(principal > 0L) { "Pokok hutang harus lebih dari nol" }
+        require(interestRateBps in 0..100_000) { "Bunga tidak valid" }
+        require(interestIntervalMonths > 0) { "Interval bunga harus minimal satu bulan" }
+        require(dueDate == null || !dueDate.isBefore(startDate)) { "Tenggat tidak boleh sebelum tanggal mulai" }
+        val debtId = UUID.randomUUID().toString()
+        val eventId = UUID.randomUUID().toString()
+        val createdAt = System.currentTimeMillis()
+        val debt = DebtEntity(
+            id = debtId,
+            accountId = accountId,
+            role = role,
+            counterparty = counterparty.trim(),
+            title = title.trim(),
+            principalOriginal = principal,
+            principalOutstanding = principal,
+            interestRateBps = interestRateBps,
+            interestIntervalMonths = interestIntervalMonths,
+            interestAnchorEpochDay = startDate.toEpochDay(),
+            dueEpochDay = dueDate?.toEpochDay(),
+            createdAt = createdAt,
+            updatedAt = createdAt,
+            syncId = debtId,
+        )
+        dao.insertEvent(ActivityEventEntity(
+            id = eventId,
+            type = LedgerType.DEBT_OPEN,
+            title = if (role == DebtRole.DEBTOR) "Hutang dibuat: ${debt.title}" else "Piutang dibuat: ${debt.title}",
+            note = note.trim(),
+            source = "USER",
+            effectiveEpochDay = startDate.toEpochDay(),
+            accountId = accountId,
+        ))
+        dao.insertDebt(debt)
+        dao.insertDebtEntry(DebtEntryEntity(
+            debtId = debtId,
+            accountId = accountId,
+            eventId = eventId,
+            type = DebtEntryType.OPEN,
+            principalAmount = principal,
+            effectiveEpochDay = startDate.toEpochDay(),
+            note = note.trim(),
+        ))
+        dao.insertAudit(AuditSnapshotEntity(
+            eventId = eventId,
+            reason = "Tracker hutang dibuat tanpa mengubah saldo akun",
+            beforeJson = JSONObject().put("debt", JSONObject.NULL).toString(),
+            afterJson = JSONObject()
+                .put("debtId", debtId)
+                .put("role", role)
+                .put("principal", principal)
+                .put("interestRateBps", interestRateBps)
+                .put("interestIntervalMonths", interestIntervalMonths)
+                .put("dueEpochDay", dueDate?.toEpochDay())
+                .toString(),
+        ))
+        assertInvariant()
+        debtId
+    }
+
+    suspend fun recordDebtPayment(
+        debtId: String,
+        fundingChannel: String,
+        amount: Long,
+        categoryId: Long?,
+        note: String,
+        effectiveDate: LocalDate = LocalDate.now(),
+    ): String = database.withTransaction {
+        val debt = requireNotNull(dao.debtById(debtId)) { "Hutang tidak ditemukan" }
+        requireActiveAccount(debt.accountId)
+        require(debt.status == DebtStatus.OPEN) { "Hutang sudah tidak aktif" }
+        require(amount > 0L) { "Nominal pembayaran harus lebih dari nol" }
+        require(!effectiveDate.isBefore(LocalDate.ofEpochDay(debt.interestAnchorEpochDay))) { "Tanggal pembayaran tidak boleh sebelum pembayaran terakhir" }
+        val interestBefore = DebtCalculator.currentInterest(debt, effectiveDate)
+        val due = Math.addExact(debt.principalOutstanding, interestBefore)
+        require(amount <= due) { "Nominal melebihi total hutang berjalan" }
+        val interestPaid = min(amount, interestBefore)
+        val principalPaid = amount - interestPaid
+        val title = if (debt.role == DebtRole.DEBTOR) "Bayar hutang: ${debt.title}" else "Terima piutang: ${debt.title}"
+        val eventId = if (debt.role == DebtRole.DEBTOR) {
+            postExpenseInternal(
+                accountId = debt.accountId,
+                fundingChannel = fundingChannel,
+                amount = amount,
+                splits = listOf(ExpenseSplitInput(categoryId = categoryId, allocationId = null, amount = amount)),
+                title = title,
+                note = note.trim(),
+                effectiveDate = effectiveDate,
+                eventType = LedgerType.EXPENSE,
+                source = "USER",
+            )
+        } else {
+            postIncomeInternal(
+                accountId = debt.accountId,
+                fundingChannel = fundingChannel,
+                amount = amount,
+                categoryId = categoryId,
+                title = title,
+                note = note.trim(),
+                effectiveDate = effectiveDate,
+                eventType = LedgerType.INCOME,
+                source = "USER",
+            )
+        }
+        val nextPrincipal = debt.principalOutstanding - principalPaid
+        val nextInterest = interestBefore - interestPaid
+        val settled = nextPrincipal == 0L && nextInterest == 0L
+        dao.updateDebt(debt.copy(
+            principalOutstanding = nextPrincipal,
+            interestOutstanding = nextInterest,
+            interestAnchorEpochDay = effectiveDate.toEpochDay(),
+            status = if (settled) DebtStatus.SETTLED else DebtStatus.OPEN,
+        ).bumpRevision())
+        dao.insertDebtEntry(DebtEntryEntity(
+            debtId = debt.id,
+            accountId = debt.accountId,
+            eventId = eventId,
+            type = if (settled) DebtEntryType.SETTLEMENT else DebtEntryType.PAYMENT,
+            principalAmount = principalPaid,
+            interestAmount = interestPaid,
+            effectiveEpochDay = effectiveDate.toEpochDay(),
+            note = note.trim(),
+        ))
+        dao.insertAudit(AuditSnapshotEntity(
+            eventId = eventId,
+            reason = "Pembayaran hutang dicatat bersama transaksi saldo",
+            beforeJson = JSONObject()
+                .put("debtId", debt.id)
+                .put("principal", debt.principalOutstanding)
+                .put("interest", interestBefore)
+                .toString(),
+            afterJson = JSONObject()
+                .put("debtId", debt.id)
+                .put("payment", amount)
+                .put("principalPaid", principalPaid)
+                .put("interestPaid", interestPaid)
+                .put("principal", nextPrincipal)
+                .put("interest", nextInterest)
+                .put("status", if (settled) DebtStatus.SETTLED else DebtStatus.OPEN)
+                .toString(),
+        ))
+        assertInvariant()
+        eventId
+    }
+
+    suspend fun archiveDebt(debtId: String, note: String) = database.withTransaction {
+        val debt = requireNotNull(dao.debtById(debtId)) { "Hutang tidak ditemukan" }
+        requireActiveAccount(debt.accountId)
+        require(debt.status != DebtStatus.ARCHIVED) { "Hutang sudah diarsipkan" }
+        val eventId = UUID.randomUUID().toString()
+        dao.insertEvent(ActivityEventEntity(
+            id = eventId,
+            type = LedgerType.DEBT_ARCHIVE,
+            title = "Hutang diarsipkan: ${debt.title}",
+            note = note.trim(),
+            source = "USER",
+            effectiveEpochDay = LocalDate.now().toEpochDay(),
+            accountId = debt.accountId,
+        ))
+        dao.updateDebt(debt.copy(status = DebtStatus.ARCHIVED).bumpRevision())
+        dao.insertDebtEntry(DebtEntryEntity(
+            debtId = debt.id,
+            accountId = debt.accountId,
+            eventId = eventId,
+            type = DebtEntryType.ARCHIVE,
+            effectiveEpochDay = LocalDate.now().toEpochDay(),
+            note = note.trim(),
+        ))
+        dao.insertAudit(AuditSnapshotEntity(
+            eventId = eventId,
+            reason = "Tracker hutang diarsipkan tanpa menghapus riwayat",
+            beforeJson = JSONObject().put("status", debt.status).toString(),
+            afterJson = JSONObject().put("status", DebtStatus.ARCHIVED).toString(),
+        ))
+        assertInvariant()
+    }
+
     suspend fun transfer(fromAccountId: Long, fromChannel: String, toAccountId: Long, toChannel: String, amount: Long, note: String) = database.withTransaction {
         require(fromAccountId != toAccountId || fromChannel != toChannel) { "Sumber dan tujuan tidak boleh sama" }
         require(amount > 0) { "Nominal harus lebih dari nol" }
@@ -611,6 +809,26 @@ class KronRepository private constructor(
         assertInvariant()
     }
 
+    private suspend fun resolutionCategoryLabel(allocation: AllocationEntity): Pair<String, String> {
+        val category = requireNotNull(dao.categoryById(allocation.categoryId)) { "Kategori resolusi tidak ditemukan" }
+        val portfolio = requireNotNull(dao.portfolioForAllocation(allocation.id)) { "Portfolio resolusi tidak ditemukan" }
+        val period = requireNotNull(dao.periodById(allocation.periodId)) { "Periode resolusi tidak ditemukan" }
+        val channel = if (allocation.fundingChannel == FundingChannel.CASH) "Cash" else "eBudget"
+        val start = LocalDate.ofEpochDay(period.startEpochDay)
+        val end = LocalDate.ofEpochDay(period.endEpochDay)
+        return category.name to "$portfolio.name | $start s.d. $end | $channel"
+    }
+
+    private fun systemResolutionLabel(bucket: String, channel: String): Pair<String, String> {
+        val channelLabel = if (channel == FundingChannel.CASH) "Cash" else "eBudget"
+        return when (bucket) {
+            BudgetBucket.VAULT -> "Main Vault" to channelLabel
+            BudgetBucket.ROLLOVER -> "Rollover" to "Reserve rollover • $channelLabel"
+            BudgetBucket.UNALLOCATED -> "Belum dialokasikan" to channelLabel
+            else -> bucket to channelLabel
+        }
+    }
+
     suspend fun resolveFromAllocation(sourceAllocationId: Long, targetAllocationId: Long, amount: Long, note: String) = database.withTransaction {
         require(amount > 0)
         val source = requireNotNull(dao.allocationById(sourceAllocationId))
@@ -625,6 +843,9 @@ class KronRepository private constructor(
         val actualAmount = min(amount, -dao.allocationAvailable(targetAllocationId))
         val sourceBefore = dao.allocationAvailable(sourceAllocationId)
         val targetBefore = dao.allocationAvailable(targetAllocationId)
+        val account = requireNotNull(dao.accountById(activeId))
+        val (sourceLabel, sourceDetail) = resolutionCategoryLabel(source)
+        val (targetLabel, targetDetail) = resolutionCategoryLabel(target)
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(eventId, LedgerType.REALLOCATION, "Resolusi antar kategori", note, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
         dao.insertBudgetLines(listOf(
@@ -633,11 +854,24 @@ class KronRepository private constructor(
         ))
         refreshPeriodStatus(source.periodId)
         refreshPeriodStatus(target.periodId)
+        val (before, after) = ResolutionAudit.snapshots(
+            account = account.name,
+            channel = source.fundingChannel,
+            amount = actualAmount,
+            sourceLabel = sourceLabel,
+            sourceDetail = sourceDetail,
+            sourceBefore = sourceBefore,
+            sourceAfter = sourceBefore - actualAmount,
+            targetLabel = targetLabel,
+            targetDetail = targetDetail,
+            targetBefore = targetBefore,
+            targetAfter = targetBefore + actualAmount,
+        )
         dao.insertAudit(AuditSnapshotEntity(
             eventId = eventId,
             reason = "Resolusi kategori minus",
-            beforeJson = "{\"source\":$sourceBefore,\"target\":$targetBefore}",
-            afterJson = "{\"source\":${sourceBefore - actualAmount},\"target\":${targetBefore + actualAmount}}",
+            beforeJson = before,
+            afterJson = after,
         ))
         assertInvariant()
         eventId
@@ -652,6 +886,9 @@ class KronRepository private constructor(
         require(unresolved < 0) { "Tidak ada pengeluaran belum teralokasi pada kanal ini" }
         val actualAmount = min(amount, -unresolved)
         val targetBefore = dao.allocationAvailable(targetAllocationId)
+        val account = requireNotNull(dao.accountById(activeId))
+        val (sourceLabel, sourceDetail) = systemResolutionLabel(BudgetBucket.UNALLOCATED, target.fundingChannel)
+        val (targetLabel, targetDetail) = resolutionCategoryLabel(target)
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(eventId, LedgerType.REALLOCATION, "Alokasi pengeluaran tertunda", note, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
         dao.insertBudgetLines(listOf(
@@ -659,11 +896,24 @@ class KronRepository private constructor(
             BudgetJournalLineEntity(eventId = eventId, allocationId = targetAllocationId, fundingChannel = target.fundingChannel, amount = -actualAmount, accountId = activeId),
         ))
         refreshPeriodStatus(target.periodId)
+        val (before, after) = ResolutionAudit.snapshots(
+            account = account.name,
+            channel = target.fundingChannel,
+            amount = actualAmount,
+            sourceLabel = sourceLabel,
+            sourceDetail = sourceDetail,
+            sourceBefore = unresolved,
+            sourceAfter = unresolved + actualAmount,
+            targetLabel = targetLabel,
+            targetDetail = targetDetail,
+            targetBefore = targetBefore,
+            targetAfter = targetBefore - actualAmount,
+        )
         dao.insertAudit(AuditSnapshotEntity(
             eventId = eventId,
             reason = "Pengeluaran belum teralokasi dipindahkan ke kategori",
-            beforeJson = "{\"unallocated\":$unresolved,\"target\":$targetBefore}",
-            afterJson = "{\"unallocated\":${unresolved + actualAmount},\"target\":${targetBefore - actualAmount}}",
+            beforeJson = before,
+            afterJson = after,
         ))
         assertInvariant()
         eventId
@@ -679,6 +929,9 @@ class KronRepository private constructor(
         val actualAmount = min(amount, -targetBefore)
         val vaultBefore = dao.vaultBalance(target.fundingChannel, activeId)
         require(vaultBefore >= actualAmount) { "Main Vault tidak mencukupi" }
+        val account = requireNotNull(dao.accountById(activeId))
+        val (sourceLabel, sourceDetail) = systemResolutionLabel(BudgetBucket.VAULT, target.fundingChannel)
+        val (targetLabel, targetDetail) = resolutionCategoryLabel(target)
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(eventId, LedgerType.OVERBUDGET_COVERAGE, "Overbudget dari Main Vault", note, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
         dao.insertBudgetLines(listOf(
@@ -686,11 +939,24 @@ class KronRepository private constructor(
             BudgetJournalLineEntity(eventId = eventId, allocationId = targetAllocationId, fundingChannel = target.fundingChannel, amount = actualAmount, accountId = activeId),
         ))
         refreshPeriodStatus(target.periodId)
+        val (before, after) = ResolutionAudit.snapshots(
+            account = account.name,
+            channel = target.fundingChannel,
+            amount = actualAmount,
+            sourceLabel = sourceLabel,
+            sourceDetail = sourceDetail,
+            sourceBefore = vaultBefore,
+            sourceAfter = vaultBefore - actualAmount,
+            targetLabel = targetLabel,
+            targetDetail = targetDetail,
+            targetBefore = targetBefore,
+            targetAfter = targetBefore + actualAmount,
+        )
         dao.insertAudit(AuditSnapshotEntity(
             eventId = eventId,
             reason = "Defisit ditutup dari dana nyata Main Vault",
-            beforeJson = "{\"vault\":$vaultBefore,\"target\":$targetBefore}",
-            afterJson = "{\"vault\":${vaultBefore - actualAmount},\"target\":${targetBefore + actualAmount}}",
+            beforeJson = before,
+            afterJson = after,
         ))
         assertInvariant()
         eventId
@@ -706,6 +972,9 @@ class KronRepository private constructor(
         val reserveBefore = dao.rolloverBalance(target.fundingChannel, activeId)
         val actualAmount = min(amount, min(-targetBefore, reserveBefore))
         require(actualAmount > 0) { "Reserve rollover tidak mencukupi" }
+        val account = requireNotNull(dao.accountById(activeId))
+        val (sourceLabel, sourceDetail) = systemResolutionLabel(BudgetBucket.ROLLOVER, target.fundingChannel)
+        val (targetLabel, targetDetail) = resolutionCategoryLabel(target)
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(eventId, LedgerType.OVERBUDGET_COVERAGE, "Overbudget dari Reserve rollover", note, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
         dao.insertBudgetLines(listOf(
@@ -713,7 +982,20 @@ class KronRepository private constructor(
             BudgetJournalLineEntity(eventId = eventId, allocationId = targetAllocationId, fundingChannel = target.fundingChannel, amount = actualAmount, accountId = activeId),
         ))
         refreshPeriodStatus(target.periodId)
-        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = "Defisit ditutup dari Reserve rollover", beforeJson = "{\"reserve\":$reserveBefore,\"target\":$targetBefore}", afterJson = "{\"reserve\":${reserveBefore - actualAmount},\"target\":${targetBefore + actualAmount}}"))
+        val (before, after) = ResolutionAudit.snapshots(
+            account = account.name,
+            channel = target.fundingChannel,
+            amount = actualAmount,
+            sourceLabel = sourceLabel,
+            sourceDetail = sourceDetail,
+            sourceBefore = reserveBefore,
+            sourceAfter = reserveBefore - actualAmount,
+            targetLabel = targetLabel,
+            targetDetail = targetDetail,
+            targetBefore = targetBefore,
+            targetAfter = targetBefore + actualAmount,
+        )
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = "Defisit ditutup dari Reserve rollover", beforeJson = before, afterJson = after))
         assertInvariant()
         eventId
     }
@@ -818,6 +1100,15 @@ class KronRepository private constructor(
 
     suspend fun reverseEvent(originalEventId: String, reason: String) = database.withTransaction {
         val original = requireNotNull(dao.eventById(originalEventId))
+        val debtPayment = dao.debtEntryForEvent(originalEventId)
+        debtPayment?.let { payment ->
+            require(payment.type in setOf(DebtEntryType.PAYMENT, DebtEntryType.SETTLEMENT)) {
+                "Riwayat hutang tidak dapat direversal dari event ini"
+            }
+            require(dao.debtEntries(payment.debtId).lastOrNull()?.eventId == originalEventId) {
+                "Hanya pembayaran hutang terakhir yang dapat dibatalkan"
+            }
+        }
         requireActiveAccount(original.accountId)
         require(!dao.isEventReversed(originalEventId)) { "Event sudah dibalik" }
         require(original.type != LedgerType.REVERSAL) { "Reversal tidak dapat dibalik langsung" }
@@ -841,6 +1132,25 @@ class KronRepository private constructor(
         val affectedPeriods = budget.mapNotNull { it.allocationId }.mapNotNull { dao.allocationById(it)?.periodId }.distinct()
         for (periodId in affectedPeriods) refreshPeriodStatus(periodId)
         dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = reason, beforeJson = "{\"event\":\"$originalEventId\"}", afterJson = "{\"reversedBy\":\"$eventId\"}"))
+        debtPayment?.let { payment ->
+            val debt = requireNotNull(dao.debtById(payment.debtId)) { "Hutang pembayaran tidak ditemukan" }
+            dao.updateDebt(debt.copy(
+                principalOutstanding = Math.addExact(debt.principalOutstanding, payment.principalAmount),
+                interestOutstanding = Math.addExact(debt.interestOutstanding, payment.interestAmount),
+            interestAnchorEpochDay = LocalDate.now().toEpochDay(),
+                status = DebtStatus.OPEN,
+            ).bumpRevision())
+            dao.insertDebtEntry(DebtEntryEntity(
+                debtId = debt.id,
+                accountId = debt.accountId,
+                eventId = eventId,
+                type = DebtEntryType.REVERSAL,
+                principalAmount = -payment.principalAmount,
+                interestAmount = -payment.interestAmount,
+                effectiveEpochDay = LocalDate.now().toEpochDay(),
+                note = reason,
+            ))
+        }
         assertInvariant()
         eventId
     }
@@ -875,6 +1185,34 @@ class KronRepository private constructor(
         if (budget.isNotEmpty()) dao.insertBudgetLines(budget.map { it.copy(id = 0, eventId = restoreId) })
         if (splits.isNotEmpty()) dao.insertSplits(splits.map { it.copy(id = 0, eventId = restoreId) })
         dao.insertAudit(AuditSnapshotEntity(eventId = restoreId, reason = "Pemulihan reversal", beforeJson = "{\"eventId\":\"$reversedEventId\",\"reversed\":true}", afterJson = "{\"eventId\":\"${restoreId}\",\"restored\":true}"))
+        dao.debtEntryForEvent(reversedEventId)?.let { payment ->
+            val debt = requireNotNull(dao.debtById(payment.debtId)) { "Hutang pembayaran tidak ditemukan" }
+            require(dao.debtEntries(debt.id).lastOrNull()?.eventId == reversalEvent.id) {
+                "Pembayaran hutang telah berubah setelah reversal"
+            }
+            val currentInterest = DebtCalculator.currentInterest(debt, LocalDate.now())
+            require(debt.principalOutstanding >= payment.principalAmount && currentInterest >= payment.interestAmount) {
+                "Saldo hutang tidak cukup untuk memulihkan pembayaran"
+            }
+            val nextPrincipal = debt.principalOutstanding - payment.principalAmount
+            val nextInterest = currentInterest - payment.interestAmount
+            dao.updateDebt(debt.copy(
+                principalOutstanding = nextPrincipal,
+                interestOutstanding = nextInterest,
+                interestAnchorEpochDay = LocalDate.now().toEpochDay(),
+                status = if (nextPrincipal == 0L && nextInterest == 0L) DebtStatus.SETTLED else DebtStatus.OPEN,
+            ).bumpRevision())
+            dao.insertDebtEntry(DebtEntryEntity(
+                debtId = debt.id,
+                accountId = debt.accountId,
+                eventId = restoreId,
+                type = payment.type,
+                principalAmount = payment.principalAmount,
+                interestAmount = payment.interestAmount,
+                effectiveEpochDay = LocalDate.now().toEpochDay(),
+                note = "Pemulihan reversal pembayaran",
+            ))
+        }
         budget.mapNotNull { it.allocationId }.mapNotNull { dao.allocationById(it)?.periodId }.distinct()
             .forEach { refreshPeriodStatus(it) }
         assertInvariant()
@@ -901,6 +1239,7 @@ class KronRepository private constructor(
         require(correctedTitle.isNotBlank()) { "Judul koreksi wajib diisi" }
         require(reason.isNotBlank()) { "Alasan koreksi wajib diisi" }
         val original = requireNotNull(dao.eventById(originalEventId)) { "Event asli tidak ditemukan" }
+        require(dao.debtEntryForEvent(originalEventId) == null) { "Pembayaran hutang tidak dapat dikoreksi. Gunakan reversal lalu catat ulang." }
         requireActiveAccount(original.accountId)
         require(original.type in setOf(LedgerType.INCOME, LedgerType.EXPENSE, LedgerType.UNEXPECTED_EXPENSE, LedgerType.OPENING_BALANCE)) {
             "Jenis event ini tidak dapat dikoreksi dari form transaksi"

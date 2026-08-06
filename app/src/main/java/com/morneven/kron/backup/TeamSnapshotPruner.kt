@@ -39,6 +39,8 @@ internal object TeamSnapshotPruner {
                 db.execSQL("DELETE FROM ledger_lines WHERE eventId NOT IN (SELECT id FROM activity_events WHERE accountId=?)", arrayOf(accountId))
                 db.execSQL("DELETE FROM recurring_occurrences WHERE ruleId NOT IN (SELECT id FROM recurring_rules WHERE accountId=?)", arrayOf(accountId))
                 db.execSQL("DELETE FROM recurring_rules WHERE accountId<>?", arrayOf(accountId))
+                db.execSQL("DELETE FROM debt_entries WHERE debtId NOT IN (SELECT id FROM debts WHERE accountId=?)", arrayOf(accountId))
+                db.execSQL("DELETE FROM debts WHERE accountId<>?", arrayOf(accountId))
                 db.execSQL("DELETE FROM portfolio_allocation_templates WHERE portfolioId NOT IN (SELECT id FROM portfolios WHERE accountId=?)", arrayOf(accountId))
                 db.execSQL("DELETE FROM allocations WHERE periodId NOT IN (SELECT p.id FROM budget_periods p JOIN portfolios f ON f.id=p.portfolioId WHERE f.accountId=?)", arrayOf(accountId))
                 db.execSQL("DELETE FROM budget_periods WHERE portfolioId NOT IN (SELECT id FROM portfolios WHERE accountId=?)", arrayOf(accountId))
@@ -108,6 +110,8 @@ internal object TeamSnapshotPruner {
         empty("SELECT COUNT(*) FROM ledger_lines WHERE eventId IN ($eventScope) AND categoryId IS NOT NULL AND categoryId NOT IN (SELECT id FROM categories WHERE accountId=$accountId)", "Ledger Team memakai kategori akun lain")
         empty("SELECT COUNT(*) FROM recurring_occurrences WHERE ruleId IN (SELECT id FROM recurring_rules WHERE accountId=$accountId) AND eventId NOT IN ($eventScope)", "Occurrence Team merujuk event akun lain")
         empty("SELECT COUNT(*) FROM receipts WHERE eventId IN ($eventScope) AND evidenceEventId IS NOT NULL AND evidenceEventId NOT IN ($eventScope)", "Bukti Team merujuk akun lain")
+        empty("SELECT COUNT(*) FROM debts WHERE accountId<>$accountId", "Hutang Team milik akun lain")
+        empty("SELECT COUNT(*) FROM debt_entries e LEFT JOIN debts d ON d.id=e.debtId LEFT JOIN activity_events a ON a.id=e.eventId WHERE d.id IS NULL OR a.id IS NULL OR e.accountId<>$accountId OR d.accountId<>$accountId OR a.accountId<>$accountId", "Riwayat hutang Team tidak scoped")
     }
 
     private fun scopeCategories(db: SQLiteDatabase, accountId: Long) {

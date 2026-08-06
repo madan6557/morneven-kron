@@ -503,4 +503,37 @@ class KronMigrationTest {
             close()
         }
     }
+
+    @Test
+    fun migrationSixteenToSeventeenAddsDebtTrackerWithoutChangingLedger() {
+        val name = "kron-production-16-to-17.db"
+        migrationHelper.createDatabase(name, 16).apply {
+            execSQL("INSERT INTO accounts(id,name,isActive,isArchived,createdAt,sharingMode,teamId,revision,updatedAt) VALUES(1,'Utama',1,0,1,'PRIVATE',NULL,0,1)")
+            execSQL("INSERT INTO activity_events(id,type,title,note,source,effectiveEpochDay,createdAt,accountId) VALUES('income-16','INCOME','Pemasukan','','USER',1,2,1)")
+            execSQL("INSERT INTO cash_journal_lines(id,eventId,accountId,fundingChannel,amount) VALUES(1,'income-16',1,'CASH',750000)")
+            execSQL("INSERT INTO budget_journal_lines(id,eventId,allocationId,bucket,fundingChannel,amount,accountId) VALUES(1,'income-16',NULL,'VAULT','CASH',750000,1)")
+            execSQL("INSERT INTO budget_journal_lines(id,eventId,allocationId,bucket,fundingChannel,amount,accountId) VALUES(2,'income-16',NULL,'EXTERNAL','CASH',-750000,1)")
+            close()
+        }
+        migrationHelper.runMigrationsAndValidate(name, 17, true, KronDatabase.MIGRATION_16_17).apply {
+            query("SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines WHERE eventId='income-16'").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(750000L, cursor.getLong(0))
+            }
+            execSQL("INSERT INTO debts(id,accountId,role,counterparty,title,principalOriginal,principalOutstanding,interestOutstanding,interestRateBps,interestIntervalMonths,interestAnchorEpochDay,dueEpochDay,status,createdAt,revision,updatedAt,lastWriterId,syncId) VALUES('debt-17',1,'DEBTOR','Pihak A','Uji',100000,100000,0,150,1,10,NULL,'OPEN',11,0,11,NULL,'debt-17')")
+            execSQL("INSERT INTO activity_events(id,type,title,note,source,effectiveEpochDay,createdAt,accountId) VALUES('debt-open-17','DEBT_OPEN','Uji','','USER',10,11,1)")
+            execSQL("INSERT INTO debt_entries(id,debtId,accountId,eventId,type,principalAmount,interestAmount,effectiveEpochDay,note,createdAt) VALUES('entry-17','debt-17',1,'debt-open-17','OPEN',100000,0,10,'',11)")
+            query("SELECT role,principalOutstanding,interestRateBps,status,syncId FROM debts WHERE id='debt-17'").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("DEBTOR", cursor.getString(0))
+                assertEquals(100000L, cursor.getLong(1))
+                assertEquals(150, cursor.getInt(2))
+                assertEquals("OPEN", cursor.getString(3))
+                assertEquals("debt-17", cursor.getString(4))
+            }
+            query("PRAGMA foreign_key_check").use { cursor -> assertFalse(cursor.moveToFirst()) }
+            query("PRAGMA integrity_check").use { cursor -> assertTrue(cursor.moveToFirst()); assertEquals("ok", cursor.getString(0)) }
+            close()
+        }
+    }
 }

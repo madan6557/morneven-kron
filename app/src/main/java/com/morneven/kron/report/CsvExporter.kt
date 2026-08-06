@@ -36,7 +36,7 @@ class CsvExporter @Inject constructor(
             writer.write("\uFEFF")
 
             writer.appendLine("KRON ACTIVITY JOURNAL")
-            writer.appendLine("event_id,tanggal_efektif,waktu_dicatat,tipe,judul,catatan,sumber,debit,kredit,kanal,dampak_akun,dampak_vault,dampak_budget,reversal,jumlah_split,attachment_hash,status_audit")
+            writer.appendLine("event_id,tanggal_efektif,waktu_dicatat,tipe,judul,catatan,sumber,debit,kredit,kanal,dampak_akun,dampak_vault,dampak_budget,dampak_rollover,dampak_belum_dialokasikan,reversal,jumlah_split,attachment_hash,status_audit")
             activities.forEach { event ->
                 val ledger = ledgerByEvent[event.id].orEmpty()
                 val splits = splitsByEvent[event.id].orEmpty()
@@ -55,6 +55,8 @@ class CsvExporter @Inject constructor(
                     event.cashImpact,
                     event.vaultImpact,
                     event.budgetImpact,
+                    event.rolloverImpact,
+                    event.unallocatedImpact,
                     event.reversedByEventId.orEmpty(),
                     splits.size,
                     receiptsByEvent[event.id].orEmpty().joinToString("|") { it.sha256 },

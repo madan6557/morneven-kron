@@ -22,6 +22,7 @@ import androidx.compose.material.icons.outlined.Payments
 import androidx.compose.material.icons.outlined.RemoveRedEye
 import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material.icons.outlined.RequestQuote
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -42,6 +43,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.morneven.kron.data.FundingChannel
+import com.morneven.kron.data.DebtCalculator
+import com.morneven.kron.data.DebtRole
+import com.morneven.kron.data.DebtStatus
 import com.morneven.kron.data.PeriodStatus
 import com.morneven.kron.ui.KronUiState
 import com.morneven.kron.ui.components.BudgetProgress
@@ -71,6 +75,7 @@ fun HomeScreen(
     onExpense: () -> Unit,
     onTransfer: () -> Unit,
     onResolve: () -> Unit,
+    onDebt: () -> Unit = {},
     onAllActivities: () -> Unit,
     onPauseRule: (String) -> Unit,
     readOnly: Boolean = false,
@@ -84,6 +89,15 @@ fun HomeScreen(
     val negative = state.allocations.filter { !it.portfolioArchived && it.availableAmount < 0 }
     val underfunded = state.periods.filter { it.portfolioId in activePortfolioIds && it.status == PeriodStatus.UNDERFUNDED }
     val activeRules = state.rules.filterNot { it.isPaused }
+    val activeDebts = state.debts.filter { it.status == DebtStatus.OPEN }
+    val today = LocalDate.now()
+    val debtInterest = activeDebts.sumOf { DebtCalculator.currentInterest(it, today) }
+    val debtPayable = activeDebts.filter { it.role == DebtRole.DEBTOR }
+        .sumOf { it.principalOutstanding + DebtCalculator.currentInterest(it, today) }
+    val debtReceivable = activeDebts.filter { it.role == DebtRole.CREDITOR }
+        .sumOf { it.principalOutstanding + DebtCalculator.currentInterest(it, today) }
+    val nearestDebt = activeDebts.filter { it.dueEpochDay != null }.minByOrNull { it.dueEpochDay!! }
+    val overdueDebtCount = activeDebts.count { DebtCalculator.isOverdue(it, today) }
 
     LazyColumn(
         modifier = modifier,
@@ -172,6 +186,33 @@ fun HomeScreen(
                         QuickAction(Icons.Outlined.Payments, "Pengeluaran", MaterialTheme.colorScheme.primary, onExpense)
                         QuickAction(Icons.Outlined.SwapHoriz, "Transfer", KronBlue, onTransfer)
                         QuickAction(Icons.Outlined.ArrowOutward, "Resolusi", KronGold, onResolve)
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                        QuickAction(Icons.Outlined.RequestQuote, "Hutang", MaterialTheme.colorScheme.tertiary, onDebt)
+                    }
+                }
+            }
+        }
+
+        if (activeDebts.isNotEmpty()) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SectionHeader("Hutang & Piutang", "Kelola", onDebt)
+                    HudCard(accent = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.65f)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Metric("Perlu dibayar", displayMoney(debtPayable, visible), Modifier.weight(1f), MaterialTheme.colorScheme.error)
+                            Metric("Akan diterima", displayMoney(debtReceivable, visible), Modifier.weight(1f), KronGreen)
+                        }
+                        if (debtInterest > 0L) Text("Bunga berjalan: ${displayMoney(debtInterest, visible)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                        nearestDebt?.dueEpochDay?.let { dueDay ->
+                            val due = LocalDate.ofEpochDay(dueDay)
+                            Text(
+                                "Tenggat terdekat: ${nearestDebt.counterparty} · ${due.format(DateTimeFormatter.ofPattern("d MMM yyyy", Locale.forLanguageTag("id-ID")))}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (due.isBefore(today)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (overdueDebtCount > 0) Text("$overdueDebtCount hutang/piutang melewati tenggat", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     }
                 }
             }

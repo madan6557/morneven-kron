@@ -140,6 +140,7 @@ import com.morneven.kron.ui.dialogs.ResolveDialog
 import com.morneven.kron.ui.dialogs.TransferDialog
 import com.morneven.kron.ui.screens.ActivityScreen
 import com.morneven.kron.ui.screens.BudgetScreen
+import com.morneven.kron.ui.screens.DebtScreen
 import com.morneven.kron.ui.screens.HomeScreen
 import com.morneven.kron.ui.screens.OnboardingScreen
 import com.morneven.kron.ui.screens.ReportsScreen
@@ -391,6 +392,7 @@ private fun MainScaffold(
     val teamWaitingNetwork by viewModel.teamWaitingNetwork.collectAsState()
     val evidenceHealth by viewModel.evidenceHealth.collectAsState()
     val evidenceVerification by viewModel.evidenceVerification.collectAsState()
+    val auditDetails by viewModel.auditDetails.collectAsState()
     val pendingDriveSubject by viewModel.pendingDriveSubjectId.collectAsState()
     val pendingDriveEmail by viewModel.pendingDriveEmail.collectAsState()
     val pendingDriveName by viewModel.pendingDriveDisplayName.collectAsState()
@@ -478,6 +480,9 @@ private fun MainScaffold(
         mutableStateOf(driveSyncRuntime?.isWifiOnly() ?: false)
     }
     val scope = rememberCoroutineScope()
+    LaunchedEffect(auditId) {
+        auditId?.let(viewModel::loadAuditDetails) ?: viewModel.clearAuditDetails()
+    }
     fun applyStagedSnapshot() {
         if (applyingSnapshot) return
         applyingSnapshot = true
@@ -1077,8 +1082,38 @@ private fun MainScaffold(
                     { dialog = ActionDialog.EXPENSE },
                     { dialog = ActionDialog.TRANSFER },
                     { dialog = ActionDialog.RESOLVE },
+                    { navController.navigate("debts") },
                     { navController.navigate("activity") },
                     { ruleId -> criticalAction = CriticalAction("Hentikan jadwal otomatis", "Occurrence berikutnya tidak akan dibuat. Riwayat lama tetap tersimpan.") { viewModel.pauseRecurringRule(ruleId, it) }; criticalReason = "" },
+                    readOnly = teamReadOnly,
+                )
+            }
+            composable("debts") {
+                DebtScreen(
+                    state = state,
+                    onBack = { navController.popBackStack() },
+                    onCreate = { role, counterparty, title, principal, rateBps, interval, start, due, note ->
+                        state.activeAccount?.let { account ->
+                            viewModel.createDebt(
+                                accountId = account.id,
+                                role = role,
+                                counterparty = counterparty,
+                                title = title,
+                                principal = principal,
+                                interestRateBps = rateBps,
+                                interestIntervalMonths = interval,
+                                startDate = start,
+                                dueDate = due,
+                                note = note,
+                            )
+                        }
+                    },
+                    onPayment = viewModel::recordDebtPayment,
+                    onArchive = viewModel::archiveDebt,
+                    onViewEvent = { eventId ->
+                        auditId = eventId
+                        navController.navigate("activity") { launchSingleTop = true }
+                    },
                     readOnly = teamReadOnly,
                 )
             }
@@ -1134,6 +1169,7 @@ private fun MainScaffold(
                 ReportsScreen(
                     state = state,
                     onExport = { reportLauncher.launch("KRON-laporan-${LocalDate.now()}.csv") },
+                    onManageDebts = { navController.navigate("debts") },
                     eventChannels = state.eventChannels,
                     readOnly = teamReadOnly,
                 )
@@ -2133,8 +2169,12 @@ private fun MainScaffold(
             AuditDialog(
                 event = event,
                 state = state,
+                auditDetails = auditDetails,
                 reversalRestored = reversalRestored,
-                onDismiss = { auditId = null },
+                onDismiss = {
+                    auditId = null
+                    viewModel.clearAuditDetails()
+                },
                 onGalleryPick = { eventId ->
                     receiptTargetEventId = eventId
                     receiptLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -2164,6 +2204,18 @@ private fun MainScaffold(
                     authenticateCriticalAction("Pulihkan transaksi") {
                         auditId = null
                         viewModel.restoreReversedEvent(eventId)
+                    }
+                },
+                onReceiptPreview = viewModel::receiptPreview,
+                onOpenReceipt = { receipt ->
+                    viewModel.openReceiptForViewing(receipt) { uri ->
+                        runCatching {
+                            activity.startActivity(
+                                Intent(Intent.ACTION_VIEW)
+                                    .setDataAndType(uri, receipt.mimeType)
+                                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+                            )
+                        }.onFailure { viewModel.showMessage("Foto bukti belum dapat dibuka") }
                     }
                 },
                 readOnly = teamReadOnly,

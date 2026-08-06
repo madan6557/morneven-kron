@@ -137,6 +137,12 @@ internal object TeamGraphRefresher {
                 db,
                 "SELECT COUNT(*) FROM activity_events l WHERE l.accountId=? AND NOT EXISTS(SELECT 1 FROM team_source.activity_events r WHERE r.id=l.id)",
                 arrayOf(accountId.toString()),
+        ) != 0L
+        ) throw TeamSnapshotHistoryException()
+        if (scalar(
+                db,
+                "SELECT COUNT(*) FROM debt_entries l WHERE l.accountId=? AND NOT EXISTS(SELECT 1 FROM team_source.debt_entries r WHERE r.id=l.id)",
+                arrayOf(accountId.toString()),
             ) != 0L
         ) throw TeamSnapshotHistoryException()
         requireZero(
@@ -195,6 +201,8 @@ internal object TeamGraphRefresher {
                 WHERE lp.accountId=$accountId AND (l.fundingChannel<>r.fundingChannel OR l.plannedAmount<>r.plannedAmount OR lp.syncId<>rp.syncId OR lc.syncId<>rc.syncId)""",
             """SELECT COUNT(*) FROM recurring_rules l JOIN team_source.recurring_rules r ON r.syncId=l.syncId
                 WHERE l.accountId=$accountId AND (l.title<>r.title OR l.direction<>r.direction OR l.amount<>r.amount OR l.fundingChannel<>r.fundingChannel OR l.cadence<>r.cadence OR l.intervalCount<>r.intervalCount OR l.anchorMonth<>r.anchorMonth OR l.anchorDay<>r.anchorDay OR l.startEpochDay<>r.startEpochDay OR l.nextEpochDay<>r.nextEpochDay OR COALESCE(l.endEpochDay,-1)<>COALESCE(r.endEpochDay,-1) OR COALESCE(l.remainingOccurrences,-1)<>COALESCE(r.remainingOccurrences,-1) OR l.isPaused<>r.isPaused)""",
+            """SELECT COUNT(*) FROM debts l JOIN team_source.debts r ON r.syncId=l.syncId
+                WHERE l.accountId=$accountId AND (l.role<>r.role OR l.counterparty<>r.counterparty OR l.title<>r.title OR l.principalOriginal<>r.principalOriginal OR l.principalOutstanding<>r.principalOutstanding OR l.interestOutstanding<>r.interestOutstanding OR l.interestRateBps<>r.interestRateBps OR l.interestIntervalMonths<>r.interestIntervalMonths OR l.interestAnchorEpochDay<>r.interestAnchorEpochDay OR COALESCE(l.dueEpochDay,-1)<>COALESCE(r.dueEpochDay,-1) OR l.status<>r.status)""",
         )
         checks.forEach { sql -> requireZero(db, sql, null, "Perubahan metadata Team memerlukan pilihan") }
     }
@@ -226,6 +234,38 @@ internal object TeamGraphRefresher {
                updatedAt=(SELECT s.updatedAt FROM team_source.categories s WHERE s.syncId=categories.syncId),
                lastWriterId=(SELECT s.lastWriterId FROM team_source.categories s WHERE s.syncId=categories.syncId)
                WHERE accountId=? AND syncId IN (SELECT syncId FROM team_source.categories)""",
+            arrayOf(accountId),
+        )
+
+        requireZero(
+            db,
+            "SELECT COUNT(*) FROM team_source.debts s JOIN debts t ON t.id=s.id WHERE t.syncId<>s.syncId",
+            null,
+            "ID hutang Team bertabrakan",
+        )
+        db.execSQL(
+            """INSERT INTO debts(id,accountId,role,counterparty,title,principalOriginal,principalOutstanding,interestOutstanding,interestRateBps,interestIntervalMonths,interestAnchorEpochDay,dueEpochDay,status,createdAt,revision,updatedAt,lastWriterId,syncId)
+               SELECT s.id,?,s.role,s.counterparty,s.title,s.principalOriginal,s.principalOutstanding,s.interestOutstanding,s.interestRateBps,s.interestIntervalMonths,s.interestAnchorEpochDay,s.dueEpochDay,s.status,s.createdAt,s.revision,s.updatedAt,s.lastWriterId,s.syncId
+               FROM team_source.debts s WHERE NOT EXISTS(SELECT 1 FROM debts t WHERE t.syncId=s.syncId)""",
+            arrayOf(accountId),
+        )
+        if (overwriteExisting) db.execSQL(
+            """UPDATE debts SET
+               role=(SELECT s.role FROM team_source.debts s WHERE s.syncId=debts.syncId),
+               counterparty=(SELECT s.counterparty FROM team_source.debts s WHERE s.syncId=debts.syncId),
+               title=(SELECT s.title FROM team_source.debts s WHERE s.syncId=debts.syncId),
+               principalOriginal=(SELECT s.principalOriginal FROM team_source.debts s WHERE s.syncId=debts.syncId),
+               principalOutstanding=(SELECT s.principalOutstanding FROM team_source.debts s WHERE s.syncId=debts.syncId),
+               interestOutstanding=(SELECT s.interestOutstanding FROM team_source.debts s WHERE s.syncId=debts.syncId),
+               interestRateBps=(SELECT s.interestRateBps FROM team_source.debts s WHERE s.syncId=debts.syncId),
+               interestIntervalMonths=(SELECT s.interestIntervalMonths FROM team_source.debts s WHERE s.syncId=debts.syncId),
+               interestAnchorEpochDay=(SELECT s.interestAnchorEpochDay FROM team_source.debts s WHERE s.syncId=debts.syncId),
+               dueEpochDay=(SELECT s.dueEpochDay FROM team_source.debts s WHERE s.syncId=debts.syncId),
+               status=(SELECT s.status FROM team_source.debts s WHERE s.syncId=debts.syncId),
+               revision=(SELECT s.revision FROM team_source.debts s WHERE s.syncId=debts.syncId),
+               updatedAt=(SELECT s.updatedAt FROM team_source.debts s WHERE s.syncId=debts.syncId),
+               lastWriterId=(SELECT s.lastWriterId FROM team_source.debts s WHERE s.syncId=debts.syncId)
+               WHERE accountId=? AND syncId IN (SELECT syncId FROM team_source.debts)""",
             arrayOf(accountId),
         )
 
@@ -320,6 +360,9 @@ internal object TeamGraphRefresher {
         db.execSQL("""INSERT INTO receipts(eventId,localPath,storageId,displayName,mimeType,byteSize,sha256,encryptionNonce,encryptionVersion,createdAt,capturedAt,latitude,longitude,origin,evidenceEventId)
             SELECT s.eventId,NULL,s.storageId,s.displayName,s.mimeType,s.byteSize,s.sha256,s.encryptionNonce,s.encryptionVersion,s.createdAt,s.capturedAt,s.latitude,s.longitude,s.origin,s.evidenceEventId
             FROM team_source.receipts s WHERE NOT EXISTS(SELECT 1 FROM receipts t WHERE t.storageId=s.storageId)""")
+        db.execSQL("""INSERT INTO debt_entries(id,debtId,accountId,eventId,type,principalAmount,interestAmount,effectiveEpochDay,note,createdAt)
+            SELECT s.id,s.debtId,?,s.eventId,s.type,s.principalAmount,s.interestAmount,s.effectiveEpochDay,s.note,s.createdAt
+            FROM team_source.debt_entries s WHERE NOT EXISTS(SELECT 1 FROM debt_entries t WHERE t.id=s.id)""", arrayOf(accountId))
         importEvidenceAndLedger(db, sourceAccountId, accountId)
         db.execSQL("""INSERT INTO team_event_proofs(eventId,teamId,chainId,sequence,previousChainHash,payloadHash,chainHash,signatureBase64,recordedAtUtc,deviceId,actor,appVersion,keyId,canonicalVersion)
             SELECT s.eventId,s.teamId,s.chainId,s.sequence,s.previousChainHash,s.payloadHash,s.chainHash,s.signatureBase64,s.recordedAtUtc,s.deviceId,s.actor,s.appVersion,km.targetId,s.canonicalVersion
