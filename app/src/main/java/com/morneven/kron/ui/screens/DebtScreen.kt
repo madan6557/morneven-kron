@@ -49,6 +49,7 @@ import com.morneven.kron.data.DebtEntryEntity
 import com.morneven.kron.data.DebtRole
 import com.morneven.kron.data.DebtStatus
 import com.morneven.kron.data.FundingChannel
+import com.morneven.kron.data.InterestInterval
 import com.morneven.kron.data.TransactionDirection
 import com.morneven.kron.ui.KronUiState
 import com.morneven.kron.ui.components.HudCard
@@ -69,7 +70,7 @@ import java.util.Locale
 fun DebtScreen(
     state: KronUiState,
     onBack: () -> Unit,
-    onCreate: (String, String, String, Long, Int, Int, LocalDate, LocalDate?, String) -> Unit,
+    onCreate: (String, String, String, Long, Int, Int, String, LocalDate, LocalDate?, String) -> Unit,
     onPayment: (String, String, Long, Long?, String, LocalDate) -> Unit,
     onArchive: (String, String) -> Unit,
     onViewEvent: (String) -> Unit,
@@ -170,8 +171,8 @@ fun DebtScreen(
         DebtCreateDialog(
             role = role,
             onDismiss = { createRole = null },
-            onCreate = { counterparty, title, principal, rateBps, interval, start, due, note ->
-                onCreate(role, counterparty, title, principal, rateBps, interval, start, due, note)
+            onCreate = { counterparty, title, principal, rateBps, interval, unit, start, due, note ->
+                onCreate(role, counterparty, title, principal, rateBps, interval, unit, start, due, note)
                 createRole = null
             },
         )
@@ -278,13 +279,14 @@ private fun DebtCard(
 private fun DebtCreateDialog(
     role: String,
     onDismiss: () -> Unit,
-    onCreate: (String, String, Long, Int, Int, LocalDate, LocalDate?, String) -> Unit,
+    onCreate: (String, String, Long, Int, Int, String, LocalDate, LocalDate?, String) -> Unit,
 ) {
     var counterparty by rememberSaveable { mutableStateOf("") }
     var title by rememberSaveable { mutableStateOf("") }
     var principal by rememberSaveable { mutableStateOf("") }
     var rate by rememberSaveable { mutableStateOf("0") }
     var interval by rememberSaveable { mutableStateOf("1") }
+    var unit by rememberSaveable { mutableStateOf(InterestInterval.MONTHS) }
     var note by rememberSaveable { mutableStateOf("") }
     var startDate by rememberSaveable { mutableStateOf(LocalDate.now().toEpochDay()) }
     var dueDate by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -299,7 +301,7 @@ private fun DebtCreateDialog(
         onDismiss = onDismiss,
         confirmText = "Simpan tracker",
         confirmEnabled = valid,
-        onConfirm = { onCreate(counterparty.trim(), title.trim(), parseMoneyInput(principal), parsedRate!!, parsedInterval, start, due, note.trim()) },
+        onConfirm = { onCreate(counterparty.trim(), title.trim(), parseMoneyInput(principal), parsedRate!!, parsedInterval, unit, start, due, note.trim()) },
     ) {
         Text("Pembukaan tracker tidak mengubah saldo. Saldo berubah saat pembayaran dicatat.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
         OutlinedTextField(counterparty, { counterparty = it }, label = { Text(if (role == DebtRole.DEBTOR) "Pemberi hutang" else "Pihak yang berhutang") }, modifier = Modifier.fillMaxWidth())
@@ -316,11 +318,15 @@ private fun DebtCreateDialog(
         )
         if (parsedRate == null) Text("Bunga harus antara 0% dan 1000%.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         if ((parsedRate ?: 0) > 0) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = unit == InterestInterval.MONTHS, onClick = { unit = InterestInterval.MONTHS }, label = { Text("Bulan") })
+                FilterChip(selected = unit == InterestInterval.DAYS, onClick = { unit = InterestInterval.DAYS }, label = { Text("Hari") })
+            }
             OutlinedTextField(
                 value = interval,
                 onValueChange = { interval = it.filter(Char::isDigit) },
-                label = { Text("Interval bunga (bulan)") },
-                supportingText = { Text("Bunga sederhana dihitung setelah bulan penuh.") },
+                label = { Text(if (unit == InterestInterval.DAYS) "Interval bunga (hari)" else "Interval bunga (bulan)") },
+                supportingText = { Text(if (unit == InterestInterval.DAYS) "Bunga sederhana dihitung setelah hari penuh." else "Bunga sederhana dihitung setelah bulan penuh.") },
                 isError = parsedInterval <= 0,
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
@@ -403,7 +409,7 @@ private fun DebtDetailDialog(
         Text("Bunga berjalan: ${displayMoney(interest, valuesVisible)}")
         Text("Status: ${statusLabel(debt.status)}")
         debt.dueEpochDay?.let { Text("Tenggat: ${LocalDate.ofEpochDay(it)}") }
-        if (debt.interestRateBps > 0) Text("Bunga ${debt.interestRateBps / 100.0}% setiap ${debt.interestIntervalMonths} bulan")
+        if (debt.interestRateBps > 0) Text("Bunga ${debt.interestRateBps / 100.0}% setiap ${debt.interestIntervalMonths} ${if (debt.interestIntervalUnit == InterestInterval.DAYS) "hari" else "bulan"}")
         HorizontalDivider()
         Text("Riwayat", style = MaterialTheme.typography.titleMedium)
         entries.sortedByDescending { it.createdAt }.forEach { entry ->

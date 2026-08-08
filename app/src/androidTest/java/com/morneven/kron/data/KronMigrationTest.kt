@@ -7,6 +7,7 @@ import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.room.testing.MigrationTestHelper
+import java.io.File
 import org.junit.Rule
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -535,5 +536,63 @@ class KronMigrationTest {
             query("PRAGMA integrity_check").use { cursor -> assertTrue(cursor.moveToFirst()); assertEquals("ok", cursor.getString(0)) }
             close()
         }
+    }
+
+    @Test
+    fun migrationSeventeenToEighteenAddsInterestIntervalUnitKeepingDebts() {
+        val name = "kron-production-17-to-18.db"
+        migrationHelper.createDatabase(name, 17).apply {
+            execSQL("INSERT INTO accounts(id,name,isActive,isArchived,createdAt,sharingMode,teamId,revision,updatedAt) VALUES(1,'Utama',1,0,1,'PRIVATE',NULL,0,1)")
+            execSQL("INSERT INTO debts(id,accountId,role,counterparty,title,principalOriginal,principalOutstanding,interestOutstanding,interestRateBps,interestIntervalMonths,interestAnchorEpochDay,dueEpochDay,status,createdAt,revision,updatedAt,lastWriterId,syncId) VALUES('debt-18',1,'DEBTOR','Pihak A','Uji',100000,100000,0,150,1,10,NULL,'OPEN',11,0,11,NULL,'debt-18')")
+            close()
+        }
+        migrationHelper.runMigrationsAndValidate(name, 18, true, KronDatabase.MIGRATION_17_18).apply {
+            query("SELECT role,interestRateBps,interestIntervalMonths,interestIntervalUnit,status FROM debts WHERE id='debt-18'").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("DEBTOR", cursor.getString(0))
+                assertEquals(150, cursor.getInt(1))
+                assertEquals(1, cursor.getInt(2))
+                assertEquals("MONTHS", cursor.getString(3))
+                assertEquals("OPEN", cursor.getString(4))
+            }
+            execSQL("UPDATE debts SET interestIntervalUnit='DAYS' WHERE id='debt-18'")
+            query("PRAGMA foreign_key_check").use { cursor -> assertFalse(cursor.moveToFirst()) }
+            query("PRAGMA integrity_check").use { cursor -> assertTrue(cursor.moveToFirst()); assertEquals("ok", cursor.getString(0)) }
+            close()
+        }
+    }
+
+    @Test
+    fun productionPreviewPathMigratesThenKeepsVersionAfterRawReopen() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val fixtureName = "kron-production-17-preview-repro.db"
+        migrationHelper.createDatabase(fixtureName, 17).apply {
+            execSQL("INSERT INTO accounts(id,name,isActive,isArchived,createdAt,sharingMode,teamId,revision,updatedAt) VALUES(1,'Utama',1,0,1,'PRIVATE',NULL,0,1)")
+            execSQL("INSERT INTO debts(id,accountId,role,counterparty,title,principalOriginal,principalOutstanding,interestOutstanding,interestRateBps,interestIntervalMonths,interestAnchorEpochDay,dueEpochDay,status,createdAt,revision,updatedAt,lastWriterId,syncId) VALUES('debt-repro',1,'DEBTOR','Pihak A','Uji',100000,100000,0,150,1,10,NULL,'OPEN',11,0,11,NULL,'debt-repro')")
+            close()
+        }
+        val dbDir = context.getDatabasePath(fixtureName).parentFile!!
+        val validationName = "kron-restore-validation"
+        val validationFile = context.getDatabasePath(validationName)
+        File(dbDir, fixtureName).copyTo(validationFile, overwrite = true)
+        val db = KronDatabase.openPlaintextValidationDatabase(context, validationName)
+        try {
+            val migratedVersion = db.openHelper.writableDatabase.query("PRAGMA user_version").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                cursor.getInt(0)
+            }
+            assertEquals(KronDatabase.SCHEMA_VERSION, migratedVersion)
+        } finally {
+            db.close()
+        }
+        val afterReopen = android.database.sqlite.SQLiteDatabase.openDatabase(
+            validationFile.absolutePath, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY,
+        ).use {
+            it.rawQuery("PRAGMA user_version", null).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                cursor.getInt(0)
+            }
+        }
+        assertEquals("Migrasi tidak terlihat setelah close dan reopen readonly (seperti validateDatabase di jalur preview)", KronDatabase.SCHEMA_VERSION, afterReopen)
     }
 }

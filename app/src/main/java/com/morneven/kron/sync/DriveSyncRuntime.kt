@@ -10,6 +10,7 @@ import com.morneven.kron.BuildConfig
 import com.morneven.kron.backup.BackupManager
 import com.morneven.kron.data.KronDatabase
 import com.morneven.kron.security.DatabaseRuntime
+import com.morneven.kron.security.SnapshotOperationLock
 import com.morneven.kron.team.TeamSyncScheduler
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.UUID
@@ -19,6 +20,7 @@ import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
@@ -26,11 +28,14 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 
 /**
  * Activity-facing Drive backend. The Activity owns interactive account and
  * authorization prompts, while background workers receive an Activity-free coordinator.
  */
+private const val SYNC_LOCK_ACQUISITION_TIMEOUT_MILLIS = 45_000L
+
 class DriveSyncRuntime internal constructor(
     private val authorization: AuthorizationClientDriveSession,
     private val authorizationBridge: PlayServicesAuthorizationClientBridge,
@@ -323,7 +328,19 @@ class DriveSyncRuntime internal constructor(
         passphrase.fill('\u0000')
     }
 
-    suspend fun syncNow(): SyncRunResult = passphraseOperationMutex.withLock { syncNowLocked() }
+    suspend fun syncNow(): SyncRunResult = try {
+        // The mutex can be held by a background worker that MIUI froze while
+        // the app was in the background. Bound the wait so the UI can never
+        // hang on "sedang menyinkronkan" forever.
+        withTimeout(SYNC_LOCK_ACQUISITION_TIMEOUT_MILLIS) { passphraseOperationMutex.withLock { syncNowLocked() } }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (timeout: TimeoutCancellationException) {
+        SyncRunResult.Error(
+            "Sinkronisasi lain masih berjalan di latar belakang. Coba lagi dalam beberapa saat.",
+            retryable = true,
+        )
+    }
 
     private suspend fun syncNowLocked(): SyncRunResult {
         if (factory.isAccountSwitching()) {
@@ -331,6 +348,9 @@ class DriveSyncRuntime internal constructor(
         }
         factory.networkBlockedResult()?.let { return it }
         if (!secretStore.isStored() && !secretStore.hasStaged()) return SyncRunResult.PassphraseRequired
+        // Surface the sync phase immediately: authorization and snapshot
+        // listing happen before the coordinator can set SYNCING itself.
+        factory.markSyncInProgress()
         ensureSelectedAccountDataset()
         val pending = DriveSyncSwitchGate.isPending(factory.contextForScheduling())
         val accountSwitch = DriveSyncSwitchGate.isAccountSwitchPending(factory.contextForScheduling())
@@ -350,7 +370,12 @@ class DriveSyncRuntime internal constructor(
                 is SyncRunResult.Applied,
                 SyncRunResult.NoChanges,
                 SyncRunResult.NoData,
-                -> factory.confirmPendingInitialUpload()
+                -> {
+                    factory.confirmPendingInitialUpload()
+                    // Re-arm background workers now that the switch gate is open;
+                    // endAccountSwitch could not install them while it was closed.
+                    factory.installBackgroundIfReady(syncImmediately = false)
+                }
                 else -> Unit
             }
         }
@@ -574,6 +599,10 @@ class DriveSyncRuntime internal constructor(
             pending.previousPassphrase?.fill('\u0000')
             pendingAccountSwitch = null
             factory.endAccountSwitch()
+            // Start the first sync for the new account immediately. Background
+            // workers are gated by the pending-initial-upload flag and would
+            // otherwise leave the UI stuck on the previous account's state.
+            syncNowLocked()
         } catch (cancelled: CancellationException) {
             abortAccountSwitch()
             throw cancelled
@@ -661,12 +690,18 @@ class DriveSyncRuntimeFactory @Inject constructor(
     private val databaseRuntime: DatabaseRuntime,
     private val backupManager: BackupManager,
     private val secretStore: EncryptedSyncSecretStore,
+    private val snapshotOperationLock: SnapshotOperationLock,
 ) {
     private val database get() = databaseRuntime.current()
     private val syncPreferences = context.getSharedPreferences(SYNC_PREFERENCES, Context.MODE_PRIVATE)
     private val accountStore = PreferencesSelectedGoogleAccountStore(context)
     private val stateStore = RoomSyncStateStore(databaseRuntime)
-    private val localSnapshotSource = BackupManagerLocalSnapshotSource(backupManager, databaseRuntime, context)
+    private val localSnapshotSource = BackupManagerLocalSnapshotSource(
+        backupManager,
+        databaseRuntime,
+        context,
+        snapshotOperationLock,
+    )
     private val authorizationBridge = PlayServicesAuthorizationClientBridge(context)
     private val driveClient = DriveRestV3AppDataClient()
     private val lifecycleMutex = Mutex()
@@ -790,6 +825,10 @@ class DriveSyncRuntimeFactory @Inject constructor(
     }
 
     internal suspend fun readSyncState(): SyncState = stateStore.read()
+
+    internal suspend fun markSyncInProgress() {
+        stateStore.update { it.copy(status = SyncStatus.SYNCING, lastError = null) }
+    }
 
     internal suspend fun switchSyncAccount(account: GoogleAccountIdentity) {
         DriveSyncSwitchGate.setPending(context, true)

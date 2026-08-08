@@ -41,7 +41,7 @@ import com.morneven.kron.security.SqlCipherLibrary
         DebtEntity::class,
         DebtEntryEntity::class,
     ],
-    version = 17,
+    version = 18,
     exportSchema = true,
 )
 abstract class KronDatabase : RoomDatabase() {
@@ -1127,6 +1127,19 @@ abstract class KronDatabase : RoomDatabase() {
             }
         }
 
+        /** Debt interval unit is additive: existing rows keep MONTHS semantics untouched. */
+        val MIGRATION_17_18: Migration = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE debts ADD COLUMN interestIntervalUnit TEXT NOT NULL DEFAULT 'MONTHS'")
+                check(db.query("PRAGMA foreign_key_check").use { !it.moveToFirst() }) {
+                    "Relasi database tidak valid setelah migrasi interval bunga harian"
+                }
+                check(db.query("PRAGMA integrity_check").use { it.moveToFirst() && it.getString(0).equals("ok", true) }) {
+                    "Database tidak utuh setelah migrasi interval bunga harian"
+                }
+            }
+        }
+
         private val ALL_MIGRATIONS = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
@@ -1144,6 +1157,7 @@ abstract class KronDatabase : RoomDatabase() {
             MIGRATION_14_15,
             MIGRATION_15_16,
             MIGRATION_16_17,
+            MIGRATION_17_18,
         )
 
         private fun addTeamSyncColumns(
@@ -1230,6 +1244,7 @@ abstract class KronDatabase : RoomDatabase() {
             }
 
             override fun onOpen(db: SupportSQLiteDatabase) {
+                db.query("PRAGMA busy_timeout = 120000").use { }
                 createSyncGenerationTriggers(db)
                 createAppendOnlyTriggers(db)
             }
@@ -1337,7 +1352,7 @@ abstract class KronDatabase : RoomDatabase() {
                         BEFORE $operation$updateColumns ON $table
                         WHEN EXISTS(
                             SELECT 1 FROM sync_state
-                            WHERE id = 1 AND status IN ('SYNCING','RESTART_REQUIRED')
+                            WHERE id = 1 AND status IN ('SYNCING','RESTART_REQUIRED','DOWNLOADING')
                         )
                         BEGIN
                             SELECT RAISE(ABORT, 'KRON sedang menyinkronkan atau menunggu restart');
@@ -1535,7 +1550,7 @@ abstract class KronDatabase : RoomDatabase() {
             require(
                 scalar(
                     db,
-                    "SELECT COUNT(*) FROM debts WHERE role NOT IN ('DEBTOR','CREDITOR') OR status NOT IN ('OPEN','SETTLED','ARCHIVED') OR principalOriginal<=0 OR principalOutstanding<0 OR interestOutstanding<0 OR interestRateBps<0 OR interestIntervalMonths<=0",
+                    "SELECT COUNT(*) FROM debts WHERE role NOT IN ('DEBTOR','CREDITOR') OR status NOT IN ('OPEN','SETTLED','ARCHIVED') OR principalOriginal<=0 OR principalOutstanding<0 OR interestOutstanding<0 OR interestRateBps<0 OR interestIntervalMonths<=0 OR interestIntervalUnit NOT IN ('MONTHS','DAYS')",
                 ) == 0L,
             ) { "Data hutang tidak valid" }
             require(
@@ -1656,6 +1671,6 @@ abstract class KronDatabase : RoomDatabase() {
         }
 
         const val DATABASE_NAME = "kron-v4.db"
-        const val SCHEMA_VERSION = 17
+        const val SCHEMA_VERSION = 18
     }
 }

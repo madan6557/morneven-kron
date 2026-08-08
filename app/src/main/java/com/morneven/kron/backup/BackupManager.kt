@@ -1221,10 +1221,11 @@ class BackupManager @Inject constructor(
     private fun migrateAndValidateCandidate(candidate: File) {
         val validationDatabase = KronDatabase.openPlaintextValidationDatabase(context, VALIDATION_DATABASE_NAME)
         try {
-            validationDatabase.openHelper.writableDatabase.query("PRAGMA user_version").use { cursor ->
-                require(cursor.moveToFirst() && cursor.getInt(0) == KronDatabase.SCHEMA_VERSION) {
-                    "Migrasi database backup tidak selesai"
-                }
+            val observed = validationDatabase.openHelper.writableDatabase.query("PRAGMA user_version").use { cursor ->
+                cursor.moveToFirst(); cursor.getInt(0)
+            }
+            require(observed == KronDatabase.SCHEMA_VERSION) {
+                "Migrasi database backup tidak selesai"
             }
         } finally {
             validationDatabase.close()
@@ -1715,7 +1716,7 @@ class BackupManager @Inject constructor(
             "SELECT 'allocation',a.syncId,c.name||' '||a.fundingChannel,a.revision,a.updatedAt,COALESCE(a.lastWriterId,''),p.syncId||'|'||c.syncId||'|'||a.fundingChannel||'|'||a.plannedAmount FROM allocations a JOIN budget_periods p ON p.id=a.periodId JOIN portfolios pf ON pf.id=p.portfolioId JOIN categories c ON c.id=a.categoryId WHERE a.syncId IS NOT NULL$joinedAccountScope",
             "SELECT 'template',t.syncId,c.name,t.revision,t.updatedAt,COALESCE(t.lastWriterId,''),p.syncId||'|'||c.syncId||'|'||t.plannedAmount||'|'||t.cashPercentage FROM portfolio_allocation_templates t JOIN portfolios p ON p.id=t.portfolioId JOIN categories c ON c.id=t.categoryId WHERE t.syncId IS NOT NULL$portfolioAccountScope",
             "SELECT 'rule',r.syncId,r.title,r.revision,r.updatedAt,COALESCE(r.lastWriterId,''),r.title||'|'||r.direction||'|'||r.amount||'|'||r.fundingChannel||'|'||COALESCE(c.syncId,'')||'|'||COALESCE(a.syncId,'')||'|'||r.cadence||'|'||r.intervalCount||'|'||r.anchorMonth||'|'||r.anchorDay||'|'||r.startEpochDay||'|'||r.nextEpochDay||'|'||COALESCE(r.endEpochDay,'')||'|'||COALESCE(r.remainingOccurrences,'')||'|'||r.isPaused FROM recurring_rules r LEFT JOIN categories c ON c.id=r.categoryId LEFT JOIN allocations a ON a.id=r.allocationId WHERE r.syncId IS NOT NULL${directAccountScope.replace("accountId", "r.accountId")}",
-            "SELECT 'debt',d.syncId,d.title||' · '||d.counterparty,d.revision,d.updatedAt,COALESCE(d.lastWriterId,''),d.role||'|'||d.counterparty||'|'||d.title||'|'||d.principalOriginal||'|'||d.principalOutstanding||'|'||d.interestOutstanding||'|'||d.interestRateBps||'|'||d.interestIntervalMonths||'|'||d.interestAnchorEpochDay||'|'||COALESCE(d.dueEpochDay,'')||'|'||d.status FROM debts d WHERE d.syncId IS NOT NULL${directAccountScope.replace("accountId", "d.accountId")}",
+            "SELECT 'debt',d.syncId,d.title||' · '||d.counterparty,d.revision,d.updatedAt,COALESCE(d.lastWriterId,''),d.role||'|'||d.counterparty||'|'||d.title||'|'||d.principalOriginal||'|'||d.principalOutstanding||'|'||d.interestOutstanding||'|'||d.interestRateBps||'|'||d.interestIntervalMonths||'|'||d.interestIntervalUnit||'|'||d.interestAnchorEpochDay||'|'||COALESCE(d.dueEpochDay,'')||'|'||d.status FROM debts d WHERE d.syncId IS NOT NULL${directAccountScope.replace("accountId", "d.accountId")}",
         )
         val mutable = buildList {
             mutableQueries.forEach { sql ->

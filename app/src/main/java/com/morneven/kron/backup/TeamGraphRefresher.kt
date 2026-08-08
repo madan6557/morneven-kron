@@ -202,7 +202,7 @@ internal object TeamGraphRefresher {
             """SELECT COUNT(*) FROM recurring_rules l JOIN team_source.recurring_rules r ON r.syncId=l.syncId
                 WHERE l.accountId=$accountId AND (l.title<>r.title OR l.direction<>r.direction OR l.amount<>r.amount OR l.fundingChannel<>r.fundingChannel OR l.cadence<>r.cadence OR l.intervalCount<>r.intervalCount OR l.anchorMonth<>r.anchorMonth OR l.anchorDay<>r.anchorDay OR l.startEpochDay<>r.startEpochDay OR l.nextEpochDay<>r.nextEpochDay OR COALESCE(l.endEpochDay,-1)<>COALESCE(r.endEpochDay,-1) OR COALESCE(l.remainingOccurrences,-1)<>COALESCE(r.remainingOccurrences,-1) OR l.isPaused<>r.isPaused)""",
             """SELECT COUNT(*) FROM debts l JOIN team_source.debts r ON r.syncId=l.syncId
-                WHERE l.accountId=$accountId AND (l.role<>r.role OR l.counterparty<>r.counterparty OR l.title<>r.title OR l.principalOriginal<>r.principalOriginal OR l.principalOutstanding<>r.principalOutstanding OR l.interestOutstanding<>r.interestOutstanding OR l.interestRateBps<>r.interestRateBps OR l.interestIntervalMonths<>r.interestIntervalMonths OR l.interestAnchorEpochDay<>r.interestAnchorEpochDay OR COALESCE(l.dueEpochDay,-1)<>COALESCE(r.dueEpochDay,-1) OR l.status<>r.status)""",
+                WHERE l.accountId=$accountId AND (l.role<>r.role OR l.counterparty<>r.counterparty OR l.title<>r.title OR l.principalOriginal<>r.principalOriginal OR l.principalOutstanding<>r.principalOutstanding OR l.interestOutstanding<>r.interestOutstanding OR l.interestRateBps<>r.interestRateBps OR l.interestIntervalMonths<>r.interestIntervalMonths OR l.interestIntervalUnit<>r.interestIntervalUnit OR l.interestAnchorEpochDay<>r.interestAnchorEpochDay OR COALESCE(l.dueEpochDay,-1)<>COALESCE(r.dueEpochDay,-1) OR l.status<>r.status)""",
         )
         checks.forEach { sql -> requireZero(db, sql, null, "Perubahan metadata Team memerlukan pilihan") }
     }
@@ -244,8 +244,8 @@ internal object TeamGraphRefresher {
             "ID hutang Team bertabrakan",
         )
         db.execSQL(
-            """INSERT INTO debts(id,accountId,role,counterparty,title,principalOriginal,principalOutstanding,interestOutstanding,interestRateBps,interestIntervalMonths,interestAnchorEpochDay,dueEpochDay,status,createdAt,revision,updatedAt,lastWriterId,syncId)
-               SELECT s.id,?,s.role,s.counterparty,s.title,s.principalOriginal,s.principalOutstanding,s.interestOutstanding,s.interestRateBps,s.interestIntervalMonths,s.interestAnchorEpochDay,s.dueEpochDay,s.status,s.createdAt,s.revision,s.updatedAt,s.lastWriterId,s.syncId
+            """INSERT INTO debts(id,accountId,role,counterparty,title,principalOriginal,principalOutstanding,interestOutstanding,interestRateBps,interestIntervalMonths,interestIntervalUnit,interestAnchorEpochDay,dueEpochDay,status,createdAt,revision,updatedAt,lastWriterId,syncId)
+               SELECT s.id,?,s.role,s.counterparty,s.title,s.principalOriginal,s.principalOutstanding,s.interestOutstanding,s.interestRateBps,s.interestIntervalMonths,s.interestIntervalUnit,s.interestAnchorEpochDay,s.dueEpochDay,s.status,s.createdAt,s.revision,s.updatedAt,s.lastWriterId,s.syncId
                FROM team_source.debts s WHERE NOT EXISTS(SELECT 1 FROM debts t WHERE t.syncId=s.syncId)""",
             arrayOf(accountId),
         )
@@ -259,6 +259,7 @@ internal object TeamGraphRefresher {
                interestOutstanding=(SELECT s.interestOutstanding FROM team_source.debts s WHERE s.syncId=debts.syncId),
                interestRateBps=(SELECT s.interestRateBps FROM team_source.debts s WHERE s.syncId=debts.syncId),
                interestIntervalMonths=(SELECT s.interestIntervalMonths FROM team_source.debts s WHERE s.syncId=debts.syncId),
+               interestIntervalUnit=(SELECT s.interestIntervalUnit FROM team_source.debts s WHERE s.syncId=debts.syncId),
                interestAnchorEpochDay=(SELECT s.interestAnchorEpochDay FROM team_source.debts s WHERE s.syncId=debts.syncId),
                dueEpochDay=(SELECT s.dueEpochDay FROM team_source.debts s WHERE s.syncId=debts.syncId),
                status=(SELECT s.status FROM team_source.debts s WHERE s.syncId=debts.syncId),

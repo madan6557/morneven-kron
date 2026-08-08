@@ -999,6 +999,11 @@ private fun MainScaffold(
             applyStagedSnapshot()
         }
     }
+    LaunchedEffect(Unit) {
+        // A committed swap whose process died before activation is finalized
+        // here; otherwise the pending directory blocks background sync forever.
+        applyStagedSnapshot()
+    }
     LaunchedEffect(manualRestoreReady) {
         if (manualRestoreReady) restartRequired = true
     }
@@ -1092,7 +1097,7 @@ private fun MainScaffold(
                 DebtScreen(
                     state = state,
                     onBack = { navController.popBackStack() },
-                    onCreate = { role, counterparty, title, principal, rateBps, interval, start, due, note ->
+                    onCreate = { role, counterparty, title, principal, rateBps, interval, unit, start, due, note ->
                         state.activeAccount?.let { account ->
                             viewModel.createDebt(
                                 accountId = account.id,
@@ -1102,6 +1107,7 @@ private fun MainScaffold(
                                 principal = principal,
                                 interestRateBps = rateBps,
                                 interestIntervalMonths = interval,
+                                interestIntervalUnit = unit,
                                 startDate = start,
                                 dueDate = due,
                                 note = note,
@@ -2838,6 +2844,7 @@ private fun cloudBackupUiState(
     val status = when (syncState?.status) {
         null, "DISCONNECTED", "DISABLED" -> CloudSyncStatus.NOT_CONNECTED
         "SYNCING" -> CloudSyncStatus.SYNCING
+        "DOWNLOADING" -> CloudSyncStatus.DOWNLOADING
         "IDLE", "SYNCED" -> if (syncState.accountEmail == null) CloudSyncStatus.NOT_CONNECTED else CloudSyncStatus.SYNCED
         "WAITING_FOR_NETWORK" -> CloudSyncStatus.WAITING_NETWORK
         "AUTHORIZATION_REQUIRED", "PASSPHRASE_REQUIRED" -> CloudSyncStatus.NEEDS_AUTHORIZATION

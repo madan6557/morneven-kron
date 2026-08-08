@@ -48,13 +48,16 @@ class DatabaseRuntime @Inject constructor(
     fun hasPendingSyncActivation(): Boolean = refreshPendingSyncActivation()
 
     private fun refreshPendingSyncActivation(): Boolean {
+        // The marker alone cannot gate activation: a committed restore whose
+        // process died before activation (or a restore path that never set the
+        // marker) would stay pending forever and block background sync workers.
+        // The swap directory is the durable signal.
         val hasPending = BackupManager.hasPendingRestore(context) || TeamAtomicSwap.hasPendingSwap(context)
-        if (!hasPending && preferences.getBoolean(KEY_PENDING_SYNC_ACTIVATION, false)) {
+        if (!hasPending) {
             preferences.edit().remove(KEY_PENDING_SYNC_ACTIVATION).apply()
         }
-        return (hasPending && preferences.getBoolean(KEY_PENDING_SYNC_ACTIVATION, false)).also {
-            mutablePendingSyncActivation.value = it
-        }
+        mutablePendingSyncActivation.value = hasPending
+        return hasPending
     }
 
     /**

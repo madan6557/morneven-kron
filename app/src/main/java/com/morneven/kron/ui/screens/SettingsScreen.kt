@@ -83,6 +83,7 @@ import java.util.Locale
 
 enum class CloudSyncStatus {
     NOT_CONNECTED,
+    DOWNLOADING,
     SYNCING,
     SYNCED,
     WAITING_NETWORK,
@@ -739,14 +740,18 @@ private fun SyncCard(
     val team = state.mode == SyncMode.TEAM
     val connected = if (team) state.teamRole != null else state.status !in setOf(CloudSyncStatus.NOT_CONNECTED, CloudSyncStatus.UNAVAILABLE)
     val effectiveStatus = if (state.busy) CloudSyncStatus.SYNCING else state.status
-    val actionsBlocked = state.busy || effectiveStatus in setOf(CloudSyncStatus.SYNCING, CloudSyncStatus.RESTART_REQUIRED)
+    val actionsBlocked = state.busy || effectiveStatus in setOf(
+        CloudSyncStatus.SYNCING,
+        CloudSyncStatus.DOWNLOADING,
+        CloudSyncStatus.RESTART_REQUIRED,
+    )
     val (defaultStatusLabel, statusColor) = cloudStatusPresentation(effectiveStatus)
     val statusLabel = if (team && state.teamRole != null && effectiveStatus == CloudSyncStatus.NOT_CONNECTED) {
         "Belum tersinkron"
     } else defaultStatusLabel
     HudCard(accent = statusColor.copy(alpha = 0.55f)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
-            if (effectiveStatus == CloudSyncStatus.SYNCING) {
+            if (effectiveStatus == CloudSyncStatus.SYNCING || effectiveStatus == CloudSyncStatus.DOWNLOADING) {
                 CircularProgressIndicator(
                     modifier = Modifier.width(28.dp).height(28.dp),
                     color = statusColor,
@@ -783,6 +788,7 @@ private fun SyncCard(
                 CloudSyncStatus.UNAVAILABLE -> "Sinkronisasi belum dikonfigurasi pada build ini. Backup lokal tetap tersedia."
                 CloudSyncStatus.NOT_CONNECTED -> "Opsional. Data disimpan terenkripsi pada Drive akun yang dipilih."
                 CloudSyncStatus.CONFLICT -> "Data perangkat dan ${if (team) "Team" else "Drive"} sama-sama berubah. Tinjau perbedaannya sebelum melanjutkan."
+                CloudSyncStatus.DOWNLOADING -> "Mengunduh snapshot terenkripsi dari Drive..."
                 CloudSyncStatus.SYNCING -> "Memeriksa pembaruan dan mengirim atau mengambil snapshot Team terenkripsi."
                 CloudSyncStatus.WAITING_NETWORK -> "Sinkronisasi akan dicoba kembali saat jaringan tersedia."
                 CloudSyncStatus.FAILED -> "Sinkronisasi terakhir belum selesai. Anda dapat mencoba lagi dari kartu ini."
@@ -866,6 +872,7 @@ private fun SyncCard(
 @Composable
 private fun cloudStatusPresentation(status: CloudSyncStatus): Pair<String, Color> = when (status) {
     CloudSyncStatus.NOT_CONNECTED -> "Belum terhubung" to MaterialTheme.colorScheme.onSurfaceVariant
+    CloudSyncStatus.DOWNLOADING -> "Mengunduh pembaruan..." to MaterialTheme.colorScheme.tertiary
     CloudSyncStatus.SYNCING -> "Sedang menyinkronkan" to MaterialTheme.colorScheme.tertiary
     CloudSyncStatus.SYNCED -> "Tersinkron" to KronGreen
     CloudSyncStatus.WAITING_NETWORK -> "Menunggu jaringan" to MaterialTheme.colorScheme.tertiary

@@ -182,13 +182,11 @@ fun HomeScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     SectionHeader("Tindakan cepat")
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        QuickAction(Icons.Outlined.AddCard, "Pemasukan", KronGreen, onIncome)
-                        QuickAction(Icons.Outlined.Payments, "Pengeluaran", MaterialTheme.colorScheme.primary, onExpense)
-                        QuickAction(Icons.Outlined.SwapHoriz, "Transfer", KronBlue, onTransfer)
-                        QuickAction(Icons.Outlined.ArrowOutward, "Resolusi", KronGold, onResolve)
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                        QuickAction(Icons.Outlined.RequestQuote, "Hutang", MaterialTheme.colorScheme.tertiary, onDebt)
+                        QuickAction(Icons.Outlined.AddCard, "Pemasukan", KronGreen, onIncome, Modifier.weight(1f))
+                        QuickAction(Icons.Outlined.Payments, "Pengeluaran", MaterialTheme.colorScheme.primary, onExpense, Modifier.weight(1f))
+                        QuickAction(Icons.Outlined.SwapHoriz, "Transfer", KronBlue, onTransfer, Modifier.weight(1f))
+                        QuickAction(Icons.Outlined.RequestQuote, "Hutang", MaterialTheme.colorScheme.tertiary, onDebt, Modifier.weight(1f))
+                        QuickAction(Icons.Outlined.ArrowOutward, "Resolusi", KronGold, onResolve, Modifier.weight(1f))
                     }
                 }
             }
@@ -361,17 +359,17 @@ fun HomeScreen(
 }
 
 @Composable
-private fun QuickAction(icon: ImageVector, label: String, color: Color, onClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+private fun QuickAction(icon: ImageVector, label: String, color: Color, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Surface(
-            modifier = Modifier.size(56.dp).clickable(onClick = onClick),
+            modifier = Modifier.size(52.dp).clickable(onClick = onClick),
             shape = MaterialTheme.shapes.medium,
             color = color.copy(alpha = 0.14f),
             border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.4f)),
         ) {
             Box(contentAlignment = Alignment.Center) { Icon(icon, contentDescription = label, tint = color) }
         }
-        Text(label, style = MaterialTheme.typography.labelSmall)
+        Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false)
     }
 }
 

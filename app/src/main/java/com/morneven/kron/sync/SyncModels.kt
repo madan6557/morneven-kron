@@ -21,6 +21,7 @@ enum class SyncStatus {
     DISCONNECTED,
     IDLE,
     SYNCING,
+    DOWNLOADING,
     SYNCED,
     WAITING_FOR_NETWORK,
     AUTHORIZATION_REQUIRED,

@@ -12,6 +12,7 @@ class DebtCalculatorTest {
         storedInterest: Long = 0L,
         rateBps: Int = 150,
         intervalMonths: Int = 1,
+        intervalUnit: String = InterestInterval.MONTHS,
         anchor: LocalDate = LocalDate.of(2026, 1, 31),
         due: LocalDate? = null,
     ) = DebtEntity(
@@ -24,6 +25,7 @@ class DebtCalculatorTest {
         interestOutstanding = storedInterest,
         interestRateBps = rateBps,
         interestIntervalMonths = intervalMonths,
+        interestIntervalUnit = intervalUnit,
         interestAnchorEpochDay = anchor.toEpochDay(),
         dueEpochDay = due?.toEpochDay(),
         syncId = "debt-test",
@@ -54,5 +56,13 @@ class DebtCalculatorTest {
             )
         }.exceptionOrNull()
         assertTrue(error is IllegalArgumentException)
+    }
+
+    @Test
+    fun dailyIntervalAccruesAfterCompleteDays() {
+        val value = debt(intervalMonths = 7, intervalUnit = InterestInterval.DAYS, anchor = LocalDate.of(2026, 1, 1))
+        assertEquals(0L, DebtCalculator.currentInterest(value, LocalDate.of(2026, 1, 7)))
+        assertEquals(15_000L, DebtCalculator.currentInterest(value, LocalDate.of(2026, 1, 8)))
+        assertEquals(30_000L, DebtCalculator.currentInterest(value, LocalDate.of(2026, 1, 15)))
     }
 }

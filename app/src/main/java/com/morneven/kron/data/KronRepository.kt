@@ -461,6 +461,7 @@ class KronRepository private constructor(
         principal: Long,
         interestRateBps: Int,
         interestIntervalMonths: Int,
+        interestIntervalUnit: String,
         startDate: LocalDate,
         dueDate: LocalDate?,
         note: String,
@@ -471,7 +472,8 @@ class KronRepository private constructor(
         require(title.isNotBlank()) { "Judul hutang wajib diisi" }
         require(principal > 0L) { "Pokok hutang harus lebih dari nol" }
         require(interestRateBps in 0..100_000) { "Bunga tidak valid" }
-        require(interestIntervalMonths > 0) { "Interval bunga harus minimal satu bulan" }
+        require(interestIntervalMonths > 0) { "Interval bunga harus minimal satu" }
+        require(interestIntervalUnit in setOf(InterestInterval.MONTHS, InterestInterval.DAYS)) { "Satuan interval bunga tidak valid" }
         require(dueDate == null || !dueDate.isBefore(startDate)) { "Tenggat tidak boleh sebelum tanggal mulai" }
         val debtId = UUID.randomUUID().toString()
         val eventId = UUID.randomUUID().toString()
@@ -486,6 +488,7 @@ class KronRepository private constructor(
             principalOutstanding = principal,
             interestRateBps = interestRateBps,
             interestIntervalMonths = interestIntervalMonths,
+            interestIntervalUnit = interestIntervalUnit,
             interestAnchorEpochDay = startDate.toEpochDay(),
             dueEpochDay = dueDate?.toEpochDay(),
             createdAt = createdAt,
@@ -521,6 +524,7 @@ class KronRepository private constructor(
                 .put("principal", principal)
                 .put("interestRateBps", interestRateBps)
                 .put("interestIntervalMonths", interestIntervalMonths)
+                .put("interestIntervalUnit", interestIntervalUnit)
                 .put("dueEpochDay", dueDate?.toEpochDay())
                 .toString(),
         ))

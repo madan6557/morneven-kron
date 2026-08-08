@@ -550,6 +550,7 @@ class DatabaseEncryptionManager @Inject constructor(
             null,
         )
         opened.use { database ->
+            database.query("PRAGMA busy_timeout = 120000").use { }
             val targetPath = sqlString(target.absolutePath)
             database.rawExecSQL("ATTACH DATABASE '$targetPath' AS portable KEY ''")
             try {

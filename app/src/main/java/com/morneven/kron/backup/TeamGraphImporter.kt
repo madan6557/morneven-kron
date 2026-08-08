@@ -337,8 +337,8 @@ internal object TeamGraphImporter {
         )
 
         db.execSQL(
-            """INSERT INTO debts(id,accountId,role,counterparty,title,principalOriginal,principalOutstanding,interestOutstanding,interestRateBps,interestIntervalMonths,interestAnchorEpochDay,dueEpochDay,status,createdAt,revision,updatedAt,lastWriterId,syncId)
-               SELECT id,?,role,counterparty,title,principalOriginal,principalOutstanding,interestOutstanding,interestRateBps,interestIntervalMonths,interestAnchorEpochDay,dueEpochDay,status,createdAt,revision,updatedAt,lastWriterId,syncId
+            """INSERT INTO debts(id,accountId,role,counterparty,title,principalOriginal,principalOutstanding,interestOutstanding,interestRateBps,interestIntervalMonths,interestIntervalUnit,interestAnchorEpochDay,dueEpochDay,status,createdAt,revision,updatedAt,lastWriterId,syncId)
+               SELECT id,?,role,counterparty,title,principalOriginal,principalOutstanding,interestOutstanding,interestRateBps,interestIntervalMonths,interestIntervalUnit,interestAnchorEpochDay,dueEpochDay,status,createdAt,revision,updatedAt,lastWriterId,syncId
                FROM team_source.debts""",
             arrayOf(accountId),
         )

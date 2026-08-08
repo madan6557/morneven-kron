@@ -285,12 +285,14 @@ class KronRepositoryTest {
             principal = 100,
             interestRateBps = 1_000,
             interestIntervalMonths = 1,
+            interestIntervalUnit = InterestInterval.MONTHS,
             startDate = today.minusMonths(1),
             dueDate = today.plusMonths(1),
             note = "",
         )
         assertEquals(200L, dao.accountBalance(account.id, FundingChannel.CASH))
         assertEquals(100L, dao.debtById(debtorId)?.principalOutstanding)
+        assertEquals(InterestInterval.MONTHS, dao.debtById(debtorId)?.interestIntervalUnit)
         assertTrue(requireNotNull(dao.debtById(debtorId)).updatedAt > 0L)
 
         repository.recordDebtPayment(debtorId, FundingChannel.CASH, 15, expenseCategory.id, "", today)
@@ -319,6 +321,7 @@ class KronRepositoryTest {
             principal = 50,
             interestRateBps = 0,
             interestIntervalMonths = 1,
+            interestIntervalUnit = InterestInterval.DAYS,
             startDate = today,
             dueDate = null,
             note = "",

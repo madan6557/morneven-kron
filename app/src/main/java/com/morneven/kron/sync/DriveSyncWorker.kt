@@ -2,6 +2,7 @@ package com.morneven.kron.sync
 
 import android.content.Context
 import androidx.work.Constraints
+import androidx.work.BackoffPolicy
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
@@ -85,7 +86,8 @@ object DriveSyncScheduler {
             TimeUnit.HOURS,
             1,
             TimeUnit.HOURS,
-        ).setConstraints(constraints(wifiOnly, requireBatteryNotLow = true)).build()
+        ).setBackoffCriteria(BackoffPolicy.LINEAR, RETRY_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
+            .setConstraints(constraints(wifiOnly, requireBatteryNotLow = true)).build()
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
             DriveSyncWorker.UNIQUE_PERIODIC_WORK,
             ExistingPeriodicWorkPolicy.UPDATE,
@@ -95,6 +97,7 @@ object DriveSyncScheduler {
 
     fun syncNow(context: Context, wifiOnly: Boolean = false) {
         val request = OneTimeWorkRequestBuilder<DriveSyncWorker>()
+            .setBackoffCriteria(BackoffPolicy.LINEAR, RETRY_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
             .setConstraints(constraints(wifiOnly, requireBatteryNotLow = false))
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
@@ -106,8 +109,9 @@ object DriveSyncScheduler {
 
     fun scheduleAfterChange(context: Context, wifiOnly: Boolean = false) {
         val request = OneTimeWorkRequestBuilder<DriveSyncWorker>()
+            .setBackoffCriteria(BackoffPolicy.LINEAR, RETRY_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
             .setConstraints(constraints(wifiOnly, requireBatteryNotLow = true))
-            .setInitialDelay(7, TimeUnit.SECONDS)
+            .setInitialDelay(15, TimeUnit.SECONDS)
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
             DriveSyncWorker.UNIQUE_DEBOUNCED_WORK,
@@ -133,4 +137,8 @@ object DriveSyncScheduler {
         .setRequiredNetworkType(if (wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
         .setRequiresBatteryNotLow(requireBatteryNotLow)
         .build()
+
+    // Linear 10s backoff: retries never grow into multi-minute waits, which
+    // stacked up as each account switch left an exponential backoff behind.
+    private const val RETRY_BACKOFF_MILLIS = 10_000L
 }

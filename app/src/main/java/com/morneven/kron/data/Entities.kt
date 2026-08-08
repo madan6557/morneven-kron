@@ -7,6 +7,7 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import java.math.BigInteger
 import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 import java.util.UUID
 
 object LedgerType {
@@ -114,6 +115,11 @@ object DebtStatus {
     const val OPEN = "OPEN"
     const val SETTLED = "SETTLED"
     const val ARCHIVED = "ARCHIVED"
+}
+
+object InterestInterval {
+    const val MONTHS = "MONTHS"
+    const val DAYS = "DAYS"
 }
 
 object DebtEntryType {
@@ -705,6 +711,7 @@ data class DebtEntity(
     /** Basis points per interval: 150 = 1.50%. Zero disables interest. */
     @ColumnInfo(defaultValue = "0") val interestRateBps: Int = 0,
     @ColumnInfo(defaultValue = "1") val interestIntervalMonths: Int = 1,
+    @ColumnInfo(defaultValue = "'MONTHS'") val interestIntervalUnit: String = InterestInterval.MONTHS,
     val interestAnchorEpochDay: Long,
     val dueEpochDay: Long? = null,
     @ColumnInfo(defaultValue = "'OPEN'") val status: String = DebtStatus.OPEN,
@@ -753,11 +760,11 @@ object DebtCalculator {
             return debt.interestOutstanding
         }
         var next = LocalDate.ofEpochDay(debt.interestAnchorEpochDay)
-            .plusMonths(debt.interestIntervalMonths.coerceAtLeast(1).toLong())
+            .plus(debt.interestIntervalMonths.coerceAtLeast(1).toLong(), if (debt.interestIntervalUnit == InterestInterval.DAYS) ChronoUnit.DAYS else ChronoUnit.MONTHS)
         var intervals = 0L
         while (!next.isAfter(onDate)) {
             intervals++
-            next = next.plusMonths(debt.interestIntervalMonths.coerceAtLeast(1).toLong())
+            next = next.plus(debt.interestIntervalMonths.coerceAtLeast(1).toLong(), if (debt.interestIntervalUnit == InterestInterval.DAYS) ChronoUnit.DAYS else ChronoUnit.MONTHS)
         }
         if (intervals == 0L) return debt.interestOutstanding
         val accrued = BigInteger.valueOf(debt.principalOutstanding)

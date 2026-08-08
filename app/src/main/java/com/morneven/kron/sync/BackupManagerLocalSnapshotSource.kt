@@ -5,6 +5,7 @@ import com.morneven.kron.backup.BackupManager
 import com.morneven.kron.data.KronDatabase
 import com.morneven.kron.data.SyncStateEntity
 import com.morneven.kron.security.DatabaseRuntime
+import com.morneven.kron.security.SnapshotOperationLock
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -13,12 +14,21 @@ class BackupManagerLocalSnapshotSource(
     private val backupManager: BackupManager,
     private val databaseRuntime: DatabaseRuntime,
     private val context: Context,
+    private val snapshotOperationLock: SnapshotOperationLock,
     private val initialDatasetId: String = UUID.randomUUID().toString(),
     private val initialDeviceId: String = UUID.randomUUID().toString(),
 ) : LocalSnapshotSource {
     private val database get() = databaseRuntime.current()
 
     override suspend fun describe(): LocalDatasetSnapshot = withContext(Dispatchers.IO) {
+        // ponytail: whole local read inside the snapshot lock so an account
+        // switch restore can never swap the database under an open Room connection
+        snapshotOperationLock.withLock {
+            describeLocked()
+        }
+    }
+
+    private suspend fun describeLocked(): LocalDatasetSnapshot {
         val syncState = database.kronDao().syncState() ?: SyncStateEntity(
             datasetId = initialDatasetId,
             deviceId = initialDeviceId,
@@ -34,7 +44,7 @@ class BackupManagerLocalSnapshotSource(
             require(cursor.moveToFirst())
             cursor.getLong(0)
         }
-        LocalDatasetSnapshot(
+        return LocalDatasetSnapshot(
             datasetId = syncState.datasetId,
             generation = syncState.localGeneration,
             schemaVersion = schemaVersion,
@@ -52,11 +62,14 @@ class BackupManagerLocalSnapshotSource(
     override suspend fun previewRemotePayload(
         payload: ByteArray,
         manifest: DriveSnapshotManifest,
-    ): ConflictPreview = backupManager.previewPortableSnapshotPayload(
-        payload = payload,
-        localSnapshotId = database.kronDao().syncState()?.lastSnapshotId,
-        remoteSnapshotId = manifest.snapshotId,
-    )
+    ): ConflictPreview {
+        val localSnapshotId = snapshotOperationLock.withLock { database.kronDao().syncState()?.lastSnapshotId }
+        return backupManager.previewPortableSnapshotPayload(
+            payload = payload,
+            localSnapshotId = localSnapshotId,
+            remoteSnapshotId = manifest.snapshotId,
+        )
+    }
 
     override suspend fun applyRemoteAtomically(
         payload: ByteArray,
