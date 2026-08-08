@@ -361,8 +361,9 @@ internal object TeamGraphRefresher {
         db.execSQL("""INSERT INTO receipts(eventId,localPath,storageId,displayName,mimeType,byteSize,sha256,encryptionNonce,encryptionVersion,createdAt,capturedAt,latitude,longitude,origin,evidenceEventId)
             SELECT s.eventId,NULL,s.storageId,s.displayName,s.mimeType,s.byteSize,s.sha256,s.encryptionNonce,s.encryptionVersion,s.createdAt,s.capturedAt,s.latitude,s.longitude,s.origin,s.evidenceEventId
             FROM team_source.receipts s WHERE NOT EXISTS(SELECT 1 FROM receipts t WHERE t.storageId=s.storageId)""")
-        db.execSQL("""INSERT INTO debt_entries(id,debtId,accountId,eventId,type,principalAmount,interestAmount,effectiveEpochDay,note,createdAt)
-            SELECT s.id,s.debtId,?,s.eventId,s.type,s.principalAmount,s.interestAmount,s.effectiveEpochDay,s.note,s.createdAt
+        val debtEntryFundingSource = if (hasColumn(db, "debt_entries", "fundingSource")) "s.fundingSource" else "'EXTERNAL'"
+        db.execSQL("""INSERT INTO debt_entries(id,debtId,accountId,eventId,type,principalAmount,interestAmount,fundingSource,effectiveEpochDay,note,createdAt)
+            SELECT s.id,s.debtId,?,s.eventId,s.type,s.principalAmount,s.interestAmount,$debtEntryFundingSource,s.effectiveEpochDay,s.note,s.createdAt
             FROM team_source.debt_entries s WHERE NOT EXISTS(SELECT 1 FROM debt_entries t WHERE t.id=s.id)""", arrayOf(accountId))
         importEvidenceAndLedger(db, sourceAccountId, accountId)
         db.execSQL("""INSERT INTO team_event_proofs(eventId,teamId,chainId,sequence,previousChainHash,payloadHash,chainHash,signatureBase64,recordedAtUtc,deviceId,actor,appVersion,keyId,canonicalVersion)
@@ -426,6 +427,13 @@ internal object TeamGraphRefresher {
             }
         }
     }
+
+    private fun hasColumn(db: SQLiteDatabase, table: String, column: String): Boolean =
+        db.rawQuery("PRAGMA team_source.table_info($table)", null).use { cursor ->
+            val nameIndex = cursor.getColumnIndex("name")
+            while (cursor.moveToNext()) if (nameIndex >= 0 && cursor.getString(nameIndex) == column) return true
+            false
+        }
 
     private fun scalar(db: SQLiteDatabase, sql: String, args: Array<String>? = null): Long =
         db.rawQuery(sql, args).use { cursor -> require(cursor.moveToFirst()); cursor.getLong(0) }

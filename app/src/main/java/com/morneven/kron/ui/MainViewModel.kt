@@ -739,14 +739,17 @@ class MainViewModel @Inject constructor(
         accountId: Long,
         remoteSnapshotId: String,
         onApplied: () -> Unit,
+        onFailure: () -> Unit = {},
     ) = viewModelScope.launch {
         try {
             teamSnapshotCoordinator.resolveUseTeam(accessToken, accountId, remoteSnapshotId)
             onApplied()
         } catch (cancelled: CancellationException) {
+            onFailure()
             throw cancelled
         } catch (error: Throwable) {
             mutableTeamConflictError.value = error.message ?: "Resolusi konflik Team gagal"
+            onFailure()
         }
     }
 
@@ -755,14 +758,17 @@ class MainViewModel @Inject constructor(
         accountId: Long,
         remoteSnapshotId: String,
         onApplied: () -> Unit,
+        onFailure: () -> Unit = {},
     ) = viewModelScope.launch {
         try {
             teamSnapshotCoordinator.resolveMerge(accessToken, accountId, remoteSnapshotId)
             onApplied()
         } catch (cancelled: CancellationException) {
+            onFailure()
             throw cancelled
         } catch (error: Throwable) {
             mutableTeamConflictError.value = error.message ?: "Gabung konflik Team gagal"
+            onFailure()
         }
     }
 
@@ -1003,6 +1009,7 @@ class MainViewModel @Inject constructor(
     fun createDebt(
         accountId: Long,
         role: String,
+        fundingSource: String,
         counterparty: String,
         title: String,
         principal: Long,
@@ -1016,6 +1023,7 @@ class MainViewModel @Inject constructor(
         repository.createDebt(
             accountId,
             role,
+            fundingSource,
             counterparty,
             title,
             principal,
@@ -1030,13 +1038,13 @@ class MainViewModel @Inject constructor(
 
     fun recordDebtPayment(
         debtId: String,
-        channel: String,
+        fundingSource: String,
         amount: Long,
         categoryId: Long?,
         note: String,
         effectiveDate: LocalDate = LocalDate.now(),
     ) = runAction("Pembayaran hutang tercatat") {
-        repository.recordDebtPayment(debtId, channel, amount, categoryId, note, effectiveDate)
+        repository.recordDebtPayment(debtId, fundingSource, amount, categoryId, note, effectiveDate)
     }
 
     fun archiveDebt(debtId: String, note: String) = runAction("Hutang diarsipkan") {

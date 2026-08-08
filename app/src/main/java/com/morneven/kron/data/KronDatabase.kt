@@ -41,7 +41,7 @@ import com.morneven.kron.security.SqlCipherLibrary
         DebtEntity::class,
         DebtEntryEntity::class,
     ],
-    version = 18,
+    version = 19,
     exportSchema = true,
 )
 abstract class KronDatabase : RoomDatabase() {
@@ -1140,6 +1140,32 @@ abstract class KronDatabase : RoomDatabase() {
             }
         }
 
+        /** Debt entry funding source is additive; legacy entries are inferred from their journal event. */
+        val MIGRATION_18_19: Migration = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE debt_entries ADD COLUMN fundingSource TEXT NOT NULL DEFAULT 'EXTERNAL'")
+                db.execSQL(
+                    """
+                    UPDATE debt_entries
+                    SET fundingSource = COALESCE(
+                        (SELECT c.fundingChannel FROM cash_journal_lines c WHERE c.eventId = debt_entries.eventId LIMIT 1),
+                        'EXTERNAL'
+                    )
+                    WHERE EXISTS (SELECT 1 FROM cash_journal_lines c WHERE c.eventId = debt_entries.eventId)
+                    """.trimIndent(),
+                )
+                check(db.query("SELECT COUNT(*) FROM debt_entries WHERE fundingSource NOT IN ('CASH','EBUDGET','EXTERNAL')").use { it.moveToFirst() && it.getLong(0) == 0L }) {
+                    "Sumber dana entry hutang tidak valid setelah migrasi"
+                }
+                check(db.query("PRAGMA foreign_key_check").use { !it.moveToFirst() }) {
+                    "Relasi database tidak valid setelah migrasi sumber dana hutang"
+                }
+                check(db.query("PRAGMA integrity_check").use { it.moveToFirst() && it.getString(0).equals("ok", true) }) {
+                    "Database tidak utuh setelah migrasi sumber dana hutang"
+                }
+            }
+        }
+
         private val ALL_MIGRATIONS = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
@@ -1158,6 +1184,7 @@ abstract class KronDatabase : RoomDatabase() {
             MIGRATION_15_16,
             MIGRATION_16_17,
             MIGRATION_17_18,
+            MIGRATION_18_19,
         )
 
         private fun addTeamSyncColumns(
@@ -1303,10 +1330,18 @@ abstract class KronDatabase : RoomDatabase() {
                     } else {
                         ""
                     }
+                    // Evidence key rotation is a system maintenance event. It must
+                    // remain in the ledger, but it is not a user transaction and
+                    // therefore must not wake the private sync scheduler.
+                    val triggerWhen = if (table == "activity_events" && operation == "INSERT") {
+                        "($privateScope) AND NEW.type <> 'EVIDENCE_KEY_ROTATION'"
+                    } else {
+                        privateScope
+                    }
                     db.execSQL("""
                         CREATE TRIGGER sync_generation_${table}_$suffix
                         AFTER $operation$updateColumns ON $table
-                        WHEN $privateScope
+                        WHEN $triggerWhen
                         BEGIN
                             UPDATE sync_state
                             SET localGeneration = localGeneration + 1,
@@ -1437,10 +1472,16 @@ abstract class KronDatabase : RoomDatabase() {
                 "debt_entries" to "NEW.accountId",
                 "team_invitation_uses" to "(SELECT accountId FROM team_workspaces WHERE teamId=NEW.teamId)",
             ).filterKeys { db.hasTable(it) }.forEach { (table, accountId) ->
+                val triggerWhen = if (table == "activity_events") {
+                    "WHEN NEW.type <> 'EVIDENCE_KEY_ROTATION'"
+                } else {
+                    ""
+                }
                 db.execSQL(
                     """
                     CREATE TRIGGER team_generation_${table}_insert
                     AFTER INSERT ON $table
+                    $triggerWhen
                     BEGIN
                         UPDATE team_workspaces
                         SET generation = generation + 1,
@@ -1561,6 +1602,7 @@ abstract class KronDatabase : RoomDatabase() {
                         "LEFT JOIN activity_events a ON a.id=e.eventId " +
                         "WHERE d.id IS NULL OR a.id IS NULL OR e.accountId<>d.accountId OR e.accountId<>a.accountId " +
                         "OR e.type NOT IN ('OPEN','PAYMENT','SETTLEMENT','ADJUSTMENT','ARCHIVE','REVERSAL') " +
+                        "OR e.fundingSource NOT IN ('CASH','EBUDGET','EXTERNAL') " +
                         "OR (e.type<>'REVERSAL' AND (e.principalAmount<0 OR e.interestAmount<0)) " +
                         "OR (e.type='REVERSAL' AND (e.principalAmount>0 OR e.interestAmount>0))",
                 ) == 0L,
@@ -1671,6 +1713,6 @@ abstract class KronDatabase : RoomDatabase() {
         }
 
         const val DATABASE_NAME = "kron-v4.db"
-        const val SCHEMA_VERSION = 18
+        const val SCHEMA_VERSION = 19
     }
 }

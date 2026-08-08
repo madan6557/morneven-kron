@@ -46,9 +46,9 @@ import androidx.compose.ui.unit.dp
 import com.morneven.kron.data.DebtCalculator
 import com.morneven.kron.data.DebtEntity
 import com.morneven.kron.data.DebtEntryEntity
+import com.morneven.kron.data.DebtFundingSource
 import com.morneven.kron.data.DebtRole
 import com.morneven.kron.data.DebtStatus
-import com.morneven.kron.data.FundingChannel
 import com.morneven.kron.data.InterestInterval
 import com.morneven.kron.data.TransactionDirection
 import com.morneven.kron.ui.KronUiState
@@ -70,7 +70,7 @@ import java.util.Locale
 fun DebtScreen(
     state: KronUiState,
     onBack: () -> Unit,
-    onCreate: (String, String, String, Long, Int, Int, String, LocalDate, LocalDate?, String) -> Unit,
+    onCreate: (String, String, String, String, Long, Int, Int, String, LocalDate, LocalDate?, String) -> Unit,
     onPayment: (String, String, Long, Long?, String, LocalDate) -> Unit,
     onArchive: (String, String) -> Unit,
     onViewEvent: (String) -> Unit,
@@ -103,7 +103,7 @@ fun DebtScreen(
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
                     Text("Hutang & Piutang", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Text("Tracker terpisah dari saldo. Pembayaran tetap dicatat ke ledger.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Cash/eBudget mengikuti arah dana; External tidak mengubah saldo.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -171,8 +171,8 @@ fun DebtScreen(
         DebtCreateDialog(
             role = role,
             onDismiss = { createRole = null },
-            onCreate = { counterparty, title, principal, rateBps, interval, unit, start, due, note ->
-                onCreate(role, counterparty, title, principal, rateBps, interval, unit, start, due, note)
+            onCreate = { fundingSource, counterparty, title, principal, rateBps, interval, unit, start, due, note ->
+                onCreate(role, fundingSource, counterparty, title, principal, rateBps, interval, unit, start, due, note)
                 createRole = null
             },
         )
@@ -279,8 +279,9 @@ private fun DebtCard(
 private fun DebtCreateDialog(
     role: String,
     onDismiss: () -> Unit,
-    onCreate: (String, String, Long, Int, Int, String, LocalDate, LocalDate?, String) -> Unit,
+    onCreate: (String, String, String, Long, Int, Int, String, LocalDate, LocalDate?, String) -> Unit,
 ) {
+    var fundingSource by rememberSaveable { mutableStateOf(DebtFundingSource.EXTERNAL) }
     var counterparty by rememberSaveable { mutableStateOf("") }
     var title by rememberSaveable { mutableStateOf("") }
     var principal by rememberSaveable { mutableStateOf("") }
@@ -301,9 +302,23 @@ private fun DebtCreateDialog(
         onDismiss = onDismiss,
         confirmText = "Simpan tracker",
         confirmEnabled = valid,
-        onConfirm = { onCreate(counterparty.trim(), title.trim(), parseMoneyInput(principal), parsedRate!!, parsedInterval, unit, start, due, note.trim()) },
+        onConfirm = { onCreate(fundingSource, counterparty.trim(), title.trim(), parseMoneyInput(principal), parsedRate!!, parsedInterval, unit, start, due, note.trim()) },
     ) {
-        Text("Pembukaan tracker tidak mengubah saldo. Saldo berubah saat pembayaran dicatat.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+        Text(
+            when (fundingSource) {
+                DebtFundingSource.EXTERNAL -> "Sumber external tidak mengubah saldo KRON."
+                DebtFundingSource.CASH -> if (role == DebtRole.DEBTOR) "Dana hutang menambah Cash dan Vault." else "Dana piutang mengurangi Cash dan Vault."
+                else -> if (role == DebtRole.DEBTOR) "Dana hutang menambah eBudget dan Vault." else "Dana piutang mengurangi eBudget dan Vault."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.tertiary,
+        )
+        Text("Sumber dana", style = MaterialTheme.typography.labelLarge)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = fundingSource == DebtFundingSource.CASH, onClick = { fundingSource = DebtFundingSource.CASH }, label = { Text("Cash") })
+            FilterChip(selected = fundingSource == DebtFundingSource.EBUDGET, onClick = { fundingSource = DebtFundingSource.EBUDGET }, label = { Text("eBudget") })
+            FilterChip(selected = fundingSource == DebtFundingSource.EXTERNAL, onClick = { fundingSource = DebtFundingSource.EXTERNAL }, label = { Text("External") })
+        }
         OutlinedTextField(counterparty, { counterparty = it }, label = { Text(if (role == DebtRole.DEBTOR) "Pemberi hutang" else "Pihak yang berhutang") }, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(title, { title = it }, label = { Text("Judul") }, modifier = Modifier.fillMaxWidth())
         MoneyField(principal, { principal = it }, "Pokok awal")
@@ -348,7 +363,7 @@ private fun DebtPaymentDialog(
 ) {
     val direction = if (debt.role == DebtRole.DEBTOR) TransactionDirection.EXPENSE else TransactionDirection.INCOME
     val categories = state.categories.filter { it.direction == direction }
-    var channel by rememberSaveable { mutableStateOf(FundingChannel.CASH) }
+    var channel by rememberSaveable { mutableStateOf(DebtFundingSource.CASH) }
     var categoryId by rememberSaveable { mutableStateOf(categories.firstOrNull()?.id) }
     var amount by rememberSaveable { mutableStateOf("") }
     var note by rememberSaveable { mutableStateOf("") }
@@ -358,7 +373,7 @@ private fun DebtPaymentDialog(
     val interest = DebtCalculator.currentInterest(debt, paymentDate)
     val maximum = debt.principalOutstanding + interest
     val amountValue = parseMoneyInput(amount)
-    val valid = dateValid && amountValue in 1..maximum && (categories.isEmpty() || categoryId != null)
+    val valid = dateValid && amountValue in 1..maximum && (channel == DebtFundingSource.EXTERNAL || categories.isEmpty() || categoryId != null)
     FormDialog(
         title = if (debt.role == DebtRole.DEBTOR) "Bayar hutang" else "Terima piutang",
         onDismiss = onDismiss,
@@ -369,14 +384,15 @@ private fun DebtPaymentDialog(
         Text(debt.title, style = MaterialTheme.typography.titleMedium)
         Text("Pokok ${displayMoney(debt.principalOutstanding, state.valuesVisible)} · bunga ${displayMoney(interest, state.valuesVisible)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text("Pembayaran menutup bunga terlebih dahulu, lalu pokok.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
-        Text("Kanal", style = MaterialTheme.typography.labelLarge)
+        Text("Sumber dana", style = MaterialTheme.typography.labelLarge)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = channel == FundingChannel.CASH, onClick = { channel = FundingChannel.CASH }, label = { Text("Cash") })
-            FilterChip(selected = channel == FundingChannel.EBUDGET, onClick = { channel = FundingChannel.EBUDGET }, label = { Text("eBudget") })
+            FilterChip(selected = channel == DebtFundingSource.CASH, onClick = { channel = DebtFundingSource.CASH }, label = { Text("Cash") })
+            FilterChip(selected = channel == DebtFundingSource.EBUDGET, onClick = { channel = DebtFundingSource.EBUDGET }, label = { Text("eBudget") })
+            FilterChip(selected = channel == DebtFundingSource.EXTERNAL, onClick = { channel = DebtFundingSource.EXTERNAL }, label = { Text("External") })
         }
         MoneyField(amount, { amount = it }, "Nominal pembayaran")
         Text("Maksimum ${displayMoney(maximum, state.valuesVisible)}", style = MaterialTheme.typography.bodySmall, color = if (amountValue > maximum) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
-        if (categories.isNotEmpty()) {
+        if (channel != DebtFundingSource.EXTERNAL && categories.isNotEmpty()) {
             Text("Kategori transaksi", style = MaterialTheme.typography.labelLarge)
             Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 categories.forEach { category ->
@@ -415,6 +431,7 @@ private fun DebtDetailDialog(
         entries.sortedByDescending { it.createdAt }.forEach { entry ->
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(entryLabel(entry.type), style = MaterialTheme.typography.bodyLarge)
+                Text("Sumber: ${sourceLabel(entry.fundingSource)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
                 Text(
                     "${LocalDate.ofEpochDay(entry.effectiveEpochDay)} · Pokok ${displayMoney(entry.principalAmount, valuesVisible)} · Bunga ${displayMoney(entry.interestAmount, valuesVisible)}",
                     style = MaterialTheme.typography.bodySmall,
@@ -481,6 +498,13 @@ private fun statusLabel(status: String): String = when (status) {
     DebtStatus.SETTLED -> "Lunas"
     DebtStatus.ARCHIVED -> "Arsip"
     else -> status
+}
+
+private fun sourceLabel(source: String): String = when (source) {
+    DebtFundingSource.CASH -> "Cash"
+    DebtFundingSource.EBUDGET -> "eBudget"
+    DebtFundingSource.EXTERNAL -> "External"
+    else -> source
 }
 
 private fun entryLabel(type: String): String = when (type) {

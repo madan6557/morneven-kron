@@ -379,9 +379,10 @@ internal object TeamGraphImporter {
                SELECT eventId,NULL,storageId,displayName,mimeType,byteSize,sha256,encryptionNonce,encryptionVersion,createdAt,capturedAt,latitude,longitude,origin,evidenceEventId
                FROM team_source.receipts""",
         )
+        val debtEntryFundingSource = if (hasColumn(db, "debt_entries", "fundingSource")) "fundingSource" else "'EXTERNAL'"
         db.execSQL(
-            """INSERT INTO debt_entries(id,debtId,accountId,eventId,type,principalAmount,interestAmount,effectiveEpochDay,note,createdAt)
-               SELECT id,debtId,?,eventId,type,principalAmount,interestAmount,effectiveEpochDay,note,createdAt
+            """INSERT INTO debt_entries(id,debtId,accountId,eventId,type,principalAmount,interestAmount,fundingSource,effectiveEpochDay,note,createdAt)
+               SELECT id,debtId,?,eventId,type,principalAmount,interestAmount,$debtEntryFundingSource,effectiveEpochDay,note,createdAt
                FROM team_source.debt_entries""",
             arrayOf(accountId),
         )
@@ -611,6 +612,13 @@ internal object TeamGraphImporter {
             }
         }
     }
+
+    private fun hasColumn(db: SQLiteDatabase, table: String, column: String): Boolean =
+        db.rawQuery("PRAGMA team_source.table_info($table)", null).use { cursor ->
+            val nameIndex = cursor.getColumnIndex("name")
+            while (cursor.moveToNext()) if (nameIndex >= 0 && cursor.getString(nameIndex) == column) return true
+            false
+        }
 
     private fun scalar(db: SQLiteDatabase, sql: String, args: Array<String>? = null): Long =
         db.rawQuery(sql, args).use { cursor ->

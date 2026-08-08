@@ -468,6 +468,8 @@ private fun MainScaffold(
     var pendingDriveUploadConfirmation by rememberSaveable { mutableStateOf(false) }
     var restartRequired by rememberSaveable { mutableStateOf(false) }
     var applyingSnapshot by remember { mutableStateOf(false) }
+    var conflictResolutionBusy by remember { mutableStateOf(false) }
+    var conflictResolutionPhase by remember { mutableStateOf<String?>(null) }
     val capsuleManager = remember {
         com.morneven.kron.capsule.CapsuleManager(
             activity.applicationContext,
@@ -483,24 +485,38 @@ private fun MainScaffold(
     LaunchedEffect(auditId) {
         auditId?.let(viewModel::loadAuditDetails) ?: viewModel.clearAuditDetails()
     }
-    fun applyStagedSnapshot() {
+    fun applyStagedSnapshot(afterApply: (() -> Unit)? = null) {
         if (applyingSnapshot) return
         applyingSnapshot = true
+        if (conflictResolutionBusy) conflictResolutionPhase = "Menerapkan pembaruan terenkripsi..."
         scope.launch {
-            val error = onApplyStagedSnapshot().exceptionOrNull()
-            if (error == null) {
+            try {
+                val error = onApplyStagedSnapshot().exceptionOrNull()
+                if (error == null) {
+                    cloudConflict = null
+                    cloudConflictPreview = null
+                    cloudConflictPreviewError = null
+                    viewModel.dismissTeamConflict()
+                    viewModel.refreshForCurrentDate()
+                    viewModel.showMessage("Pembaruan terenkripsi berhasil diterapkan")
+                } else {
+                    viewModel.showMessage(error.message ?: "Pembaruan tersinkron tidak dapat diterapkan")
+                }
+            } finally {
                 applyingSnapshot = false
-                cloudConflict = null
-                cloudConflictPreview = null
-                cloudConflictPreviewError = null
-                viewModel.dismissTeamConflict()
-                viewModel.refreshForCurrentDate()
-                viewModel.showMessage("Pembaruan terenkripsi berhasil diterapkan")
-            } else {
-                applyingSnapshot = false
-                viewModel.showMessage(error.message ?: "Pembaruan tersinkron tidak dapat diterapkan")
+                afterApply?.invoke()
             }
         }
+    }
+    fun beginConflictResolution(label: String): Boolean {
+        if (conflictResolutionBusy || applyingSnapshot) return false
+        conflictResolutionBusy = true
+        conflictResolutionPhase = label
+        return true
+    }
+    fun finishConflictResolution() {
+        conflictResolutionBusy = false
+        conflictResolutionPhase = null
     }
     LaunchedEffect(state.recoveredTeamAccounts, teamDriveScopeProbe) {
         val account = state.recoveredTeamAccounts.firstOrNull { it.id !in recoveredTeamSyncAttempts } ?: return@LaunchedEffect
@@ -589,6 +605,13 @@ private fun MainScaffold(
     fun handleCloudConflictResolution(result: SyncRunResult) {
         // Keep the conflict visible while a staged candidate is activated.
         // A failed activation must leave the resolver available for retry.
+        if (result is SyncRunResult.Applied) {
+            applyStagedSnapshot {
+                conflictResolutionBusy = false
+                conflictResolutionPhase = null
+            }
+            return
+        }
         when (result) {
             is SyncRunResult.Synchronized,
             SyncRunResult.NoChanges,
@@ -600,6 +623,8 @@ private fun MainScaffold(
             }
             else -> Unit
         }
+        conflictResolutionBusy = false
+        conflictResolutionPhase = null
         handleSyncResult(result)
     }
 
@@ -1097,11 +1122,12 @@ private fun MainScaffold(
                 DebtScreen(
                     state = state,
                     onBack = { navController.popBackStack() },
-                    onCreate = { role, counterparty, title, principal, rateBps, interval, unit, start, due, note ->
+                    onCreate = { role, fundingSource, counterparty, title, principal, rateBps, interval, unit, start, due, note ->
                         state.activeAccount?.let { account ->
                             viewModel.createDebt(
                                 accountId = account.id,
                                 role = role,
+                                fundingSource = fundingSource,
                                 counterparty = counterparty,
                                 title = title,
                                 principal = principal,
@@ -2380,12 +2406,16 @@ private fun MainScaffold(
             preview = cloudConflictPreview,
             previewError = cloudConflictPreviewError,
             valuesVisible = state.valuesVisible,
-            onDismiss = { cloudConflict = null },
+            busy = conflictResolutionBusy || applyingSnapshot,
+            busyLabel = conflictResolutionPhase,
+            onDismiss = { if (!conflictResolutionBusy && !applyingSnapshot) cloudConflict = null },
             onKeepBoth = {
-                driveSyncRuntime?.let { runtime ->
-                    scope.launch {
-                        handleCloudConflictResolution(runtime.resolveConflict(conflict, ConflictResolution.KEEP_BOTH))
-                    }
+                if (beginConflictResolution("Menyiapkan kedua versi...")) {
+                    driveSyncRuntime?.let { runtime ->
+                        scope.launch {
+                            handleCloudConflictResolution(runtime.resolveConflict(conflict, ConflictResolution.KEEP_BOTH))
+                        }
+                    } ?: finishConflictResolution()
                 }
             },
             onUseDevice = {
@@ -2393,10 +2423,12 @@ private fun MainScaffold(
                     "Gunakan perangkat ini",
                     "Snapshot aktif Drive akan diganti oleh data perangkat ini. Snapshot pemulihan lama tetap mengikuti kebijakan retensi.",
                 ) {
-                    driveSyncRuntime?.let { runtime ->
-                        scope.launch {
-                            handleCloudConflictResolution(runtime.resolveConflict(conflict, ConflictResolution.USE_THIS_DEVICE))
-                        }
+                    if (beginConflictResolution("Mengunggah data perangkat...")) {
+                        driveSyncRuntime?.let { runtime ->
+                            scope.launch {
+                                handleCloudConflictResolution(runtime.resolveConflict(conflict, ConflictResolution.USE_THIS_DEVICE))
+                            }
+                        } ?: finishConflictResolution()
                     }
                 }
                 criticalReason = ""
@@ -2406,10 +2438,12 @@ private fun MainScaffold(
                     "Gunakan Drive",
                     "Data lokal diamankan sebagai snapshot pemulihan sebelum data Drive diterapkan.",
                 ) {
-                    driveSyncRuntime?.let { runtime ->
-                        scope.launch {
-                            handleCloudConflictResolution(runtime.resolveConflict(conflict, ConflictResolution.USE_DRIVE))
-                        }
+                    if (beginConflictResolution("Membuat recovery copy dan menyiapkan Drive...")) {
+                        driveSyncRuntime?.let { runtime ->
+                            scope.launch {
+                                handleCloudConflictResolution(runtime.resolveConflict(conflict, ConflictResolution.USE_DRIVE))
+                            }
+                        } ?: finishConflictResolution()
                     }
                 }
                 criticalReason = ""
@@ -2428,7 +2462,9 @@ private fun MainScaffold(
             error = teamConflictError,
             valuesVisible = state.valuesVisible,
             viewer = state.teamWorkspace?.localRole == TeamRole.VIEWER,
-            onDismiss = viewModel::dismissTeamConflict,
+            busy = conflictResolutionBusy || applyingSnapshot,
+            busyLabel = conflictResolutionPhase,
+            onDismiss = { if (!conflictResolutionBusy && !applyingSnapshot) viewModel.dismissTeamConflict() },
             onReload = {
                 scope.launch {
                     when (val token = teamDriveScopeProbe?.getAccessToken(interactive = true)) {
@@ -2438,36 +2474,50 @@ private fun MainScaffold(
                 }
             },
             onUseTeam = {
-                teamConflictPreview?.remoteSnapshotId?.let { remoteId ->
-                    scope.launch {
-                        when (val token = teamDriveScopeProbe?.getAccessToken(interactive = true)) {
-                            is DriveAccessTokenResult.Granted -> viewModel.resolveTeamUseRemote(
-                                token.accessToken, accountId, remoteId,
-                            ) {
-                                applyStagedSnapshot()
+                if (beginConflictResolution("Mengunduh dan memvalidasi snapshot Team...")) {
+                    teamConflictPreview?.remoteSnapshotId?.let { remoteId ->
+                        scope.launch {
+                            when (val token = teamDriveScopeProbe?.getAccessToken(interactive = true)) {
+                                is DriveAccessTokenResult.Granted -> viewModel.resolveTeamUseRemote(
+                                    token.accessToken, accountId, remoteId,
+                                    onApplied = {
+                                        applyStagedSnapshot(::finishConflictResolution)
+                                    },
+                                    onFailure = ::finishConflictResolution,
+                                )
+                                else -> {
+                                    viewModel.failTeamConflict("Izin Google Drive Team belum tersedia.")
+                                    finishConflictResolution()
+                                }
                             }
-                            else -> viewModel.failTeamConflict("Izin Google Drive Team belum tersedia.")
                         }
-                    }
+                    } ?: finishConflictResolution()
                 }
             },
             onMerge = {
-                teamConflictPreview?.remoteSnapshotId?.let { remoteId ->
-                    scope.launch {
-                        when (val token = teamDriveScopeProbe?.getAccessToken(interactive = true)) {
-                            is DriveAccessTokenResult.Granted -> viewModel.resolveTeamMerge(
-                                token.accessToken, accountId, remoteId,
-                            ) {
-                                applyStagedSnapshot()
+                if (beginConflictResolution("Menggabungkan dan memvalidasi snapshot Team...")) {
+                    teamConflictPreview?.remoteSnapshotId?.let { remoteId ->
+                        scope.launch {
+                            when (val token = teamDriveScopeProbe?.getAccessToken(interactive = true)) {
+                                is DriveAccessTokenResult.Granted -> viewModel.resolveTeamMerge(
+                                    token.accessToken, accountId, remoteId,
+                                    onApplied = {
+                                        applyStagedSnapshot(::finishConflictResolution)
+                                    },
+                                    onFailure = ::finishConflictResolution,
+                                )
+                                else -> {
+                                    viewModel.failTeamConflict("Izin Google Drive Team belum tersedia.")
+                                    finishConflictResolution()
+                                }
                             }
-                            else -> viewModel.failTeamConflict("Izin Google Drive Team belum tersedia.")
                         }
-                    }
+                    } ?: finishConflictResolution()
                 }
             },
         )
     }
-    if (applyingSnapshot) {
+    if (applyingSnapshot || conflictResolutionBusy) {
         Dialog(
             onDismissRequest = {},
             properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
@@ -2479,7 +2529,7 @@ private fun MainScaffold(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
-                    Text("Menerapkan pembaruan terenkripsi")
+                    Text(conflictResolutionPhase ?: "Menerapkan pembaruan terenkripsi")
                 }
             }
         }
@@ -2973,6 +3023,8 @@ private fun TeamConflictCenterDialog(
     error: String?,
     valuesVisible: Boolean,
     viewer: Boolean,
+    busy: Boolean,
+    busyLabel: String?,
     onDismiss: () -> Unit,
     onReload: () -> Unit,
     onUseTeam: () -> Unit,
@@ -2984,7 +3036,10 @@ private fun TeamConflictCenterDialog(
     val safeRemoteApply = preview != null && preview.integrityProblemCount == 0 &&
         preview.deviceOnlyCount == 0 && !preview.requiresChoices
     val safeMerge = preview != null && preview.integrityProblemCount == 0 && !preview.requiresChoices
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
         Surface(modifier = Modifier.fillMaxSize().systemBarsPadding(), color = MaterialTheme.colorScheme.background) {
             Column(
                 modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -2999,7 +3054,16 @@ private fun TeamConflictCenterDialog(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) { Text("Tutup") }
+                    TextButton(onClick = onDismiss, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) { Text("Tutup") }
+                }
+                if (busy) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        Text(busyLabel ?: "Menyelesaikan resolusi konflik...")
+                    }
                 }
                 when {
                     preview == null && error == null -> Row(
@@ -3012,7 +3076,7 @@ private fun TeamConflictCenterDialog(
                     error != null -> HudCard(accent = MaterialTheme.colorScheme.error.copy(alpha = 0.6f)) {
                         Text("Konflik belum dapat ditampilkan", style = MaterialTheme.typography.titleMedium)
                         Text(error, color = MaterialTheme.colorScheme.error)
-                        Button(onClick = onReload, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                        Button(onClick = onReload, enabled = !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                             Text("Muat ulang")
                         }
                     }
@@ -3073,7 +3137,7 @@ private fun TeamConflictCenterDialog(
                         HorizontalDivider()
                         Button(
                             onClick = if (viewer) onUseTeam else onMerge,
-                            enabled = if (viewer) safeRemoteApply else safeMerge,
+                            enabled = !busy && (if (viewer) safeRemoteApply else safeMerge),
                             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                         ) { Text(if (viewer) "Pulihkan aman dari Team" else "Gabungkan aman dan kirim") }
                         if (!safeMerge && preview.integrityProblemCount == 0) {
@@ -3096,7 +3160,7 @@ private fun TeamConflictCenterDialog(
                             )
                             Button(
                                 onClick = onUseTeam,
-                                enabled = preview.integrityProblemCount == 0,
+                                enabled = !busy && preview.integrityProblemCount == 0,
                                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                             ) { Text("Gunakan Team") }
                         }
@@ -3113,6 +3177,8 @@ private fun ConflictCenterDialog(
     preview: ConflictPreview?,
     previewError: String?,
     valuesVisible: Boolean,
+    busy: Boolean,
+    busyLabel: String?,
     onDismiss: () -> Unit,
     onKeepBoth: () -> Unit,
     onUseDevice: () -> Unit,
@@ -3124,7 +3190,7 @@ private fun ConflictCenterDialog(
         filter == "ALL" || item.status.name == filter
     }
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!busy) onDismiss() },
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Surface(
@@ -3148,7 +3214,16 @@ private fun ConflictCenterDialog(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) { Text("Tutup") }
+                    TextButton(onClick = onDismiss, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) { Text("Tutup") }
+                }
+                if (busy) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        Text(busyLabel ?: "Menyelesaikan resolusi konflik...")
+                    }
                 }
 
                 when {
@@ -3253,9 +3328,9 @@ private fun ConflictCenterDialog(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
                                 val enabled = preview.integrityProblemCount == 0
-                                TextButton(onClick = onKeepBoth, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp)) { Text("Amankan kedua versi") }
-                                TextButton(onClick = onUseDevice, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp)) { Text("Gunakan perangkat ini") }
-                                TextButton(onClick = onUseDrive, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp)) { Text("Gunakan Drive") }
+                                TextButton(onClick = onKeepBoth, enabled = !busy && enabled, modifier = Modifier.heightIn(min = 48.dp)) { Text("Amankan kedua versi") }
+                                TextButton(onClick = onUseDevice, enabled = !busy && enabled, modifier = Modifier.heightIn(min = 48.dp)) { Text("Gunakan perangkat ini") }
+                                TextButton(onClick = onUseDrive, enabled = !busy && enabled, modifier = Modifier.heightIn(min = 48.dp)) { Text("Gunakan Drive") }
                             }
                         }
                     }

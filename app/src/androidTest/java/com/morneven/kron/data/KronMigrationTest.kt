@@ -563,6 +563,34 @@ class KronMigrationTest {
     }
 
     @Test
+    fun migrationEighteenToNineteenAddsFundingSourceAndInfersLegacyJournal() {
+        val name = "kron-production-18-to-19.db"
+        migrationHelper.createDatabase(name, 18).apply {
+            execSQL("INSERT INTO accounts(id,name,isActive,isArchived,createdAt,sharingMode,teamId,revision,updatedAt) VALUES(1,'Utama',1,0,1,'PRIVATE',NULL,0,1)")
+            execSQL("INSERT INTO debts(id,accountId,role,counterparty,title,principalOriginal,principalOutstanding,interestOutstanding,interestRateBps,interestIntervalMonths,interestIntervalUnit,interestAnchorEpochDay,dueEpochDay,status,createdAt,revision,updatedAt,lastWriterId,syncId) VALUES('debt-19',1,'DEBTOR','Pihak A','Uji',100000,100000,0,150,1,'MONTHS',10,NULL,'OPEN',11,0,11,NULL,'debt-19')")
+            execSQL("INSERT INTO activity_events(id,type,title,note,source,effectiveEpochDay,createdAt,accountId) VALUES('debt-payment-19','EXPENSE','Bayar','','USER',10,11,1)")
+            execSQL("INSERT INTO cash_journal_lines(id,eventId,accountId,fundingChannel,amount) VALUES(1,'debt-payment-19',1,'EBUDGET',-10000)")
+            execSQL("INSERT INTO debt_entries(id,debtId,accountId,eventId,type,principalAmount,interestAmount,effectiveEpochDay,note,createdAt) VALUES('entry-19','debt-19',1,'debt-payment-19','PAYMENT',10000,0,10,'',11)")
+            close()
+        }
+        migrationHelper.runMigrationsAndValidate(name, 19, true, KronDatabase.MIGRATION_18_19).apply {
+            query("SELECT fundingSource FROM debt_entries WHERE id='entry-19'").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("EBUDGET", cursor.getString(0))
+            }
+            execSQL("INSERT INTO activity_events(id,type,title,note,source,effectiveEpochDay,createdAt,accountId) VALUES('debt-open-external-19','DEBT_OPEN','Uji','','USER',10,11,1)")
+            execSQL("INSERT INTO debt_entries(id,debtId,accountId,eventId,type,principalAmount,interestAmount,effectiveEpochDay,note,createdAt) VALUES('entry-external-19','debt-19',1,'debt-open-external-19','OPEN',100000,0,10,'',11)")
+            query("SELECT fundingSource FROM debt_entries WHERE id='entry-external-19'").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("EXTERNAL", cursor.getString(0))
+            }
+            query("PRAGMA foreign_key_check").use { cursor -> assertFalse(cursor.moveToFirst()) }
+            query("PRAGMA integrity_check").use { cursor -> assertTrue(cursor.moveToFirst()); assertEquals("ok", cursor.getString(0)) }
+            close()
+        }
+    }
+
+    @Test
     fun productionPreviewPathMigratesThenKeepsVersionAfterRawReopen() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val fixtureName = "kron-production-17-preview-repro.db"

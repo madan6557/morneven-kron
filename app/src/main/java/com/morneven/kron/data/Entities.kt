@@ -33,6 +33,7 @@ object LedgerType {
     const val RESTORE_REVERSAL = "RESTORE_REVERSAL"
     const val EVIDENCE_KEY_ROTATION = "EVIDENCE_KEY_ROTATION"
     const val DEBT_OPEN = "DEBT_OPEN"
+    const val DEBT_PAYMENT = "DEBT_PAYMENT"
     const val DEBT_ARCHIVE = "DEBT_ARCHIVE"
 }
 
@@ -57,6 +58,7 @@ object EvidenceOrigin {
 
 object BudgetBucket {
     const val VAULT = "VAULT"
+    /** Historical bucket. New expenses without an allocation use Vault/Unexpected instead. */
     const val UNALLOCATED = "UNALLOCATED"
     const val UNEXPECTED = "UNEXPECTED"
     const val ROLLOVER = "ROLLOVER"
@@ -66,6 +68,12 @@ object BudgetBucket {
 object FundingChannel {
     const val CASH = "CASH"
     const val EBUDGET = "EBUDGET"
+}
+
+object DebtFundingSource {
+    const val CASH = FundingChannel.CASH
+    const val EBUDGET = FundingChannel.EBUDGET
+    const val EXTERNAL = "EXTERNAL"
 }
 
 object PeriodStatus {
@@ -685,10 +693,7 @@ data class RecurringOccurrenceEntity(
     val createdAt: Long = System.currentTimeMillis(),
 )
 
-/**
- * A debt is a scoped tracker. Its linked payment event is the only part that
- * changes Cash/eBudget, so opening a debt never changes financial balances.
- */
+/** A debt is a scoped tracker whose opening and payment entries describe the money flow. */
 @Entity(
     tableName = "debts",
     foreignKeys = [ForeignKey(
@@ -749,6 +754,7 @@ data class DebtEntryEntity(
     val type: String,
     val principalAmount: Long = 0,
     val interestAmount: Long = 0,
+    @ColumnInfo(defaultValue = "'EXTERNAL'") val fundingSource: String = DebtFundingSource.EXTERNAL,
     val effectiveEpochDay: Long,
     val note: String = "",
     val createdAt: Long = System.currentTimeMillis(),

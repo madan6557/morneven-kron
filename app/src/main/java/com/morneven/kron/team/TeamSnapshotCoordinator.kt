@@ -27,6 +27,8 @@ import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class TeamSnapshotConflictException : IllegalStateException(
     "Head snapshot Team berubah atau memiliki fork. Buka Pusat Konflik sebelum melanjutkan.",
@@ -91,6 +93,7 @@ class TeamSnapshotCoordinator @Inject constructor(
     private val blobStore: TeamBlobStore? = null,
 ) {
     private val database get() = databaseRuntime.current()
+    private val resolutionMutex = Mutex()
 
     suspend fun sync(accessToken: String, accountId: Long): TeamSyncResult {
         check(BuildConfig.TEAM_ACCOUNT_ENABLED) { "Team Account belum aktif pada build ini" }
@@ -249,7 +252,10 @@ class TeamSnapshotCoordinator @Inject constructor(
         accessToken: String,
         accountId: Long,
         expectedRemoteSnapshotId: String,
-    ): TeamSyncResult.Applied {
+    ): TeamSyncResult.Applied = resolutionMutex.withLock {
+        require(!databaseRuntime.hasPendingSyncActivation()) {
+            "Resolusi Team sedang menerapkan pembaruan. Tunggu sampai selesai."
+        }
         val workspace = requireNotNull(database.kronDao().teamWorkspace(accountId)) { "Workspace Team tidak ditemukan" }
         val head = requireNotNull(workspace.liveFileId) { "File snapshot Team belum tersedia" }
             .let { drive.stableSnapshot(accessToken, it, workspace.teamId) }
@@ -257,14 +263,17 @@ class TeamSnapshotCoordinator @Inject constructor(
             "Snapshot Team berubah. Muat ulang Pusat Konflik."
         }
         replaceRemoteForRestart(accessToken, workspace, head)
-        return TeamSyncResult.Applied(head.manifest.snapshotId)
+        TeamSyncResult.Applied(head.manifest.snapshotId)
     }
 
     suspend fun resolveMerge(
         accessToken: String,
         accountId: Long,
         expectedRemoteSnapshotId: String,
-    ): TeamSyncResult.Applied {
+    ): TeamSyncResult.Applied = resolutionMutex.withLock {
+        require(!databaseRuntime.hasPendingSyncActivation()) {
+            "Resolusi Team sedang menerapkan pembaruan. Tunggu sampai selesai."
+        }
         val workspace = requireNotNull(database.kronDao().teamWorkspace(accountId)) { "Workspace Team tidak ditemukan" }
         require(workspace.localRole != TeamRole.VIEWER) { "Viewer tidak dapat menggabungkan perubahan Team" }
         val head = requireNotNull(workspace.liveFileId) { "File snapshot Team belum tersedia" }
@@ -279,7 +288,7 @@ class TeamSnapshotCoordinator @Inject constructor(
             mergeParents.clear(workspace.teamId)
             throw error
         }
-        return TeamSyncResult.Applied(head.manifest.snapshotId)
+        TeamSyncResult.Applied(head.manifest.snapshotId)
     }
 
     private suspend fun replaceRemoteForRestart(
