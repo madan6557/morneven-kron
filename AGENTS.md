@@ -1,5 +1,17 @@
 # KRON Engineering Rules
 
+## Drive Sync Change Control
+
+Sebelum menyentuh kode produksi yang berhubungan dengan Drive, Team, Kapsul,
+backup/recovery, scheduler, conflict center, serializer, atau DatabaseRuntime,
+model dan engineer wajib membaca [docs/DRIVE_SYNC_CHANGE_CONTROL.md](docs/DRIVE_SYNC_CHANGE_CONTROL.md).
+Mereka harus menyatakan dokumen sudah dibaca, menjelaskan dampak perubahan, dan
+meminta approval eksplisit pengguna sebelum melakukan perubahan produksi.
+Laporan bug, analisis, dan rencana bukan approval implementasi. Perubahan
+docs-only dan test-only boleh dilakukan tanpa approval khusus. Commit produksi
+terlindungi wajib memiliki trailer `Drive-Change-Approval: <approval-reference>`;
+CI akan menolak commit tanpa trailer.
+
 ## Release and data compatibility
 
 - KRON 1.0.21 is the permanent production compatibility baseline.

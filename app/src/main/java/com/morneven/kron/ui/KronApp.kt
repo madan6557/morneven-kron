@@ -2254,7 +2254,18 @@ private fun MainScaffold(
             )
         }
     }
-    detailPeriod?.let { (periodId, readOnly) -> BudgetDetailDialog(state, periodId, readOnly, { detailPeriod = null }, viewModel::correctAllocation) }
+    detailPeriod?.let { (periodId, readOnly) ->
+        BudgetDetailDialog(
+            state = state,
+            periodId = periodId,
+            readOnly = readOnly,
+            onDismiss = { detailPeriod = null },
+            onCorrect = { id, amount, note -> authenticateCriticalAction("Koreksi budget") { viewModel.correctAllocation(id, amount, note) } },
+            onAddCategory = if (readOnly) null else { name, amount, pct, note -> authenticateCriticalAction("Tambah kategori") { viewModel.addBudgetCategory(periodId, name, amount, pct, note) } },
+            onRenameCategory = if (readOnly) null else { catId, newName -> authenticateCriticalAction("Ganti nama kategori") { viewModel.renameBudgetCategoryInPeriod(periodId, catId, newName) } },
+            onDeleteCategory = if (readOnly) null else { catId, note -> authenticateCriticalAction("Hapus kategori") { viewModel.removeBudgetCategory(periodId, catId, note) } },
+        )
+    }
     historyPortfolioId?.let { portfolioId ->
         BudgetHistoryDialog(
             state = state,

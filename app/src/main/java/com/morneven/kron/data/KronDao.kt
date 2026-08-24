@@ -496,4 +496,12 @@ interface KronDao {
 
     @Query("SELECT * FROM budget_periods WHERE portfolioId IN (:portfolioIds) ORDER BY startEpochDay DESC")
     suspend fun periodsForPortfolios(portfolioIds: List<Long>): List<BudgetPeriodEntity>
+
+    // ponytail: budget category CRUD helpers — reuse existing tables, no new entity
+    @Query("SELECT * FROM allocations WHERE periodId = :periodId AND categoryId = :categoryId") suspend fun allocationsForCategory(periodId: Long, categoryId: Long): List<AllocationEntity>
+    @Query("SELECT COUNT(*) FROM budget_journal_lines WHERE allocationId = :allocationId") suspend fun budgetLineCountForAllocation(allocationId: Long): Int
+    @Query("SELECT COUNT(*) FROM transaction_splits WHERE allocationId = :allocationId") suspend fun splitCountForAllocation(allocationId: Long): Int
+    @Query("DELETE FROM allocations WHERE id = :id") suspend fun deleteAllocationById(id: Long)
+    @Query("DELETE FROM portfolio_allocation_templates WHERE portfolioId = :portfolioId AND categoryId = :categoryId") suspend fun deleteTemplateForCategory(portfolioId: Long, categoryId: Long): Int
+    @Query("SELECT * FROM portfolio_allocation_templates WHERE portfolioId = :portfolioId AND categoryId = :categoryId LIMIT 1") suspend fun templateForCategory(portfolioId: Long, categoryId: Long): PortfolioAllocationTemplateEntity?
 }

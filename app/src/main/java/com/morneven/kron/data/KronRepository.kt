@@ -1103,6 +1103,182 @@ class KronRepository private constructor(
         eventId
     }
 
+    // ponytail: CRUD kategori budget — reuse Category/Allocation/Template, no new table
+    suspend fun addBudgetCategoryToPeriod(
+        periodId: Long,
+        categoryName: String,
+        plannedAmount: Long,
+        cashPercentage: Int,
+        note: String,
+    ) = database.withTransaction {
+        val trimmedName = categoryName.trim()
+        require(trimmedName.isNotBlank()) { "Nama kategori wajib diisi" }
+        require(plannedAmount > 0) { "Nominal budget harus lebih dari nol" }
+        require(cashPercentage in 0..100) { "Persentase cash tidak valid" }
+        require(note.isNotBlank()) { "Alasan wajib diisi" }
+        val period = requireNotNull(dao.periodById(periodId)) { "Periode tidak ditemukan" }
+        val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == period.portfolioId }) { "Portfolio tidak ditemukan" }
+        val activeId = activeAccountId()
+        require(portfolio.accountId == activeId) { "Portfolio bukan milik akun aktif" }
+        require(!portfolio.isArchived) { "Portfolio sudah diarsip" }
+        require(period.status != PeriodStatus.CLOSED) { "Periode sudah tertutup" }
+        val cashAmount = plannedAmount * cashPercentage / 100
+        val eBudgetAmount = plannedAmount - cashAmount
+        require(cashAmount >= 0 && eBudgetAmount >= 0) { "Komposisi kanal tidak valid" }
+        require(cashAmount > 0 || eBudgetAmount > 0) { "Nominal budget tidak valid" }
+
+        val teamScopedAccountId = activeId.takeIf { dao.accountById(it)?.sharingMode == AccountSharingMode.TEAM }
+        val existingCategory = dao.categoriesForAccount(activeId).firstOrNull {
+            it.direction == TransactionDirection.EXPENSE && it.name.equals(trimmedName, ignoreCase = true)
+        }
+        val categoryId = existingCategory?.id ?: dao.insertCategory(
+            CategoryEntity(
+                name = trimmedName,
+                direction = TransactionDirection.EXPENSE,
+                color = 0xFF9E6BFF,
+                icon = "category",
+                accountId = teamScopedAccountId,
+            )
+        )
+        // check duplicate in this period
+        require(dao.allocationsForCategory(periodId, categoryId).isEmpty()) { "Kategori sudah ada di periode ini" }
+        if (cashAmount > 0) require(dao.vaultBalance(FundingChannel.CASH, activeId) >= cashAmount) { "Main Vault Cash tidak mencukupi" }
+        if (eBudgetAmount > 0) require(dao.vaultBalance(FundingChannel.EBUDGET, activeId) >= eBudgetAmount) { "Main Vault eBudget tidak mencukupi" }
+
+        val eventId = UUID.randomUUID().toString()
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.REALLOCATION, "Tambah kategori $trimmedName", note, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
+        val insertedIds = mutableListOf<Long>()
+        val budgetLines = mutableListOf<BudgetJournalLineEntity>()
+        if (cashAmount > 0) {
+            val id = dao.insertAllocation(AllocationEntity(periodId = periodId, categoryId = categoryId, fundingChannel = FundingChannel.CASH, plannedAmount = cashAmount))
+            insertedIds.add(id)
+            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = id, fundingChannel = FundingChannel.CASH, amount = cashAmount, accountId = activeId))
+            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.CASH, amount = -cashAmount, accountId = activeId))
+        }
+        if (eBudgetAmount > 0) {
+            val id = dao.insertAllocation(AllocationEntity(periodId = periodId, categoryId = categoryId, fundingChannel = FundingChannel.EBUDGET, plannedAmount = eBudgetAmount))
+            insertedIds.add(id)
+            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = id, fundingChannel = FundingChannel.EBUDGET, amount = eBudgetAmount, accountId = activeId))
+            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.EBUDGET, amount = -eBudgetAmount, accountId = activeId))
+        }
+        if (budgetLines.isNotEmpty()) dao.insertBudgetLines(budgetLines)
+        // template for future periods
+        if (dao.templateForCategory(portfolio.id, categoryId) == null) {
+            dao.insertAllocationTemplate(PortfolioAllocationTemplateEntity(portfolioId = portfolio.id, categoryId = categoryId, plannedAmount = plannedAmount, cashPercentage = cashPercentage))
+        }
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = note, beforeJson = "{\"periodId\":$periodId,\"categoryId\":$categoryId}", afterJson = "{\"periodId\":$periodId,\"categoryId\":$categoryId,\"planned\":$plannedAmount,\"cashPercentage\":$cashPercentage}"))
+        refreshPeriodStatus(periodId)
+        assertInvariant()
+        insertedIds
+    }
+
+    suspend fun renameBudgetCategory(categoryId: Long, newName: String) = database.withTransaction {
+        val trimmed = newName.trim()
+        require(trimmed.isNotBlank()) { "Nama kategori wajib diisi" }
+        val category = requireNotNull(dao.categoryById(categoryId)) { "Kategori tidak ditemukan" }
+        require(category.direction == TransactionDirection.EXPENSE) { "Hanya kategori budget (EXPENSE) yang dapat diubah" }
+        val activeId = activeAccountId()
+        if (category.accountId != null) require(category.accountId == activeId) { "Kategori bukan milik akun aktif" }
+        require(!category.isArchived) { "Kategori sudah diarsipkan" }
+        require(category.name != trimmed) { "Tidak ada perubahan nama" }
+        val duplicate = dao.categoriesForAccount(activeId).firstOrNull { it.direction == TransactionDirection.EXPENSE && it.name.equals(trimmed, ignoreCase = true) && it.id != categoryId }
+        require(duplicate == null) { "Nama kategori sudah dipakai" }
+        val updated = category.copy(name = trimmed, revision = category.revision + 1, updatedAt = System.currentTimeMillis())
+        dao.updateCategory(updated)
+        val eventId = UUID.randomUUID().toString()
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.SYSTEM, "Kategori diubah", "${category.name} → $trimmed", "USER", LocalDate.now().toEpochDay(), accountId = activeId))
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = "Rename kategori budget", beforeJson = "{\"categoryId\":$categoryId,\"name\":\"${category.name}\"}", afterJson = "{\"categoryId\":$categoryId,\"name\":\"$trimmed\"}"))
+        assertInvariant()
+        eventId
+    }
+
+    // ponytail: periode-isolasi rename — history (periode < current) tetap pakai kategori lama
+    suspend fun renameBudgetCategoryInPeriod(periodId: Long, categoryId: Long, newName: String) = database.withTransaction {
+        val trimmed = newName.trim()
+        require(trimmed.isNotBlank()) { "Nama kategori wajib diisi" }
+        val period = requireNotNull(dao.periodById(periodId)) { "Periode tidak ditemukan" }
+        val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == period.portfolioId }) { "Portfolio tidak ditemukan" }
+        val activeId = activeAccountId()
+        require(portfolio.accountId == activeId) { "Portfolio bukan milik akun aktif" }
+        require(!portfolio.isArchived) { "Portfolio sudah diarsip" }
+        require(period.status != PeriodStatus.CLOSED) { "Periode sudah tertutup" }
+        val oldCategory = requireNotNull(dao.categoryById(categoryId)) { "Kategori tidak ditemukan" }
+        require(oldCategory.direction == TransactionDirection.EXPENSE) { "Hanya kategori budget yang dapat diubah" }
+        if (oldCategory.accountId != null) require(oldCategory.accountId == activeId) { "Kategori bukan milik akun aktif" }
+        require(!oldCategory.isArchived) { "Kategori sudah diarsipkan" }
+        require(!oldCategory.name.equals(trimmed, ignoreCase = true)) { "Tidak ada perubahan nama" }
+        val duplicate = dao.categoriesForAccount(activeId).firstOrNull { it.direction == TransactionDirection.EXPENSE && it.name.equals(trimmed, ignoreCase = true) }
+        require(duplicate == null) { "Nama kategori sudah dipakai" }
+        // buat kategori baru — history tetap pakai kategori lama
+        val newCategoryId = dao.insertCategory(CategoryEntity(name = trimmed, direction = TransactionDirection.EXPENSE, color = oldCategory.color, icon = oldCategory.icon, accountId = oldCategory.accountId))
+        val allocs = dao.allocationsForCategory(periodId, categoryId)
+        require(allocs.isNotEmpty()) { "Kategori tidak ada di periode ini" }
+        allocs.forEach { alloc -> dao.updateAllocation(alloc.copy(categoryId = newCategoryId).bumpRevision()) }
+        // masa depan: pindahkan template ke kategori baru, history template lama tetap untuk audit tapi tidak dipakai lagi
+        val oldTemplate = dao.templateForCategory(portfolio.id, categoryId)
+        if (oldTemplate != null) {
+            dao.deleteTemplateForCategory(portfolio.id, categoryId)
+            dao.insertAllocationTemplate(PortfolioAllocationTemplateEntity(portfolioId = portfolio.id, categoryId = newCategoryId, plannedAmount = oldTemplate.plannedAmount, cashPercentage = oldTemplate.cashPercentage))
+            // periode future yang sudah terlanjur dibuat (>= current) ikut pindah ke kategori baru agar konsisten
+            val allPeriods = dao.periodsForPortfolio(portfolio.id)
+            for (p in allPeriods) {
+                if (p.startEpochDay >= period.startEpochDay && p.id != periodId) {
+                    dao.allocationsForCategory(p.id, categoryId).forEach { alloc -> dao.updateAllocation(alloc.copy(categoryId = newCategoryId).bumpRevision()) }
+                }
+            }
+        }
+        val eventId = UUID.randomUUID().toString()
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.SYSTEM, "Kategori diubah (periode)", "${oldCategory.name} → $trimmed • periode $periodId", "USER", LocalDate.now().toEpochDay(), accountId = activeId))
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = "Rename kategori isolasi periode", beforeJson = "{\"periodId\":$periodId,\"oldCategoryId\":$categoryId,\"name\":\"${oldCategory.name}\"}", afterJson = "{\"periodId\":$periodId,\"newCategoryId\":$newCategoryId,\"name\":\"$trimmed\"}"))
+        assertInvariant()
+        newCategoryId
+    }
+
+    suspend fun removeBudgetCategoryFromPeriod(periodId: Long, categoryId: Long, note: String) = database.withTransaction {
+        require(note.isNotBlank()) { "Alasan wajib diisi" }
+        val period = requireNotNull(dao.periodById(periodId)) { "Periode tidak ditemukan" }
+        val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == period.portfolioId }) { "Portfolio tidak ditemukan" }
+        val activeId = activeAccountId()
+        require(portfolio.accountId == activeId) { "Portfolio bukan milik akun aktif" }
+        require(!portfolio.isArchived) { "Portfolio sudah diarsip" }
+        require(period.status != PeriodStatus.CLOSED) { "Periode sudah tertutup" }
+        val allocations = dao.allocationsForCategory(periodId, categoryId)
+        require(allocations.isNotEmpty()) { "Kategori tidak ada di periode ini" }
+        // block if already spent (has splits) or overbudget
+        for (allocation in allocations) {
+            val available = dao.allocationAvailable(allocation.id)
+            require(available >= 0) { "Kategori minus tidak dapat dihapus. Selesaikan terlebih dahulu" }
+            val splits = dao.splitCountForAllocation(allocation.id)
+            require(splits == 0) { "Kategori sudah terpakai untuk transaksi. Nol-kan sisa via koreksi sebelum hapus" }
+        }
+        val eventId = UUID.randomUUID().toString()
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.REALLOCATION, "Hapus kategori", note, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
+        val budgetLines = mutableListOf<BudgetJournalLineEntity>()
+        for (allocation in allocations) {
+            val available = dao.allocationAvailable(allocation.id)
+            if (available > 0) {
+                budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = allocation.id, fundingChannel = allocation.fundingChannel, amount = -available, accountId = activeId))
+                budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = allocation.fundingChannel, amount = available, accountId = activeId))
+            }
+        }
+        if (budgetLines.isNotEmpty()) dao.insertBudgetLines(budgetLines)
+        // delete or zero allocations: keep row if has journal lines (FK), else physical delete
+        for (allocation in allocations) {
+            val lineCount = dao.budgetLineCountForAllocation(allocation.id)
+            if (lineCount == 0) {
+                dao.deleteAllocationById(allocation.id)
+            } else {
+                // ponytail: logical delete — keep row with planned 0 to preserve FK history, UI hides planned==0
+                dao.updateAllocation(allocation.copy(plannedAmount = 0).bumpRevision())
+            }
+        }
+        dao.deleteTemplateForCategory(portfolio.id, categoryId)
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = note, beforeJson = "{\"periodId\":$periodId,\"categoryId\":$categoryId,\"allocations\":${allocations.size}}", afterJson = "{\"periodId\":$periodId,\"categoryId\":$categoryId,\"deleted\":true}"))
+        refreshPeriodStatus(periodId)
+        assertInvariant()
+        eventId
+    }
+
     suspend fun transferBookedChannel(
         sourceAllocationId: Long,
         accountId: Long,

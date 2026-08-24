@@ -26,7 +26,10 @@ KRON adalah aplikasi pencatatan keuangan Android local-first untuk pemasukan, pe
 - Sinkronisasi Google Drive bersifat opsional. Snapshot dienkripsi sebelum disimpan pada `appDataFolder` akun yang dipilih.
 - KRON tidak memakai backend, Firebase, analytics, iklan, atau billing Google Cloud.
 
-Aturan kompatibilitas LTS terdapat pada [AGENTS.md](AGENTS.md). KRON 1.0.21 adalah baseline produksi yang harus selalu dapat ditingkatkan tanpa kehilangan data.
+Aturan kompatibilitas LTS terdapat pada [AGENTS.md](AGENTS.md). Perubahan pada
+integrasi Drive wajib mengikuti [Drive Sync Change Control](docs/DRIVE_SYNC_CHANGE_CONTROL.md).
+KRON 1.0.21 adalah baseline produksi yang harus selalu dapat ditingkatkan tanpa
+kehilangan data.
 
 ## Build
 

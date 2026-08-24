@@ -1094,6 +1094,22 @@ class MainViewModel @Inject constructor(
         repository.correctAllocation(allocationId, newPlannedAmount, note)
     }
 
+    fun addBudgetCategory(periodId: Long, categoryName: String, plannedAmount: Long, cashPercentage: Int, note: String) = runAction("Kategori budget ditambahkan") {
+        repository.addBudgetCategoryToPeriod(periodId, categoryName, plannedAmount, cashPercentage, note)
+    }
+
+    fun renameBudgetCategory(categoryId: Long, newName: String) = runAction("Nama kategori diperbarui") {
+        repository.renameBudgetCategory(categoryId, newName)
+    }
+
+    fun renameBudgetCategoryInPeriod(periodId: Long, categoryId: Long, newName: String) = runAction("Nama kategori diperbarui (periode)") {
+        repository.renameBudgetCategoryInPeriod(periodId, categoryId, newName)
+    }
+
+    fun removeBudgetCategory(periodId: Long, categoryId: Long, note: String) = runAction("Kategori budget dihapus") {
+        repository.removeBudgetCategoryFromPeriod(periodId, categoryId, note)
+    }
+
     fun allocateUnallocated(targetId: Long, amount: Long, note: String) = runAction("Pengeluaran berhasil dialokasikan") {
         repository.allocateUnallocated(targetId, amount, note)
     }

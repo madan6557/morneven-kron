@@ -539,13 +539,34 @@ fun PortfolioDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (String
 }
 
 @Composable
-fun BudgetDetailDialog(state: KronUiState, periodId: Long, readOnly: Boolean = false, onDismiss: () -> Unit, onCorrect: (Long, Long, String) -> Unit) {
+fun BudgetDetailDialog(
+    state: KronUiState,
+    periodId: Long,
+    readOnly: Boolean = false,
+    onDismiss: () -> Unit,
+    onCorrect: (Long, Long, String) -> Unit,
+    onAddCategory: ((String, Long, Int, String) -> Unit)? = null,
+    onRenameCategory: ((Long, String) -> Unit)? = null,
+    onDeleteCategory: ((Long, String) -> Unit)? = null,
+) {
     val rows = state.allocations.filter { it.periodId == periodId }
+    // ponytail: minimal CRUD — hide logical-deleted (planned==0 && available==0) is treated as deleted
+    val visibleRows = rows.filter { !(it.plannedAmount == 0L && it.availableAmount == 0L && it.spentAmount == 0L) }
     var correctionId by rememberSaveable { mutableStateOf<Long?>(null) }
     var correctedAmount by rememberSaveable { mutableStateOf("") }
     var reason by rememberSaveable { mutableStateOf("Koreksi nominal budget") }
     val selected = rows.firstOrNull { it.id == correctionId }
     val validCorrection = selected != null && money(correctedAmount) >= 0 && money(correctedAmount) != selected.plannedAmount && reason.isNotBlank()
+    var showAddCategory by rememberSaveable { mutableStateOf(false) }
+    var addName by rememberSaveable { mutableStateOf("") }
+    var addAmount by rememberSaveable { mutableStateOf("") }
+    var addCashPct by rememberSaveable { mutableIntStateOf(50) }
+    var addNote by rememberSaveable { mutableStateOf("Tambah kategori") }
+    val validAdd = addName.isNotBlank() && money(addAmount) > 0 && addNote.isNotBlank() && !visibleRows.any { it.categoryName.equals(addName.trim(), ignoreCase = true) }
+    var renameCategoryId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var renameValue by rememberSaveable { mutableStateOf("") }
+    var deleteCategoryId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var deleteNote by rememberSaveable { mutableStateOf("Hapus kategori") }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
@@ -575,7 +596,42 @@ fun BudgetDetailDialog(state: KronUiState, periodId: Long, readOnly: Boolean = f
                     else if (abs(value) >= 1_000_000) compactIdr(value)
                     else formatIdr(value)
                 }
-                rows.forEach { row ->
+                if (!readOnly && onAddCategory != null) {
+                    OutlinedButton(
+                        onClick = { showAddCategory = !showAddCategory; if (!showAddCategory) { addName = ""; addAmount = ""; addCashPct = 50; addNote = "Tambah kategori" } },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Outlined.Add, contentDescription = null)
+                        Text(if (showAddCategory) " Batal tambah kategori" else " Tambah kategori")
+                    }
+                    if (showAddCategory) {
+                        HudCard(accent = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.55f)) {
+                            Text("Kategori baru", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.tertiary)
+                            OutlinedTextField(addName, { addName = it }, label = { Text("Nama kategori") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                            if (visibleRows.any { it.categoryName.equals(addName.trim(), ignoreCase = true) }) Text("Nama sudah ada di periode ini", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                            MoneyField(addAmount, { addAmount = it }, "Nominal budget")
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Cash $addCashPct%", style = MaterialTheme.typography.labelSmall)
+                                Text("eBudget ${100 - addCashPct}%", style = MaterialTheme.typography.labelSmall)
+                            }
+                            Slider(value = addCashPct.toFloat(), onValueChange = { addCashPct = it.toInt() }, valueRange = 0f..100f, steps = 19)
+                            OutlinedTextField(addNote, { addNote = it }, label = { Text("Alasan") }, modifier = Modifier.fillMaxWidth())
+                            Text("Dana akan dibooking dari Main Vault. Pastikan saldo cukup.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Button(
+                                onClick = {
+                                    onAddCategory(addName.trim(), money(addAmount), addCashPct, addNote.trim())
+                                    showAddCategory = false; addName = ""; addAmount = ""; addCashPct = 50; addNote = "Tambah kategori"
+                                },
+                                enabled = validAdd,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("Simpan kategori") }
+                        }
+                    }
+                }
+                if (visibleRows.isEmpty() && !showAddCategory) {
+                    HudCard { Text("Belum ada kategori. Tambahkan kategori baru atau pulihkan.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
+                visibleRows.forEach { row ->
                     HudCard {
                         Column(Modifier.fillMaxWidth()) {
                             ChannelBadge(row.fundingChannel)
@@ -602,6 +658,12 @@ fun BudgetDetailDialog(state: KronUiState, periodId: Long, readOnly: Boolean = f
                                 )
                                 if (!readOnly) TextButton(onClick = { correctionId = row.id; correctedAmount = row.plannedAmount.toString() }) { Text("Koreksi") }
                             }
+                            if (!readOnly && (onRenameCategory != null || onDeleteCategory != null)) {
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    if (onRenameCategory != null) TextButton(onClick = { renameCategoryId = row.categoryId; renameValue = row.categoryName; deleteCategoryId = null }) { Text("Ganti nama") }
+                                    if (onDeleteCategory != null) TextButton(onClick = { deleteCategoryId = row.categoryId; deleteNote = "Hapus kategori ${row.categoryName}"; renameCategoryId = null }) { Text("Hapus", color = MaterialTheme.colorScheme.error) }
+                                }
+                            }
                         }
                         if (row.id == correctionId) {
                             Spacer(Modifier.height(10.dp))
@@ -611,6 +673,36 @@ fun BudgetDetailDialog(state: KronUiState, periodId: Long, readOnly: Boolean = f
                             MoneyField(correctedAmount, { correctedAmount = it }, "Nominal rencana baru")
                             OutlinedTextField(reason, { reason = it }, label = { Text("Alasan koreksi") }, modifier = Modifier.fillMaxWidth())
                             Text("Jurnal lama tetap tersimpan dan ditandai dikoreksi.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (!readOnly && renameCategoryId == row.categoryId && onRenameCategory != null) {
+                            Spacer(Modifier.height(10.dp))
+                            HorizontalDivider()
+                            Spacer(Modifier.height(10.dp))
+                            Text("Ganti nama ${row.categoryName}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.tertiary)
+                            OutlinedTextField(renameValue, { renameValue = it }, label = { Text("Nama baru") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                            Text("Nama baru hanya berlaku mulai periode ini dan selanjutnya. Riwayat sebelumnya tetap memakai nama lama.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                TextButton(onClick = { renameCategoryId = null; renameValue = "" }) { Text("Batal") }
+                                Button(
+                                    onClick = { onRenameCategory(row.categoryId, renameValue.trim()); renameCategoryId = null; renameValue = "" },
+                                    enabled = renameValue.trim().isNotBlank() && !renameValue.trim().equals(row.categoryName, ignoreCase = true),
+                                ) { Text("Simpan nama") }
+                            }
+                        }
+                        if (!readOnly && deleteCategoryId == row.categoryId && onDeleteCategory != null) {
+                            Spacer(Modifier.height(10.dp))
+                            HorizontalDivider()
+                            Spacer(Modifier.height(10.dp))
+                            Text("Hapus ${row.categoryName}?", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
+                            Text("Sisa akan dikembalikan ke Main Vault. Hanya kategori tanpa transaksi yang dapat dihapus.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            OutlinedTextField(deleteNote, { deleteNote = it }, label = { Text("Alasan hapus") }, modifier = Modifier.fillMaxWidth())
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                TextButton(onClick = { deleteCategoryId = null; deleteNote = "Hapus kategori" }) { Text("Batal") }
+                                Button(
+                                    onClick = { onDeleteCategory(row.categoryId, deleteNote.trim()); deleteCategoryId = null; deleteNote = "Hapus kategori" },
+                                    enabled = deleteNote.trim().isNotBlank(),
+                                ) { Text("Hapus kategori") }
+                            }
                         }
                     }
                 }
