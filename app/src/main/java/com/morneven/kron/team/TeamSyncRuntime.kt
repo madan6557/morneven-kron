@@ -95,7 +95,7 @@ object TeamSyncScheduler {
     fun scheduleAfterChange(context: Context) {
         val request = OneTimeWorkRequestBuilder<TeamSyncWorker>()
             .setConstraints(constraints(requireBatteryNotLow = true))
-            .setInitialDelay(7, TimeUnit.SECONDS)
+            .setInitialDelay(15, TimeUnit.SECONDS)
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
             TeamSyncWorker.UNIQUE_DEBOUNCED_WORK,

@@ -1374,27 +1374,8 @@ abstract class KronDatabase : RoomDatabase() {
                     db.execSQL("DROP TRIGGER IF EXISTS sync_write_guard_${table}_$operation")
                 }
             }
-            guardedTables.filter { db.hasTable(it) }.forEach { table ->
-                listOf("INSERT", "UPDATE", "DELETE").forEach { operation ->
-                    val suffix = operation.lowercase()
-                    val updateColumns = if (table == "accounts" && operation == "UPDATE") {
-                        " OF name,isArchived,archivedAt,sharingMode,teamId,revision,updatedAt,lastWriterId"
-                    } else {
-                        ""
-                    }
-                    db.execSQL("""
-                        CREATE TRIGGER sync_write_guard_${table}_$suffix
-                        BEFORE $operation$updateColumns ON $table
-                        WHEN EXISTS(
-                            SELECT 1 FROM sync_state
-                            WHERE id = 1 AND status IN ('SYNCING','RESTART_REQUIRED','DOWNLOADING')
-                        )
-                        BEGIN
-                            SELECT RAISE(ABORT, 'KRON sedang menyinkronkan atau menunggu restart');
-                        END
-                    """.trimIndent())
-                }
-            }
+            // ponytail: sync_write_guard removed — transactions await SnapshotOperationLock instead of ABORT; re-add guard only if invariant proves race without DB trigger
+            // previously guardedTables were blocked during SYNCING/DOWNLOADING/RESTART_REQUIRED; now sync and writes serialize via shared Mutex
         }
 
         private fun createTeamGenerationTriggers(db: SupportSQLiteDatabase) {
