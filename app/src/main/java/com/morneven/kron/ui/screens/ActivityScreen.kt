@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.morneven.kron.data.ActivityRow
 import com.morneven.kron.ui.KronUiState
+import com.morneven.kron.ui.components.ChannelBadge
 import com.morneven.kron.ui.components.EmptyState
 import com.morneven.kron.ui.components.HudCard
 import com.morneven.kron.ui.components.displayMoney
@@ -153,7 +154,7 @@ fun ActivityScreen(state: KronUiState, onEvent: (String) -> Unit, modifier: Modi
                     color = MaterialTheme.colorScheme.tertiary,
                     modifier = Modifier.padding(top = 6.dp),
                 )
-                is ActivityTimelineItem.Event -> ActivityCard(item.value, state.valuesVisible, onEvent, readOnly)
+                is ActivityTimelineItem.Event -> ActivityCard(item.value, state.valuesVisible, state.eventChannels[item.value.id].orEmpty(), onEvent, readOnly)
             }
         }
         item { Spacer(Modifier.height(80.dp)) }
@@ -185,7 +186,7 @@ private fun ActivitySearchField(query: String, onQuery: (String) -> Unit, focusM
 }
 
 @Composable
-private fun ActivityCard(event: ActivityRow, valuesVisible: Boolean, onEvent: (String) -> Unit, readOnly: Boolean = false) {
+private fun ActivityCard(event: ActivityRow, valuesVisible: Boolean, channels: Set<String>, onEvent: (String) -> Unit, readOnly: Boolean = false) {
     val impact = event.primaryImpact()
     val money = displayMoney(impact, valuesVisible)
     val reversed = event.reversedByEventId != null
@@ -219,6 +220,11 @@ private fun ActivityCard(event: ActivityRow, valuesVisible: Boolean, onEvent: (S
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.tertiary,
             )
+            if (channels.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    channels.sorted().forEach { ChannelBadge(it) }
+                }
+            }
             val date = LocalDate.ofEpochDay(event.effectiveEpochDay).format(fullDateFormat)
             val time = java.time.Instant.ofEpochMilli(event.createdAt)
                 .atZone(java.time.ZoneId.systemDefault())

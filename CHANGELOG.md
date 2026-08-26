@@ -1,5 +1,9 @@
 # KRON Changelog
 
+## 1.7.4 - 2026-08-26
+
+- Tampilkan sumber dana `Cash` atau `eBudget` pada daftar dan detail transaksi, termasuk transaksi split.
+
 ## 1.7.3 - 2026-08-26
 
 - Bump versionCode 94 → 95 dan versionName 1.7.2 → 1.7.3 untuk build debug dan release.

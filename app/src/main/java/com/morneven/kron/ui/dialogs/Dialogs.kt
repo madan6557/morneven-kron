@@ -1026,6 +1026,12 @@ fun AuditDialog(
             Text(eventTypeLabel(event.type), color = MaterialTheme.colorScheme.tertiary)
             Text(event.auditStatus, color = if (event.auditStatus == "Integrity problem") MaterialTheme.colorScheme.error else KronGreen)
         }
+        val eventChannels = state.eventChannels[event.id].orEmpty()
+        if (eventChannels.isNotEmpty()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                eventChannels.sorted().forEach { ChannelBadge(it) }
+            }
+        }
         val createdAtTime = java.time.Instant.ofEpochMilli(event.createdAt)
             .atZone(java.time.ZoneId.systemDefault())
             .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss", java.util.Locale.forLanguageTag("id-ID")))
