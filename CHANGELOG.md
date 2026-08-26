@@ -1,5 +1,9 @@
 # KRON Changelog
 
+## 1.7.3 - 2026-08-26
+
+- Bump versionCode 94 → 95 dan versionName 1.7.2 → 1.7.3 untuk build debug dan release.
+
 ## 1.7.2 - 2026-08-22
 
 - Isolate budget CRUD per periode: tambah/hapus/koreksi dana hanya di `periodId` aktif, template untuk future, riwayat `CLOSED` tidak tersentuh. Rename kategori isolasi per-periode via kategori baru (`KronRepository:1220`), riwayat lama tetap nama lama. Build `versionCode 94` untuk install-over `1.7.1` produksi.
