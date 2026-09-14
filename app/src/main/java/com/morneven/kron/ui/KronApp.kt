@@ -22,6 +22,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -51,15 +52,20 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
+import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.outlined.Assessment
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Fingerprint
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -178,15 +184,20 @@ import kotlinx.coroutines.launch
 
 private enum class ActionDialog { INCOME, EXPENSE, TRANSFER, PORTFOLIO, RESOLVE, CHANNEL_TRANSFER, ACCOUNT }
 
-private data class Destination(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector)
+private data class Destination(
+    val route: String,
+    val label: String,
+    val activeIcon: androidx.compose.ui.graphics.vector.ImageVector,
+    val inactiveIcon: androidx.compose.ui.graphics.vector.ImageVector,
+)
 private data class CriticalAction(val title: String, val summary: String, val onConfirm: (String) -> Unit)
 
 private val destinations = listOf(
-    Destination("home", "Beranda", Icons.Outlined.Home),
-    Destination("budget", "Budget", Icons.Outlined.AccountBalanceWallet),
-    Destination("activity", "Transaksi", Icons.AutoMirrored.Outlined.ReceiptLong),
-    Destination("reports", "Laporan", Icons.Outlined.Assessment),
-    Destination("settings", "Pengaturan", Icons.Outlined.Settings),
+    Destination("home", "Beranda", Icons.Filled.Home, Icons.Outlined.Home),
+    Destination("budget", "Budget", Icons.Filled.AccountBalanceWallet, Icons.Outlined.AccountBalanceWallet),
+    Destination("activity", "Transaksi", Icons.AutoMirrored.Filled.ReceiptLong, Icons.AutoMirrored.Outlined.ReceiptLong),
+    Destination("reports", "Laporan", Icons.Filled.Assessment, Icons.Outlined.Assessment),
+    Destination("settings", "Pengaturan", Icons.Filled.Settings, Icons.Outlined.Settings),
 )
 
 private fun routePosition(route: String?): Int = destinations.indexOfFirst { it.route == route }.takeIf { it >= 0 } ?: 0
@@ -1035,39 +1046,70 @@ private fun MainScaffold(
         Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
-            NavigationBar {
-                BoxWithConstraints(Modifier.fillMaxWidth()) {
-                    val cellWidth = maxWidth / destinations.size
-                    val selectedIndex = routePosition(current).coerceAtLeast(0)
-                    val pillWidth = 64.dp
-                    val pillOffset by animateDpAsState(
-                        targetValue = cellWidth * selectedIndex + (cellWidth - pillWidth) / 2,
-                        animationSpec = tween(220, easing = FastOutSlowInEasing),
-                        label = "navigation-indicator",
-                    )
-                    Box(
-                        Modifier
-                            .offset(x = pillOffset, y = 8.dp)
-                            .size(pillWidth, 32.dp)
-                            .background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(24.dp)),
-                    )
-                    Row(Modifier.fillMaxWidth()) {
-                        destinations.forEach { destination ->
-                            NavigationBarItem(
-                                selected = current == destination.route,
-                                onClick = {
-                                    if (current != destination.route) {
-                                        navController.navigate(destination.route) {
-                                            popUpTo("home")
-                                            launchSingleTop = true
+            Column {
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f),
+                    thickness = 0.8.dp,
+                )
+                NavigationBar(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 0.dp,
+                ) {
+                    BoxWithConstraints(Modifier.fillMaxWidth()) {
+                        val cellWidth = maxWidth / destinations.size
+                        val selectedIndex = routePosition(current).coerceAtLeast(0)
+                        val pillWidth = 48.dp
+                        val pillOffset by animateDpAsState(
+                            targetValue = cellWidth * selectedIndex + (cellWidth - pillWidth) / 2,
+                            animationSpec = tween(220, easing = FastOutSlowInEasing),
+                            label = "navigation-indicator",
+                        )
+                        Box(
+                            Modifier
+                                .offset(x = pillOffset, y = 8.dp)
+                                .size(pillWidth, 30.dp)
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f), RoundedCornerShape(10.dp))
+                                .border(0.8.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f), RoundedCornerShape(10.dp)),
+                        )
+                        Row(Modifier.fillMaxWidth()) {
+                            destinations.forEach { destination ->
+                                val selected = current == destination.route
+                                NavigationBarItem(
+                                    selected = selected,
+                                    onClick = {
+                                        if (current != destination.route) {
+                                            navController.navigate(destination.route) {
+                                                popUpTo("home")
+                                                launchSingleTop = true
+                                            }
                                         }
-                                    }
-                                },
-                                icon = { Icon(destination.icon, contentDescription = destination.label) },
-                                label = { Text(destination.label) },
-                                colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent),
-                                modifier = Modifier.weight(1f),
-                            )
+                                    },
+                                    icon = {
+                                        Icon(
+                                            if (selected) destination.activeIcon else destination.inactiveIcon,
+                                            contentDescription = destination.label,
+                                            modifier = Modifier.size(22.dp),
+                                        )
+                                    },
+                                    label = {
+                                        Text(
+                                            destination.label,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                        )
+                                    },
+                                    colors = NavigationBarItemDefaults.colors(
+                                        selectedIconColor = MaterialTheme.colorScheme.primary,
+                                        selectedTextColor = MaterialTheme.colorScheme.primary,
+                                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.60f),
+                                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.60f),
+                                        indicatorColor = Color.Transparent,
+                                    ),
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
                         }
                     }
                 }
