@@ -130,39 +130,44 @@ fun HomeScreen(
                     Text("SALDO AKUN AKTIF", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
                     Text(state.activeAccount?.name ?: "", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(8.dp))
                 Text(
                     displayPrimaryHomeMoney(state.totalAssets, visible),
                     modifier = Modifier.clickable(enabled = visible && shouldCompactPrimaryHomeMoney(state.totalAssets)) { exactMoney = "Total aset nyata" to state.totalAssets },
                     style = MaterialTheme.typography.displaySmall,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
+                    softWrap = false,
                 )
-                Spacer(Modifier.height(12.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Spacer(Modifier.height(14.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     Metric("Cash", displaySecondaryHomeMoney(cashAssets, visible), Modifier.weight(1f).clickable(enabled = visible && shouldCompactSecondaryHomeMoney(cashAssets)) { exactMoney = "Total Cash" to cashAssets }, KronGold)
                     Metric("eBudget", displaySecondaryHomeMoney(eBudgetAssets, visible), Modifier.weight(1f).clickable(enabled = visible && shouldCompactSecondaryHomeMoney(eBudgetAssets)) { exactMoney = "Total eBudget" to eBudgetAssets }, KronBlue)
                 }
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(12.dp))
                 androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
                 Spacer(Modifier.height(10.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("Main Vault Cash", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Vault", style = MaterialTheme.typography.labelMedium)
                         ChannelBadge(FundingChannel.CASH)
-                        Text(displaySecondaryHomeMoney(state.vaultCash, visible), modifier = Modifier.clickable(enabled = visible && shouldCompactSecondaryHomeMoney(state.vaultCash)) { exactMoney = "Main Vault Cash" to state.vaultCash }, style = MaterialTheme.typography.bodySmall)
+                        Text(displaySecondaryHomeMoney(state.vaultCash, visible), modifier = Modifier.clickable(enabled = visible && shouldCompactSecondaryHomeMoney(state.vaultCash)) { exactMoney = "Main Vault Cash" to state.vaultCash }, style = MaterialTheme.typography.labelLarge, maxLines = 1, softWrap = false)
                     }
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("Main Vault eBudget", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                         ChannelBadge(FundingChannel.EBUDGET)
-                        Text(displaySecondaryHomeMoney(state.vaultEBudget, visible), modifier = Modifier.clickable(enabled = visible && shouldCompactSecondaryHomeMoney(state.vaultEBudget)) { exactMoney = "Main Vault eBudget" to state.vaultEBudget }, style = MaterialTheme.typography.bodySmall)
+                        Text(displaySecondaryHomeMoney(state.vaultEBudget, visible), modifier = Modifier.clickable(enabled = visible && shouldCompactSecondaryHomeMoney(state.vaultEBudget)) { exactMoney = "Main Vault eBudget" to state.vaultEBudget }, style = MaterialTheme.typography.labelLarge, maxLines = 1, softWrap = false)
                     }
                 }
                 val rollover = state.rolloverCash + state.rolloverEBudget
                 if (rollover > 0 || !visible) {
                     Spacer(Modifier.height(6.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text("Reserve rollover", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
-                        Text(displaySecondaryHomeMoney(rollover, visible), modifier = Modifier.clickable(enabled = visible && shouldCompactSecondaryHomeMoney(rollover)) { exactMoney = "Reserve rollover" to rollover }, style = MaterialTheme.typography.bodySmall)
+                        Text("Reserve rollover", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                        Text(displaySecondaryHomeMoney(rollover, visible), modifier = Modifier.clickable(enabled = visible && shouldCompactSecondaryHomeMoney(rollover)) { exactMoney = "Reserve rollover" to rollover }, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.tertiary, maxLines = 1, softWrap = false)
                     }
                 }
             }
@@ -250,14 +255,20 @@ fun HomeScreen(
         }
 
         item {
-            Column {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 SectionHeader("Cash flow bulan ini")
                 HudCard {
                     val net = state.cashflow.income - state.cashflow.expense
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         Metric("Masuk", displayMoney(state.cashflow.income, visible), Modifier.weight(1f), KronGreen)
                         Metric("Keluar", displayMoney(state.cashflow.expense, visible), Modifier.weight(1f), MaterialTheme.colorScheme.error)
-                        Metric("Net", displayMoney(net, visible), Modifier.weight(1f), signedColor(net))
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("NET CASH FLOW", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+                        Text(displayMoney(net, visible), style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, color = signedColor(net), maxLines = 1, softWrap = false)
                     }
                 }
             }

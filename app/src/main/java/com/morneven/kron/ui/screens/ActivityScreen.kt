@@ -200,46 +200,66 @@ private fun ActivityCard(event: ActivityRow, valuesVisible: Boolean, channels: S
             .then(if (readOnly) Modifier else Modifier.clickable { onEvent(event.id) })
             .semantics(mergeDescendants = true) { role = Role.Button },
     ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f).padding(end = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Row 1: Title on left (weight 1), Money on right (single-line, non-wrapping)
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
                 Text(
                     event.title,
                     style = MaterialTheme.typography.titleMedium.copy(textDecoration = if (reversed) TextDecoration.LineThrough else null),
-                    maxLines = 1,
+                    modifier = Modifier.weight(1f).padding(end = 10.dp),
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                Text(
+                    money,
+                    color = signedColor(impact),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+
+            // Row 2 (if note exists): Dedicated note line
+            if (event.note.isNotBlank()) {
+                Text(
+                    event.note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            // Row 3: Metadata - Badges/Type and Status on left, Date & Time on right
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f, fill = false).padding(end = 8.dp),
                 ) {
                     if (channels.isNotEmpty()) {
                         channels.sorted().forEach { ChannelBadge(it) }
                     } else {
                         Text(eventTypeLabel(event.type), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
                     }
-                    Text(
-                        "$date, $time",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    ActivityStatus(event)
                 }
-                if (event.note.isNotBlank()) {
-                    Text(event.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(
-                    money,
-                    color = signedColor(impact),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    "$date, $time",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
+                    softWrap = false,
                 )
-                ActivityStatus(event)
             }
         }
     }

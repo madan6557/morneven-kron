@@ -236,12 +236,13 @@ private fun ActiveBudgetCard(
     val booked = rows.sumOf { it.bookedAmount }
     val hasDeficit = rows.any { it.availableAmount < 0 }
     HudCard(accent = if (hasDeficit) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Column(Modifier.weight(1f)) {
-                Text(first.portfolioName, style = MaterialTheme.typography.titleLarge)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+            Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                Text(first.portfolioName, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                Spacer(Modifier.height(2.dp))
                 Text("${if (paused) "JEDA" else first.periodStatus.replace('_', ' ')} · ${LocalDate.ofEpochDay(first.startEpochDay).format(indonesianDate)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Text(displayMoney(available, visible), color = signedColor(available), style = MaterialTheme.typography.titleMedium)
+            Text(displayMoney(available, visible), color = signedColor(available), style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, maxLines = 1, softWrap = false)
         }
         Spacer(Modifier.height(12.dp))
         BudgetProgress(booked, available)
@@ -249,13 +250,13 @@ private fun ActiveBudgetCard(
         val visibleRows = rows.filter { it.isActive }
         visibleRows.forEach { row ->
             Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                     ChannelBadge(row.fundingChannel)
                     Text(row.categoryName, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 }
                 Column(horizontalAlignment = Alignment.End) {
-                    Text(displayMoney(row.availableAmount, visible), color = signedColor(row.availableAmount), style = MaterialTheme.typography.titleSmall)
-                    Text("booking ${displayMoney(row.bookedAmount, visible)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(displayMoney(row.availableAmount, visible), color = signedColor(row.availableAmount), style = MaterialTheme.typography.titleSmall, maxLines = 1, softWrap = false)
+                    Text("booking ${displayMoney(row.bookedAmount, visible)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, softWrap = false)
                 }
             }
         }
