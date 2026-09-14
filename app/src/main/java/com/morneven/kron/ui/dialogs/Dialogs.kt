@@ -21,6 +21,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.AddAPhoto
 import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -99,11 +102,19 @@ import com.morneven.kron.ui.components.formatIdr
 import com.morneven.kron.ui.components.MoneyField
 import com.morneven.kron.ui.components.parseMoneyInput
 import com.morneven.kron.ui.components.signedColor
+import androidx.compose.ui.text.font.FontWeight
+import com.morneven.kron.ui.theme.KronButtonShape
+import com.morneven.kron.ui.theme.KronFieldShape
+import com.morneven.kron.ui.theme.KronChipShape
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import kotlin.math.abs
 import kotlinx.coroutines.delay
+
+private val dialogDateFormat = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.forLanguageTag("id-ID"))
 
 private val dateStateSaver = Saver<MutableState<LocalDate>, Long>(
     save = { it.value.toEpochDay() },
@@ -1392,8 +1403,9 @@ internal fun FormDialog(title: String, onDismiss: () -> Unit, confirmText: Strin
                 Button(
                     onClick = onConfirm,
                     enabled = confirmEnabled,
+                    shape = KronButtonShape,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp).height(48.dp),
-                ) { Text(confirmText) }
+                ) { Text(confirmText, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
             }
         }
     }
@@ -1405,7 +1417,7 @@ private fun RecurrencePicker(value: String?, onValue: (String?) -> Unit) {
         Text("Pengulangan", style = MaterialTheme.typography.labelLarge)
         Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             listOf(null to "Sekali", "MONTHLY" to "Bulanan", "YEARLY" to "Tahunan").forEach { (key, label) ->
-                FilterChip(selected = value == key, onClick = { onValue(key) }, label = { Text(label) })
+                FilterChip(selected = value == key, onClick = { onValue(key) }, label = { Text(label) }, shape = KronChipShape)
             }
         }
     }
@@ -1448,9 +1460,26 @@ private fun ScheduleFields(
 @Composable
 private fun DateField(label: String, date: LocalDate?, onDate: (LocalDate?) -> Unit, allowClear: Boolean = false) {
     var open by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedButton(onClick = { open = true }, modifier = Modifier.weight(1f)) {
-            Text("$label: ${date ?: "Pilih tanggal"}")
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(
+            onClick = { open = true },
+            modifier = Modifier.weight(1f).height(54.dp),
+            shape = KronFieldShape,
+            border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f, fill = false), verticalArrangement = Arrangement.Center) {
+                    Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        date?.let { dialogDateFormat.format(it) } ?: "Pilih tanggal",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (date != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+                Icon(Icons.Outlined.CalendarMonth, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         if (allowClear && date != null) TextButton(onClick = { onDate(null) }) { Text("Hapus") }
     }
@@ -1474,9 +1503,28 @@ private fun DateField(label: String, date: LocalDate?, onDate: (LocalDate?) -> U
 @Composable
 private fun <T, K> ChoiceField(label: String, selected: K?, values: List<T>, key: (T) -> K, text: (T) -> String, onSelect: (K) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
+    val selectedItem = values.firstOrNull { key(it) == selected }
     Column {
-        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
-            Text(values.firstOrNull { key(it) == selected }?.let(text) ?: label, modifier = Modifier.weight(1f))
+        OutlinedButton(
+            onClick = { expanded = true },
+            modifier = Modifier.fillMaxWidth().height(54.dp),
+            shape = KronFieldShape,
+            border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f, fill = false), verticalArrangement = Arrangement.Center) {
+                    Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        selectedItem?.let(text) ?: "Pilih $label",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (selectedItem != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Icon(Icons.Outlined.ExpandMore, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             values.forEach { value -> DropdownMenuItem(text = { Text(text(value)) }, onClick = { onSelect(key(value)); expanded = false }) }
@@ -1487,9 +1535,28 @@ private fun <T, K> ChoiceField(label: String, selected: K?, values: List<T>, key
 @Composable
 private fun <T, K> ChoiceFieldNullable(label: String, selected: K?, values: List<T>, key: (T) -> K, text: (T) -> String, nullText: String, onSelect: (K?) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
+    val selectedItem = values.firstOrNull { key(it) == selected }
     Column {
-        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
-            Text(values.firstOrNull { key(it) == selected }?.let(text) ?: nullText, modifier = Modifier.weight(1f))
+        OutlinedButton(
+            onClick = { expanded = true },
+            modifier = Modifier.fillMaxWidth().height(54.dp),
+            shape = KronFieldShape,
+            border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f, fill = false), verticalArrangement = Arrangement.Center) {
+                    Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        selectedItem?.let(text) ?: nullText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (selectedItem != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Icon(Icons.Outlined.ExpandMore, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(text = { Text(nullText) }, onClick = { onSelect(null); expanded = false })
@@ -1504,7 +1571,7 @@ private fun channelLabel(channel: String): String = if (channel == FundingChanne
 @Composable
 private fun ChannelSelector(selected: String, onSelect: (String) -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(selected = selected == FundingChannel.CASH, onClick = { onSelect(FundingChannel.CASH) }, label = { Text("Cash") })
-        FilterChip(selected = selected == FundingChannel.EBUDGET, onClick = { onSelect(FundingChannel.EBUDGET) }, label = { Text("eBudget") })
+        FilterChip(selected = selected == FundingChannel.CASH, onClick = { onSelect(FundingChannel.CASH) }, label = { Text("Cash") }, shape = KronChipShape)
+        FilterChip(selected = selected == FundingChannel.EBUDGET, onClick = { onSelect(FundingChannel.EBUDGET) }, label = { Text("eBudget") }, shape = KronChipShape)
     }
 }

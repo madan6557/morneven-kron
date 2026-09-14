@@ -236,7 +236,7 @@ fun ReportsScreen(
                     Text("Ringkasan yang direkonstruksi dari jurnal", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("Akun aktif: ${state.activeAccount?.name ?: "Belum ada"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
                 }
-                Button(onClick = onExport, enabled = !readOnly) {
+                Button(onClick = onExport, enabled = !readOnly, shape = com.morneven.kron.ui.theme.KronButtonShape) {
                     Icon(Icons.Outlined.FileDownload, contentDescription = null)
                     Text(if (readOnly) "Viewer" else "CSV")
                 }

@@ -10,6 +10,7 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.morneven.kron.R
 
@@ -78,6 +79,19 @@ private val KronTypography = androidx.compose.material3.Typography(
     labelSmall = TextStyle(fontFamily = Rajdhani, fontWeight = FontWeight.Medium, fontSize = 11.sp, letterSpacing = 0.5.sp),
 )
 
+val KronButtonShape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp)
+val KronFieldShape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp)
+val KronCardShape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp)
+val KronChipShape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+
+val KronShapes = androidx.compose.material3.Shapes(
+    extraSmall = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+    small = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+    medium = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+    large = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+    extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
+)
+
 @Composable
 fun KronTheme(theme: String, content: @Composable () -> Unit) {
     val dark = when (theme) {
@@ -88,6 +102,7 @@ fun KronTheme(theme: String, content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = if (dark) DarkColors else LightColors,
         typography = KronTypography,
+        shapes = KronShapes,
         content = content,
     )
 }

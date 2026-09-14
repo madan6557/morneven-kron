@@ -81,6 +81,14 @@ private fun offsetForDigitCount(value: String, digits: Int): Int {
     return value.length
 }
 
+@Composable
+fun kronTextFieldColors() = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+    focusedBorderColor = MaterialTheme.colorScheme.primary,
+    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.28f),
+    focusedLabelColor = MaterialTheme.colorScheme.primary,
+    unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+)
+
 /** Keeps the raw Rupiah digits in state while presenting grouped Indonesian digits. */
 @Composable
 fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
@@ -103,9 +111,11 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
             onValue(raw)
         },
         label = { Text(label) },
-        prefix = { Text("Rp ") },
+        prefix = { Text("Rp ", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) },
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,
+        shape = com.morneven.kron.ui.theme.KronFieldShape,
+        colors = kronTextFieldColors(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         isError = touched && parseMoneyInput(value) <= 0,
         supportingText = if (touched && parseMoneyInput(value) <= 0) {

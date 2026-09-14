@@ -46,6 +46,8 @@ import com.morneven.kron.ui.components.HudCard
 import com.morneven.kron.ui.components.SectionHeader
 import com.morneven.kron.ui.components.displayMoney
 import com.morneven.kron.ui.components.signedColor
+import com.morneven.kron.ui.theme.KronButtonShape
+import com.morneven.kron.ui.theme.KronChipShape
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -107,8 +109,8 @@ fun BudgetScreen(
         }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = !showArchive, onClick = { showArchive = false }, label = { Text("Aktif") })
-                FilterChip(selected = showArchive, onClick = { showArchive = true }, label = { Text("Arsip (${state.archivedPortfolios.size})") })
+                FilterChip(selected = !showArchive, onClick = { showArchive = false }, label = { Text("Aktif") }, shape = KronChipShape)
+                FilterChip(selected = showArchive, onClick = { showArchive = true }, label = { Text("Arsip (${state.archivedPortfolios.size})") }, shape = KronChipShape)
             }
         }
 
@@ -197,11 +199,11 @@ fun BudgetScreen(
                     }
                     if (!readOnly) {
                         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { onRestore(portfolio.id, false) }, modifier = Modifier.fillMaxWidth()) {
+                            OutlinedButton(onClick = { onRestore(portfolio.id, false) }, modifier = Modifier.fillMaxWidth(), shape = KronButtonShape) {
                                 Icon(Icons.Outlined.Restore, contentDescription = null)
                                 Text("Pulihkan")
                             }
-                            Button(onClick = { onRestore(portfolio.id, true) }, modifier = Modifier.fillMaxWidth()) {
+                            Button(onClick = { onRestore(portfolio.id, true) }, modifier = Modifier.fillMaxWidth(), shape = KronButtonShape) {
                                 Icon(Icons.Outlined.PlayCircle, contentDescription = null)
                                 Text("Pulihkan & Aktifkan")
                             }
@@ -261,27 +263,27 @@ private fun ActiveBudgetCard(
             }
         }
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onDetail, modifier = Modifier.weight(1f)) { Text("Detail budget") }
-            OutlinedButton(onClick = onHistory, modifier = Modifier.weight(1f)) { Text("Riwayat") }
+            Button(onClick = onDetail, modifier = Modifier.weight(1f), shape = KronButtonShape) { Text("Detail budget") }
+            OutlinedButton(onClick = onHistory, modifier = Modifier.weight(1f), shape = KronButtonShape) { Text("Riwayat") }
         }
         if (!readOnly) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = if (paused) onResume else onPause, modifier = Modifier.weight(1f)) {
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = if (paused) onResume else onPause, modifier = Modifier.weight(1f), shape = KronButtonShape) {
                     Icon(if (paused) Icons.Outlined.PlayCircle else Icons.Outlined.PauseCircle, contentDescription = null)
                     Text(if (paused) "Lanjutkan" else "Jeda")
                 }
-                OutlinedButton(onClick = onArchive, enabled = !hasPortfolioDeficit, modifier = Modifier.weight(1f)) {
+                OutlinedButton(onClick = onArchive, enabled = !hasPortfolioDeficit, modifier = Modifier.weight(1f), shape = KronButtonShape) {
                     Icon(Icons.Outlined.Archive, contentDescription = null)
                     Text("Arsipkan")
                 }
             }
             if (hasPortfolioDeficit) {
-                Button(onClick = onResolve, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
+                Button(onClick = onResolve, modifier = Modifier.fillMaxWidth().padding(top = 10.dp), shape = KronButtonShape) {
                     Icon(Icons.Outlined.ErrorOutline, contentDescription = null)
                     Text("Selesaikan budget minus")
                 }
             } else if (first.periodStatus == PeriodStatus.UNDERFUNDED || first.periodStatus == PeriodStatus.DRAFT) {
-                Button(onClick = onFund, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) { Text("Booking dari Main Vault") }
+                Button(onClick = onFund, modifier = Modifier.fillMaxWidth().padding(top = 10.dp), shape = KronButtonShape) { Text("Booking dari Main Vault") }
             }
             Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Rollover sisa ke periode berikutnya", style = MaterialTheme.typography.bodyMedium)

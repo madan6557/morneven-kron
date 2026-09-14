@@ -18,6 +18,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Payments
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -59,6 +61,8 @@ import com.morneven.kron.ui.components.displayMoney
 import com.morneven.kron.ui.components.parseMoneyInput
 import com.morneven.kron.ui.dialogs.FormDialog
 import com.morneven.kron.ui.theme.KronGreen
+import com.morneven.kron.ui.theme.KronButtonShape
+import com.morneven.kron.ui.theme.KronFieldShape
 import java.math.RoundingMode
 import java.time.Instant
 import java.time.LocalDate
@@ -110,11 +114,11 @@ fun DebtScreen(
         if (!readOnly) {
             item {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(onClick = { createRole = DebtRole.DEBTOR }, modifier = Modifier.weight(1f).height(52.dp)) {
+                    Button(onClick = { createRole = DebtRole.DEBTOR }, modifier = Modifier.weight(1f).height(48.dp), shape = KronButtonShape) {
                         Icon(Icons.Outlined.ArrowDownward, contentDescription = null)
                         Text(" Saya berhutang")
                     }
-                    OutlinedButton(onClick = { createRole = DebtRole.CREDITOR }, modifier = Modifier.weight(1f).height(52.dp)) {
+                    OutlinedButton(onClick = { createRole = DebtRole.CREDITOR }, modifier = Modifier.weight(1f).height(48.dp), shape = KronButtonShape) {
                         Icon(Icons.Outlined.ArrowUpward, contentDescription = null)
                         Text(" Saya dihutangi")
                     }
@@ -261,13 +265,14 @@ private fun DebtCard(
         if (!readOnly && debt.status != DebtStatus.ARCHIVED) {
             Row(modifier = Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (debt.status == DebtStatus.OPEN) {
-                    Button(onClick = onPayment, modifier = Modifier.weight(1f).height(48.dp)) {
+                    Button(onClick = onPayment, modifier = Modifier.weight(1f).height(48.dp), shape = KronButtonShape) {
                         Icon(Icons.Outlined.Payments, contentDescription = null)
                         Text(if (debt.role == DebtRole.DEBTOR) " Bayar" else " Terima")
                     }
                 }
                 OutlinedButton(
                     onClick = onArchive,
+                    shape = KronButtonShape,
                     modifier = if (debt.status == DebtStatus.OPEN) Modifier.height(48.dp) else Modifier.fillMaxWidth().height(48.dp),
                 ) { Text("Arsip") }
             }
@@ -466,8 +471,27 @@ private fun DebtArchiveDialog(debt: DebtEntity, onDismiss: () -> Unit, onArchive
 @Composable
 private fun DebtDateField(label: String, date: LocalDate?, allowClear: Boolean, onDate: (LocalDate?) -> Unit) {
     var open by remember { mutableStateOf(false) }
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedButton(onClick = { open = true }, modifier = Modifier.weight(1f).height(48.dp)) { Text("$label: ${date ?: "Pilih"}") }
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(
+            onClick = { open = true },
+            modifier = Modifier.weight(1f).height(54.dp),
+            shape = KronFieldShape,
+            border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f, fill = false), verticalArrangement = Arrangement.Center) {
+                    Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        date?.let { it.format(DateTimeFormatter.ofPattern("d MMM yyyy", Locale.forLanguageTag("id-ID"))) } ?: "Pilih tanggal",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (date != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+                Icon(Icons.Outlined.CalendarMonth, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         if (allowClear && date != null) TextButton(onClick = { onDate(null) }) { Text("Hapus") }
     }
     if (open) {

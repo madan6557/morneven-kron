@@ -34,7 +34,9 @@ fun OnboardingScreen(onContinue: () -> Unit) {
         Feature(Icons.Outlined.AutoAwesome, "RAB yang hidup", "Budget bulanan atau tahunan, transaksi rutin, dan resolving minus.")
         Feature(Icons.Outlined.Security, "Privat dan dapat diaudit", "Data lokal, jurnal immutable, nilai dapat disembunyikan.")
         Spacer(Modifier.height(32.dp))
-        Button(onClick = onContinue, modifier = Modifier.fillMaxWidth()) { Text("Mulai menggunakan KRON") }
+        Button(onClick = onContinue, modifier = Modifier.fillMaxWidth().height(48.dp), shape = com.morneven.kron.ui.theme.KronButtonShape) {
+            Text("Mulai menggunakan KRON", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        }
     }
 }
 
