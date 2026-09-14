@@ -13,13 +13,8 @@ import android.view.WindowManager
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.PickVisualMediaRequest
@@ -205,8 +200,7 @@ private val destinations = listOf(
 
 private fun routePosition(route: String?): Int = destinations.indexOfFirst { it.route == route }.takeIf { it >= 0 } ?: 0
 
-private val PageTransitionEasing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
-private const val PAGE_TRANSITION_DURATION = 420
+private const val PAGE_TRANSITION_DURATION = 350
 
 @Composable
 private fun AccessCodeField(
@@ -1106,7 +1100,7 @@ private fun MainScaffold(
         NavHost(
             navController,
             startDestination = "home",
-            modifier = Modifier.padding(padding),
+            modifier = Modifier.fillMaxSize().padding(padding),
             enterTransition = {
                 if (targetState.destination.route == initialState.destination.route) EnterTransition.None else {
                     val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) {
@@ -1116,10 +1110,7 @@ private fun MainScaffold(
                     }
                     slideIntoContainer(
                         towards = direction,
-                        animationSpec = tween(PAGE_TRANSITION_DURATION, easing = PageTransitionEasing),
-                        initialOffset = { fullWidth -> (fullWidth * 0.45f).toInt() },
-                    ) + fadeIn(
-                        animationSpec = tween(360, easing = LinearOutSlowInEasing),
+                        animationSpec = tween(PAGE_TRANSITION_DURATION, easing = FastOutSlowInEasing),
                     )
                 }
             },
@@ -1132,10 +1123,7 @@ private fun MainScaffold(
                     }
                     slideOutOfContainer(
                         towards = direction,
-                        animationSpec = tween(PAGE_TRANSITION_DURATION, easing = PageTransitionEasing),
-                        targetOffset = { fullWidth -> -(fullWidth * 0.45f).toInt() },
-                    ) + fadeOut(
-                        animationSpec = tween(300, easing = FastOutLinearInEasing),
+                        animationSpec = tween(PAGE_TRANSITION_DURATION, easing = FastOutSlowInEasing),
                     )
                 }
             },
@@ -1148,10 +1136,7 @@ private fun MainScaffold(
                     }
                     slideIntoContainer(
                         towards = direction,
-                        animationSpec = tween(PAGE_TRANSITION_DURATION, easing = PageTransitionEasing),
-                        initialOffset = { fullWidth -> (fullWidth * 0.45f).toInt() },
-                    ) + fadeIn(
-                        animationSpec = tween(360, easing = LinearOutSlowInEasing),
+                        animationSpec = tween(PAGE_TRANSITION_DURATION, easing = FastOutSlowInEasing),
                     )
                 }
             },
@@ -1164,10 +1149,7 @@ private fun MainScaffold(
                     }
                     slideOutOfContainer(
                         towards = direction,
-                        animationSpec = tween(PAGE_TRANSITION_DURATION, easing = PageTransitionEasing),
-                        targetOffset = { fullWidth -> -(fullWidth * 0.45f).toInt() },
-                    ) + fadeOut(
-                        animationSpec = tween(300, easing = FastOutLinearInEasing),
+                        animationSpec = tween(PAGE_TRANSITION_DURATION, easing = FastOutSlowInEasing),
                     )
                 }
             },
@@ -1184,6 +1166,7 @@ private fun MainScaffold(
                     { navController.navigate("activity") },
                     { ruleId -> criticalAction = CriticalAction("Hentikan jadwal otomatis", "Occurrence berikutnya tidak akan dibuat. Riwayat lama tetap tersimpan.") { viewModel.pauseRecurringRule(ruleId, it) }; criticalReason = "" },
                     readOnly = teamReadOnly,
+                    modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
                 )
             }
             composable("debts") {
@@ -1215,6 +1198,7 @@ private fun MainScaffold(
                         navController.navigate("activity") { launchSingleTop = true }
                     },
                     readOnly = teamReadOnly,
+                    modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
                 )
             }
             composable("budget") {
@@ -1262,14 +1246,23 @@ private fun MainScaffold(
                         criticalReason = ""
                     },
                     readOnly = teamReadOnly,
+                    modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
                 )
             }
-            composable("activity") { ActivityScreen(state, { auditId = it }, readOnly = teamReadOnly) }
+            composable("activity") {
+                ActivityScreen(
+                    state,
+                    { auditId = it },
+                    modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
+                    readOnly = teamReadOnly,
+                )
+            }
             composable("reports") {
                 ReportsScreen(
                     state = state,
                     onExport = { reportLauncher.launch("KRON-laporan-${LocalDate.now()}.csv") },
                     onManageDebts = { navController.navigate("debts") },
+                    modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
                     eventChannels = state.eventChannels,
                     readOnly = teamReadOnly,
                 )
@@ -1310,6 +1303,7 @@ private fun MainScaffold(
                         ) { viewModel.resumeRecurringRule(ruleId, fromToday, it) }
                         criticalReason = ""
                     },
+                    modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
                     cloudBackupState = cloudBackupState,
                     onConnectCloud = {
                         if (driveSyncRuntime == null) viewModel.showMessage("Konfigurasi OAuth Drive belum tersedia")
