@@ -13,9 +13,11 @@ import android.view.WindowManager
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.PickVisualMediaRequest
@@ -31,7 +33,6 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -1055,62 +1056,42 @@ private fun MainScaffold(
                     containerColor = MaterialTheme.colorScheme.surface,
                     tonalElevation = 0.dp,
                 ) {
-                    BoxWithConstraints(Modifier.fillMaxWidth()) {
-                        val cellWidth = maxWidth / destinations.size
-                        val selectedIndex = routePosition(current).coerceAtLeast(0)
-                        val pillWidth = 48.dp
-                        val pillOffset by animateDpAsState(
-                            targetValue = cellWidth * selectedIndex + (cellWidth - pillWidth) / 2,
-                            animationSpec = tween(220, easing = FastOutSlowInEasing),
-                            label = "navigation-indicator",
-                        )
-                        Box(
-                            Modifier
-                                .offset(x = pillOffset, y = 8.dp)
-                                .size(pillWidth, 30.dp)
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f), RoundedCornerShape(10.dp))
-                                .border(0.8.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f), RoundedCornerShape(10.dp)),
-                        )
-                        Row(Modifier.fillMaxWidth()) {
-                            destinations.forEach { destination ->
-                                val selected = current == destination.route
-                                NavigationBarItem(
-                                    selected = selected,
-                                    onClick = {
-                                        if (current != destination.route) {
-                                            navController.navigate(destination.route) {
-                                                popUpTo("home")
-                                                launchSingleTop = true
-                                            }
-                                        }
-                                    },
-                                    icon = {
-                                        Icon(
-                                            if (selected) destination.activeIcon else destination.inactiveIcon,
-                                            contentDescription = destination.label,
-                                            modifier = Modifier.size(22.dp),
-                                        )
-                                    },
-                                    label = {
-                                        Text(
-                                            destination.label,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                            maxLines = 1,
-                                            softWrap = false,
-                                        )
-                                    },
-                                    colors = NavigationBarItemDefaults.colors(
-                                        selectedIconColor = MaterialTheme.colorScheme.primary,
-                                        selectedTextColor = MaterialTheme.colorScheme.primary,
-                                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.60f),
-                                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.60f),
-                                        indicatorColor = Color.Transparent,
-                                    ),
-                                    modifier = Modifier.weight(1f),
+                    destinations.forEach { destination ->
+                        val selected = current == destination.route
+                        NavigationBarItem(
+                            selected = selected,
+                            onClick = {
+                                if (current != destination.route) {
+                                    navController.navigate(destination.route) {
+                                        popUpTo("home")
+                                        launchSingleTop = true
+                                    }
+                                }
+                            },
+                            icon = {
+                                Icon(
+                                    if (selected) destination.activeIcon else destination.inactiveIcon,
+                                    contentDescription = destination.label,
+                                    modifier = Modifier.size(24.dp),
                                 )
-                            }
-                        }
+                            },
+                            label = {
+                                Text(
+                                    destination.label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                )
+                            },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = MaterialTheme.colorScheme.primary,
+                                selectedTextColor = MaterialTheme.colorScheme.primary,
+                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.60f),
+                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.60f),
+                                indicatorColor = Color.Transparent,
+                            ),
+                        )
                     }
                 }
             }
@@ -1123,26 +1104,66 @@ private fun MainScaffold(
             modifier = Modifier.padding(padding),
             enterTransition = {
                 if (targetState.destination.route == initialState.destination.route) EnterTransition.None else {
-                    val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) AnimatedContentTransitionScope.SlideDirection.Left else AnimatedContentTransitionScope.SlideDirection.Right
-                    slideIntoContainer(direction, tween(220))
+                    val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) {
+                        AnimatedContentTransitionScope.SlideDirection.Left
+                    } else {
+                        AnimatedContentTransitionScope.SlideDirection.Right
+                    }
+                    slideIntoContainer(
+                        towards = direction,
+                        animationSpec = tween(280, easing = FastOutSlowInEasing),
+                        initialOffset = { fullWidth -> (fullWidth * 0.12f).toInt() },
+                    ) + fadeIn(
+                        animationSpec = tween(280, easing = FastOutSlowInEasing),
+                    )
                 }
             },
             exitTransition = {
                 if (targetState.destination.route == initialState.destination.route) ExitTransition.None else {
-                    val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) AnimatedContentTransitionScope.SlideDirection.Left else AnimatedContentTransitionScope.SlideDirection.Right
-                    slideOutOfContainer(direction, tween(220))
+                    val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) {
+                        AnimatedContentTransitionScope.SlideDirection.Left
+                    } else {
+                        AnimatedContentTransitionScope.SlideDirection.Right
+                    }
+                    slideOutOfContainer(
+                        towards = direction,
+                        animationSpec = tween(240, easing = FastOutSlowInEasing),
+                        targetOffset = { fullWidth -> -(fullWidth * 0.12f).toInt() },
+                    ) + fadeOut(
+                        animationSpec = tween(200, easing = FastOutLinearInEasing),
+                    )
                 }
             },
             popEnterTransition = {
                 if (targetState.destination.route == initialState.destination.route) EnterTransition.None else {
-                    val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) AnimatedContentTransitionScope.SlideDirection.Left else AnimatedContentTransitionScope.SlideDirection.Right
-                    slideIntoContainer(direction, tween(220))
+                    val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) {
+                        AnimatedContentTransitionScope.SlideDirection.Left
+                    } else {
+                        AnimatedContentTransitionScope.SlideDirection.Right
+                    }
+                    slideIntoContainer(
+                        towards = direction,
+                        animationSpec = tween(280, easing = FastOutSlowInEasing),
+                        initialOffset = { fullWidth -> (fullWidth * 0.12f).toInt() },
+                    ) + fadeIn(
+                        animationSpec = tween(280, easing = FastOutSlowInEasing),
+                    )
                 }
             },
             popExitTransition = {
                 if (targetState.destination.route == initialState.destination.route) ExitTransition.None else {
-                    val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) AnimatedContentTransitionScope.SlideDirection.Left else AnimatedContentTransitionScope.SlideDirection.Right
-                    slideOutOfContainer(direction, tween(220))
+                    val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) {
+                        AnimatedContentTransitionScope.SlideDirection.Left
+                    } else {
+                        AnimatedContentTransitionScope.SlideDirection.Right
+                    }
+                    slideOutOfContainer(
+                        towards = direction,
+                        animationSpec = tween(240, easing = FastOutSlowInEasing),
+                        targetOffset = { fullWidth -> -(fullWidth * 0.12f).toInt() },
+                    ) + fadeOut(
+                        animationSpec = tween(200, easing = FastOutLinearInEasing),
+                    )
                 }
             },
         ) {
