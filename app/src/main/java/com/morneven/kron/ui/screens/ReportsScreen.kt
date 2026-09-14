@@ -353,7 +353,18 @@ fun ReportsScreen(
                     )
                     Spacer(Modifier.height(8.dp))
                     if (selectedPoint in buckets.indices) {
-                        BucketDetails(buckets[selectedPoint], money)
+                        val detailBucket = if (mode == ReportMode.CUMULATIVE) {
+                            CashFlowBucket(
+                                key = rawBuckets[selectedPoint].key,
+                                label = rawBuckets[selectedPoint].label,
+                                income = rawBuckets[selectedPoint].income,
+                                expense = rawBuckets[selectedPoint].expense,
+                                explicitNet = buckets[selectedPoint].net,
+                            )
+                        } else {
+                            buckets[selectedPoint]
+                        }
+                        BucketDetails(detailBucket, money)
                     } else {
                         Text(
                             if (buckets.isEmpty()) "Belum ada cash flow pada rentang ini" else "Tekan grafik untuk melihat rincian periode",
@@ -366,10 +377,23 @@ fun ReportsScreen(
         }
 
         if (showTable) {
-            val reversedBuckets = buckets.reversed()
+            val displayBuckets = if (mode == ReportMode.CUMULATIVE) {
+                buckets.mapIndexed { index, cumulativeBucket ->
+                    CashFlowBucket(
+                        key = cumulativeBucket.key,
+                        label = cumulativeBucket.label,
+                        income = rawBuckets[index].income,
+                        expense = rawBuckets[index].expense,
+                        explicitNet = cumulativeBucket.net,
+                    )
+                }
+            } else {
+                buckets
+            }
+            val reversedBuckets = displayBuckets.reversed()
             items(reversedBuckets, key = { it.key }) { bucket ->
-                val originalIndex = buckets.indexOf(bucket)
-                val prevBucket = if (originalIndex > 0) buckets[originalIndex - 1] else null
+                val originalIndex = displayBuckets.indexOf(bucket)
+                val prevBucket = if (originalIndex > 0) displayBuckets[originalIndex - 1] else null
                 HudCard {
                     Text(bucket.label, style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(8.dp))
@@ -585,8 +609,9 @@ private data class CashFlowBucket(
     val label: String,
     val income: Long,
     val expense: Long,
+    val explicitNet: Long? = null,
 ) {
-    val net: Long get() = income - expense
+    val net: Long get() = explicitNet ?: (income - expense)
 }
 
 private fun ActivityRow.isCashFlowEvent(): Boolean = when (type) {

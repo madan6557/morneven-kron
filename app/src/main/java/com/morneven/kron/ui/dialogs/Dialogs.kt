@@ -24,6 +24,10 @@ import androidx.compose.material.icons.outlined.AddAPhoto
 import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.Restore
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
@@ -295,7 +299,7 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, St
     val accountRow = state.accountBalances.firstOrNull { it.id == account?.id }
     val accountBalance = if (channel == FundingChannel.CASH) accountRow?.cashBalance ?: 0L else accountRow?.eBudgetBalance ?: 0L
     val splitTotal = splits.sumOf { money(it.amount) }
-    val activeAllocations = state.allocations.filter { it.fundingChannel == channel && it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") }
+    val activeAllocations = state.allocations.filter { it.fundingChannel == channel && it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") && it.isActive }
     val activeAllocationIds = activeAllocations.mapTo(mutableSetOf()) { it.id }
     val validBudgetSplits = unexpected || splits.all { it.allocationId in activeAllocationIds && it.categoryId != null }
     val enoughBalance = splitTotal <= accountBalance
@@ -548,10 +552,16 @@ fun BudgetDetailDialog(
     onAddCategory: ((String, Long, Int, String) -> Unit)? = null,
     onRenameCategory: ((Long, String) -> Unit)? = null,
     onDeleteCategory: ((Long, String) -> Unit)? = null,
+    onRestoreCategory: ((Long, Long, Int, String) -> Unit)? = null,
 ) {
     val rows = state.allocations.filter { it.periodId == periodId }
-    // ponytail: minimal CRUD — hide logical-deleted (planned==0 && available==0) is treated as deleted
-    val visibleRows = rows.filter { !(it.plannedAmount == 0L && it.availableAmount == 0L && it.spentAmount == 0L) }
+    val visibleRows = rows.filter { it.isActive }
+    val archivedExpenseCategories = state.archivedCategories.filter { it.direction == TransactionDirection.EXPENSE }
+    var showArchivedSection by rememberSaveable { mutableStateOf(false) }
+    var restoreCategoryId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var restoreAmount by rememberSaveable { mutableStateOf("") }
+    var restoreCashPct by rememberSaveable { mutableIntStateOf(50) }
+    var restoreNote by rememberSaveable { mutableStateOf("Pulihkan kategori") }
     var correctionId by rememberSaveable { mutableStateOf<Long?>(null) }
     var correctedAmount by rememberSaveable { mutableStateOf("") }
     var reason by rememberSaveable { mutableStateOf("Koreksi nominal budget") }
@@ -661,7 +671,7 @@ fun BudgetDetailDialog(
                             if (!readOnly && (onRenameCategory != null || onDeleteCategory != null)) {
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                     if (onRenameCategory != null) TextButton(onClick = { renameCategoryId = row.categoryId; renameValue = row.categoryName; deleteCategoryId = null }) { Text("Ganti nama") }
-                                    if (onDeleteCategory != null) TextButton(onClick = { deleteCategoryId = row.categoryId; deleteNote = "Hapus kategori ${row.categoryName}"; renameCategoryId = null }) { Text("Hapus", color = MaterialTheme.colorScheme.error) }
+                                    if (onDeleteCategory != null) TextButton(onClick = { deleteCategoryId = row.categoryId; deleteNote = "Arsipkan kategori ${row.categoryName}"; renameCategoryId = null }) { Text("Arsipkan", color = MaterialTheme.colorScheme.error) }
                                 }
                             }
                         }
@@ -693,15 +703,80 @@ fun BudgetDetailDialog(
                             Spacer(Modifier.height(10.dp))
                             HorizontalDivider()
                             Spacer(Modifier.height(10.dp))
-                            Text("Hapus ${row.categoryName}?", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
-                            Text("Sisa akan dikembalikan ke Main Vault. Hanya kategori tanpa transaksi yang dapat dihapus.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            OutlinedTextField(deleteNote, { deleteNote = it }, label = { Text("Alasan hapus") }, modifier = Modifier.fillMaxWidth())
+                            Text("Arsipkan ${row.categoryName}?", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
+                            Text("Sisa akan dikembalikan ke Main Vault. Kategori yang diarsipkan dapat dipulihkan kembali kapan saja.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            OutlinedTextField(deleteNote, { deleteNote = it }, label = { Text("Alasan arsip") }, modifier = Modifier.fillMaxWidth())
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                TextButton(onClick = { deleteCategoryId = null; deleteNote = "Hapus kategori" }) { Text("Batal") }
+                                TextButton(onClick = { deleteCategoryId = null; deleteNote = "Arsipkan kategori" }) { Text("Batal") }
                                 Button(
-                                    onClick = { onDeleteCategory(row.categoryId, deleteNote.trim()); deleteCategoryId = null; deleteNote = "Hapus kategori" },
+                                    onClick = { onDeleteCategory(row.categoryId, deleteNote.trim()); deleteCategoryId = null; deleteNote = "Arsipkan kategori" },
                                     enabled = deleteNote.trim().isNotBlank(),
-                                ) { Text("Hapus kategori") }
+                                ) { Text("Arsipkan kategori") }
+                            }
+                        }
+                    }
+                }
+                if (!readOnly && onRestoreCategory != null && archivedExpenseCategories.isNotEmpty()) {
+                    HudCard(accent = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.55f)) {
+                        Row(
+                            Modifier.fillMaxWidth().clickable { showArchivedSection = !showArchivedSection }.padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Outlined.Archive, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
+                                Text("Kategori terarsip (${archivedExpenseCategories.size})", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.tertiary)
+                            }
+                            Icon(if (showArchivedSection) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, contentDescription = null)
+                        }
+                        if (showArchivedSection) {
+                            Spacer(Modifier.height(8.dp))
+                            archivedExpenseCategories.forEach { cat ->
+                                Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(cat.name, style = MaterialTheme.typography.bodyLarge)
+                                        OutlinedButton(
+                                            onClick = {
+                                                restoreCategoryId = if (restoreCategoryId == cat.id) null else cat.id
+                                                restoreAmount = ""
+                                                restoreCashPct = 50
+                                                restoreNote = "Pulihkan kategori ${cat.name}"
+                                            },
+                                        ) {
+                                            Icon(Icons.Outlined.Restore, contentDescription = null)
+                                            Text(if (restoreCategoryId == cat.id) " Batal" else " Pulihkan")
+                                        }
+                                    }
+                                    if (restoreCategoryId == cat.id) {
+                                        Spacer(Modifier.height(8.dp))
+                                        HudCard(accent = MaterialTheme.colorScheme.tertiary) {
+                                            Text("Pulihkan ${cat.name}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.tertiary)
+                                            MoneyField(restoreAmount, { restoreAmount = it }, "Nominal budget baru")
+                                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                Text("Cash $restoreCashPct%", style = MaterialTheme.typography.labelSmall)
+                                                Text("eBudget ${100 - restoreCashPct}%", style = MaterialTheme.typography.labelSmall)
+                                            }
+                                            Slider(value = restoreCashPct.toFloat(), onValueChange = { restoreCashPct = it.toInt() }, valueRange = 0f..100f, steps = 19)
+                                            OutlinedTextField(restoreNote, { restoreNote = it }, label = { Text("Alasan") }, modifier = Modifier.fillMaxWidth())
+                                            Text("Dana akan dibooking dari Main Vault. Pastikan saldo cukup.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Button(
+                                                onClick = {
+                                                    onRestoreCategory(cat.id, money(restoreAmount), restoreCashPct, restoreNote.trim())
+                                                    restoreCategoryId = null
+                                                    restoreAmount = ""
+                                                    restoreCashPct = 50
+                                                    restoreNote = "Pulihkan kategori"
+                                                },
+                                                enabled = money(restoreAmount) > 0 && restoreNote.isNotBlank(),
+                                                modifier = Modifier.fillMaxWidth(),
+                                            ) { Text("Simpan & pulihkan") }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -864,7 +939,7 @@ fun ResolveDialog(state: KronUiState, onDismiss: () -> Unit, onAllocation: (Long
     var amount by rememberSaveable { mutableStateOf("") }
     var note by rememberSaveable { mutableStateOf("Resolusi budget minus") }
     val target = targets.firstOrNull { it.id == targetId }
-    val sources = target?.let { selected -> state.allocations.filter { it.fundingChannel == selected.fundingChannel && it.availableAmount > 0 && it.id != targetId && it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") } }.orEmpty()
+    val sources = target?.let { selected -> state.allocations.filter { it.fundingChannel == selected.fundingChannel && it.availableAmount > 0 && it.id != targetId && it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") && it.isActive } }.orEmpty()
     val vault = if (target?.fundingChannel == FundingChannel.CASH) state.vaultCash else state.vaultEBudget
     val rollover = if (target?.fundingChannel == FundingChannel.CASH) state.rolloverCash else state.rolloverEBudget
     val sourceAvailable = when (sourceMode) {
@@ -875,7 +950,7 @@ fun ResolveDialog(state: KronUiState, onDismiss: () -> Unit, onAllocation: (Long
     val requested = money(amount)
     val limit = minOf(sourceAvailable, -(target?.availableAmount ?: 0))
     var unallocatedChannel by rememberSaveable { mutableStateOf(if (state.unallocatedCash < 0) FundingChannel.CASH else FundingChannel.EBUDGET) }
-    val destinations = state.allocations.filter { it.fundingChannel == unallocatedChannel && it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") }
+    val destinations = state.allocations.filter { it.fundingChannel == unallocatedChannel && it.periodStatus in setOf("ACTIVE", "RESOLUTION_REQUIRED") && it.isActive }
     var destinationId by remember(unallocatedChannel) { mutableStateOf(destinations.firstOrNull()?.id) }
     val unallocatedAmount = if (unallocatedChannel == FundingChannel.CASH) state.unallocatedCash else state.unallocatedEBudget
     val confirmEnabled = if (mode == "MINUS") target != null && requested in 1..limit else destinationId != null && requested in 1..(-unallocatedAmount).coerceAtLeast(0)
@@ -926,7 +1001,7 @@ fun ResolveDialog(state: KronUiState, onDismiss: () -> Unit, onAllocation: (Long
 
 @Composable
 fun ChannelTransferDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, Long, Long, String) -> Unit) {
-    val sources = state.allocations.filter { it.availableAmount > 0 }
+    val sources = state.allocations.filter { it.availableAmount > 0 && it.isActive }
     var allocationId by rememberSaveable { mutableStateOf(sources.firstOrNull()?.id) }
     val source = sources.firstOrNull { it.id == allocationId }
     val account = state.activeAccount

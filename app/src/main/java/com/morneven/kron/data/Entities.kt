@@ -873,6 +873,7 @@ data class AllocationBalanceRow(
     val categoryId: Long,
     val categoryName: String,
     val color: Long,
+    val categoryArchived: Boolean = false,
     val fundingChannel: String,
     val plannedAmount: Long,
     val bookedAmount: Long,
@@ -881,7 +882,10 @@ data class AllocationBalanceRow(
     val periodStatus: String,
     val startEpochDay: Long,
     val endEpochDay: Long,
-)
+) {
+    val isActive: Boolean
+        get() = !categoryArchived && !(plannedAmount == 0L && availableAmount == 0L && spentAmount == 0L)
+}
 
 data class ActivityRow(
     val id: String,

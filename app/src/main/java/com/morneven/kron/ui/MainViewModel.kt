@@ -96,6 +96,7 @@ data class KronUiState(
     val archivedAccounts: List<AccountEntity> = emptyList(),
     val accountBalances: List<AccountBalanceRow> = emptyList(),
     val categories: List<CategoryEntity> = emptyList(),
+    val archivedCategories: List<CategoryEntity> = emptyList(),
     val portfolios: List<PortfolioEntity> = emptyList(),
     val archivedPortfolios: List<PortfolioEntity> = emptyList(),
     val periods: List<BudgetPeriodEntity> = emptyList(),
@@ -157,6 +158,7 @@ private data class MetadataSlice(
     val recoveredTeamAccounts: List<AccountEntity> = emptyList(),
     val archivedAccounts: List<AccountEntity> = emptyList(),
     val categories: List<CategoryEntity>,
+    val archivedCategories: List<CategoryEntity> = emptyList(),
     val portfolios: List<PortfolioEntity>,
     val archivedPortfolios: List<PortfolioEntity> = emptyList(),
     val periods: List<BudgetPeriodEntity>,
@@ -285,6 +287,8 @@ class MainViewModel @Inject constructor(
                 periods = periods,
                 unallocated = unallocated.associate { it.fundingChannel to it.balance },
             )
+        }.combine(repository.archivedCategories) { metadata, archivedCategories ->
+            metadata.copy(archivedCategories = archivedCategories)
         }.combine(repository.archivedAccounts) { metadata, archivedAccounts ->
             metadata.copy(archivedAccounts = archivedAccounts)
         }.combine(repository.recoveredTeamAccounts) { metadata, recoveredTeamAccounts ->
@@ -339,6 +343,7 @@ class MainViewModel @Inject constructor(
             archivedAccounts = metadata.archivedAccounts,
             accountBalances = ledger.balances,
             categories = metadata.categories,
+            archivedCategories = metadata.archivedCategories,
             portfolios = metadata.portfolios,
             archivedPortfolios = metadata.archivedPortfolios,
             periods = metadata.periods,
@@ -1106,8 +1111,12 @@ class MainViewModel @Inject constructor(
         repository.renameBudgetCategoryInPeriod(periodId, categoryId, newName)
     }
 
-    fun removeBudgetCategory(periodId: Long, categoryId: Long, note: String) = runAction("Kategori budget dihapus") {
+    fun removeBudgetCategory(periodId: Long, categoryId: Long, note: String) = runAction("Kategori budget diarsipkan") {
         repository.removeBudgetCategoryFromPeriod(periodId, categoryId, note)
+    }
+
+    fun restoreBudgetCategory(periodId: Long, categoryId: Long, plannedAmount: Long, cashPercentage: Int, note: String) = runAction("Kategori budget dipulihkan") {
+        repository.restoreBudgetCategory(periodId, categoryId, plannedAmount, cashPercentage, note)
     }
 
     fun allocateUnallocated(targetId: Long, amount: Long, note: String) = runAction("Pengeluaran berhasil dialokasikan") {

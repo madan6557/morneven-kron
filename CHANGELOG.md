@@ -1,5 +1,14 @@
 # KRON Changelog
 
+## 1.7.5 - 2026-09-14
+
+- Perbaikan kategori budget: aksi hapus kategori kini mengarsipkan kategori (isArchived = true), mengembalikan sisa dana ke Main Vault, dan menghapus template portfolio periode mendatang.
+- Kategori dan alokasi yang tidak aktif atau terarsip tidak lagi muncul pada opsi kategori semua komponen (ExpenseDialog, resolusi deficit, transfer kanal) dan tidak tampil pada card budget di layar utama.
+- Menambahkan bagian Kategori Terarsip pada detail budget yang memungkinkan pemulihan (restore) kategori beserta pengalokasian nominal baru dari Main Vault.
+- Penambahan kategori baru dengan nama yang sama dengan kategori terarsip otomatis memulihkan kategori tersebut.
+- Penyesuaian grafik laporan mode akumulasi net: detail Masuk dan Keluar pada titik yang dipilih menampilkan nominal aktual hari atau periode tersebut, sementara Net tetap menampilkan akumulasi net kumulatif.
+- Bump versionCode 96 -> 97 dan versionName 1.7.4 -> 1.7.5.
+
 ## 1.7.4 - 2026-08-26
 
 - Tampilkan sumber dana `Cash` atau `eBudget` pada daftar dan detail transaksi, termasuk transaksi split.

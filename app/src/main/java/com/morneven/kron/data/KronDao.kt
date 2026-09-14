@@ -60,6 +60,9 @@ interface KronDao {
     @Query("SELECT * FROM categories WHERE isArchived = 0 ORDER BY direction, name") fun observeCategories(): Flow<List<CategoryEntity>>
     @Query("SELECT * FROM categories WHERE isArchived = 0 AND (accountId IS NULL OR accountId = :accountId) ORDER BY direction, name")
     fun observeCategoriesForAccount(accountId: Long): Flow<List<CategoryEntity>>
+    @Query("SELECT * FROM categories WHERE isArchived = 1 ORDER BY direction, name") fun observeArchivedCategories(): Flow<List<CategoryEntity>>
+    @Query("SELECT * FROM categories WHERE isArchived = 1 AND (accountId IS NULL OR accountId = :accountId) ORDER BY direction, name")
+    fun observeArchivedCategoriesForAccount(accountId: Long): Flow<List<CategoryEntity>>
     @Query("SELECT * FROM portfolios WHERE isArchived = 0 ORDER BY fundingPriority, createdAt") fun observePortfolios(): Flow<List<PortfolioEntity>>
     @Query("SELECT * FROM portfolios WHERE isArchived = 1 ORDER BY archivedAt DESC, createdAt") fun observeArchivedPortfolios(): Flow<List<PortfolioEntity>>
     @Query("SELECT * FROM budget_periods ORDER BY startEpochDay DESC") fun observePeriods(): Flow<List<BudgetPeriodEntity>>
@@ -196,7 +199,7 @@ interface KronDao {
 
     @Query("""
         SELECT al.id, al.periodId, p.portfolioId, pf.name AS portfolioName, pf.isArchived AS portfolioArchived,
-               al.categoryId, c.name AS categoryName, c.color, al.fundingChannel,
+               al.categoryId, c.name AS categoryName, c.color, c.isArchived AS categoryArchived, al.fundingChannel,
                al.plannedAmount,
                COALESCE(SUM(b.amount), 0) - COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS bookedAmount,
                COALESCE(SUM(b.amount), 0) AS availableAmount,
@@ -215,7 +218,7 @@ interface KronDao {
 
     @Query("""
         SELECT al.id, al.periodId, p.portfolioId, pf.name AS portfolioName, pf.isArchived AS portfolioArchived,
-               al.categoryId, c.name AS categoryName, c.color, al.fundingChannel,
+               al.categoryId, c.name AS categoryName, c.color, c.isArchived AS categoryArchived, al.fundingChannel,
                al.plannedAmount,
                COALESCE(SUM(b.amount), 0) - COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS bookedAmount,
                COALESCE(SUM(b.amount), 0) AS availableAmount,
@@ -434,7 +437,7 @@ interface KronDao {
 
     @Query("""
         SELECT al.id, al.periodId, p.portfolioId, pf.name AS portfolioName, pf.isArchived AS portfolioArchived,
-               al.categoryId, c.name AS categoryName, c.color, al.fundingChannel,
+               al.categoryId, c.name AS categoryName, c.color, c.isArchived AS categoryArchived, al.fundingChannel,
                al.plannedAmount,
                COALESCE(SUM(b.amount), 0) - COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS bookedAmount,
                COALESCE(SUM(b.amount), 0) AS availableAmount,

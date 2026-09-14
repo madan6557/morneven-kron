@@ -84,6 +84,7 @@ private fun BudgetPeriodEntity.bumpRevision() = copy(revision = revision + 1, up
 private fun AllocationEntity.bumpRevision() = copy(revision = revision + 1, updatedAt = System.currentTimeMillis())
 private fun RecurringRuleEntity.bumpRevision() = copy(revision = revision + 1, updatedAt = System.currentTimeMillis())
 private fun DebtEntity.bumpRevision() = copy(revision = revision + 1, updatedAt = System.currentTimeMillis())
+private fun CategoryEntity.bumpRevision() = copy(revision = revision + 1, updatedAt = System.currentTimeMillis())
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @Singleton
@@ -131,6 +132,9 @@ class KronRepository private constructor(
 
     val categories = activeAccountFlow.flatMapLatest { accountId ->
         accountId?.let { database.kronDao().observeCategoriesForAccount(it) } ?: flowOf(emptyList())
+    }
+    val archivedCategories = activeAccountFlow.flatMapLatest { accountId ->
+        accountId?.let { database.kronDao().observeArchivedCategoriesForAccount(it) } ?: flowOf(emptyList())
     }
     val rules = activeAccountFlow.flatMapLatest { it?.let { id -> database.kronDao().observeRulesForAccount(id) } ?: flowOf(emptyList()) }
     val portfolios = activeAccountFlow.flatMapLatest { it?.let { id -> database.kronDao().observePortfoliosForAccount(id) } ?: flowOf(emptyList()) }
@@ -1131,17 +1135,25 @@ class KronRepository private constructor(
         val existingCategory = dao.categoriesForAccount(activeId).firstOrNull {
             it.direction == TransactionDirection.EXPENSE && it.name.equals(trimmedName, ignoreCase = true)
         }
-        val categoryId = existingCategory?.id ?: dao.insertCategory(
-            CategoryEntity(
-                name = trimmedName,
-                direction = TransactionDirection.EXPENSE,
-                color = 0xFF9E6BFF,
-                icon = "category",
-                accountId = teamScopedAccountId,
+        val categoryId = if (existingCategory != null) {
+            if (existingCategory.isArchived) {
+                dao.updateCategory(existingCategory.copy(isArchived = false).bumpRevision())
+            }
+            existingCategory.id
+        } else {
+            dao.insertCategory(
+                CategoryEntity(
+                    name = trimmedName,
+                    direction = TransactionDirection.EXPENSE,
+                    color = 0xFF9E6BFF,
+                    icon = "category",
+                    accountId = teamScopedAccountId,
+                )
             )
-        )
-        // check duplicate in this period
-        require(dao.allocationsForCategory(periodId, categoryId).isEmpty()) { "Kategori sudah ada di periode ini" }
+        }
+        val existingAllocs = dao.allocationsForCategory(periodId, categoryId)
+        val activeExistingAllocs = existingAllocs.filter { !(it.plannedAmount == 0L && dao.allocationAvailable(it.id) == 0L) }
+        require(activeExistingAllocs.isEmpty()) { "Kategori sudah aktif di periode ini" }
         if (cashAmount > 0) require(dao.vaultBalance(FundingChannel.CASH, activeId) >= cashAmount) { "Main Vault Cash tidak mencukupi" }
         if (eBudgetAmount > 0) require(dao.vaultBalance(FundingChannel.EBUDGET, activeId) >= eBudgetAmount) { "Main Vault eBudget tidak mencukupi" }
 
@@ -1150,21 +1162,36 @@ class KronRepository private constructor(
         val insertedIds = mutableListOf<Long>()
         val budgetLines = mutableListOf<BudgetJournalLineEntity>()
         if (cashAmount > 0) {
-            val id = dao.insertAllocation(AllocationEntity(periodId = periodId, categoryId = categoryId, fundingChannel = FundingChannel.CASH, plannedAmount = cashAmount))
+            val existingCash = existingAllocs.firstOrNull { it.fundingChannel == FundingChannel.CASH }
+            val id = if (existingCash != null) {
+                dao.updateAllocation(existingCash.copy(plannedAmount = existingCash.plannedAmount + cashAmount).bumpRevision())
+                existingCash.id
+            } else {
+                dao.insertAllocation(AllocationEntity(periodId = periodId, categoryId = categoryId, fundingChannel = FundingChannel.CASH, plannedAmount = cashAmount))
+            }
             insertedIds.add(id)
             budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = id, fundingChannel = FundingChannel.CASH, amount = cashAmount, accountId = activeId))
             budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.CASH, amount = -cashAmount, accountId = activeId))
         }
         if (eBudgetAmount > 0) {
-            val id = dao.insertAllocation(AllocationEntity(periodId = periodId, categoryId = categoryId, fundingChannel = FundingChannel.EBUDGET, plannedAmount = eBudgetAmount))
+            val existingEBudget = existingAllocs.firstOrNull { it.fundingChannel == FundingChannel.EBUDGET }
+            val id = if (existingEBudget != null) {
+                dao.updateAllocation(existingEBudget.copy(plannedAmount = existingEBudget.plannedAmount + eBudgetAmount).bumpRevision())
+                existingEBudget.id
+            } else {
+                dao.insertAllocation(AllocationEntity(periodId = periodId, categoryId = categoryId, fundingChannel = FundingChannel.EBUDGET, plannedAmount = eBudgetAmount))
+            }
             insertedIds.add(id)
             budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = id, fundingChannel = FundingChannel.EBUDGET, amount = eBudgetAmount, accountId = activeId))
             budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.EBUDGET, amount = -eBudgetAmount, accountId = activeId))
         }
         if (budgetLines.isNotEmpty()) dao.insertBudgetLines(budgetLines)
         // template for future periods
-        if (dao.templateForCategory(portfolio.id, categoryId) == null) {
+        val existingTemplate = dao.templateForCategory(portfolio.id, categoryId)
+        if (existingTemplate == null) {
             dao.insertAllocationTemplate(PortfolioAllocationTemplateEntity(portfolioId = portfolio.id, categoryId = categoryId, plannedAmount = plannedAmount, cashPercentage = cashPercentage))
+        } else {
+            dao.updateAllocationTemplate(existingTemplate.copy(plannedAmount = plannedAmount, cashPercentage = cashPercentage))
         }
         dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = note, beforeJson = "{\"periodId\":$periodId,\"categoryId\":$categoryId}", afterJson = "{\"periodId\":$periodId,\"categoryId\":$categoryId,\"planned\":$plannedAmount,\"cashPercentage\":$cashPercentage}"))
         refreshPeriodStatus(periodId)
@@ -1242,17 +1269,15 @@ class KronRepository private constructor(
         require(portfolio.accountId == activeId) { "Portfolio bukan milik akun aktif" }
         require(!portfolio.isArchived) { "Portfolio sudah diarsip" }
         require(period.status != PeriodStatus.CLOSED) { "Periode sudah tertutup" }
+        val category = requireNotNull(dao.categoryById(categoryId)) { "Kategori tidak ditemukan" }
         val allocations = dao.allocationsForCategory(periodId, categoryId)
         require(allocations.isNotEmpty()) { "Kategori tidak ada di periode ini" }
-        // block if already spent (has splits) or overbudget
         for (allocation in allocations) {
             val available = dao.allocationAvailable(allocation.id)
-            require(available >= 0) { "Kategori minus tidak dapat dihapus. Selesaikan terlebih dahulu" }
-            val splits = dao.splitCountForAllocation(allocation.id)
-            require(splits == 0) { "Kategori sudah terpakai untuk transaksi. Nol-kan sisa via koreksi sebelum hapus" }
+            require(available >= 0) { "Kategori minus tidak dapat diarsipkan. Selesaikan terlebih dahulu" }
         }
         val eventId = UUID.randomUUID().toString()
-        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.REALLOCATION, "Hapus kategori", note, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.REALLOCATION, "Arsipkan kategori ${category.name}", note, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
         val budgetLines = mutableListOf<BudgetJournalLineEntity>()
         for (allocation in allocations) {
             val available = dao.allocationAvailable(allocation.id)
@@ -1265,15 +1290,103 @@ class KronRepository private constructor(
         // delete or zero allocations: keep row if has journal lines (FK), else physical delete
         for (allocation in allocations) {
             val lineCount = dao.budgetLineCountForAllocation(allocation.id)
-            if (lineCount == 0) {
+            val splits = dao.splitCountForAllocation(allocation.id)
+            if (lineCount == 0 && splits == 0) {
                 dao.deleteAllocationById(allocation.id)
             } else {
-                // ponytail: logical delete — keep row with planned 0 to preserve FK history, UI hides planned==0
-                dao.updateAllocation(allocation.copy(plannedAmount = 0).bumpRevision())
+                val available = dao.allocationAvailable(allocation.id)
+                val spent = (allocation.plannedAmount - available).coerceAtLeast(0L)
+                dao.updateAllocation(allocation.copy(plannedAmount = spent).bumpRevision())
             }
         }
         dao.deleteTemplateForCategory(portfolio.id, categoryId)
-        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = note, beforeJson = "{\"periodId\":$periodId,\"categoryId\":$categoryId,\"allocations\":${allocations.size}}", afterJson = "{\"periodId\":$periodId,\"categoryId\":$categoryId,\"deleted\":true}"))
+        dao.updateCategory(category.copy(isArchived = true).bumpRevision())
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = note, beforeJson = "{\"periodId\":$periodId,\"categoryId\":$categoryId,\"allocations\":${allocations.size},\"archived\":false}", afterJson = "{\"periodId\":$periodId,\"categoryId\":$categoryId,\"archived\":true}"))
+        refreshPeriodStatus(periodId)
+        assertInvariant()
+        eventId
+    }
+
+    suspend fun restoreBudgetCategory(
+        periodId: Long,
+        categoryId: Long,
+        plannedAmount: Long,
+        cashPercentage: Int,
+        note: String,
+    ) = database.withTransaction {
+        val trimmedNote = note.trim()
+        require(trimmedNote.isNotBlank()) { "Alasan wajib diisi" }
+        require(plannedAmount > 0) { "Nominal budget harus lebih dari nol" }
+        require(cashPercentage in 0..100) { "Persentase cash tidak valid" }
+        val period = requireNotNull(dao.periodById(periodId)) { "Periode tidak ditemukan" }
+        val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == period.portfolioId }) { "Portfolio tidak ditemukan" }
+        val activeId = activeAccountId()
+        require(portfolio.accountId == activeId) { "Portfolio bukan milik akun aktif" }
+        require(!portfolio.isArchived) { "Portfolio sudah diarsip" }
+        require(period.status != PeriodStatus.CLOSED) { "Periode sudah tertutup" }
+        val category = requireNotNull(dao.categoryById(categoryId)) { "Kategori tidak ditemukan" }
+        require(category.isArchived) { "Kategori tidak berada di arsip" }
+
+        val cashAmount = plannedAmount * cashPercentage / 100
+        val eBudgetAmount = plannedAmount - cashAmount
+        require(cashAmount >= 0 && eBudgetAmount >= 0) { "Komposisi kanal tidak valid" }
+        require(cashAmount > 0 || eBudgetAmount > 0) { "Nominal budget tidak valid" }
+        if (cashAmount > 0) require(dao.vaultBalance(FundingChannel.CASH, activeId) >= cashAmount) { "Main Vault Cash tidak mencukupi" }
+        if (eBudgetAmount > 0) require(dao.vaultBalance(FundingChannel.EBUDGET, activeId) >= eBudgetAmount) { "Main Vault eBudget tidak mencukupi" }
+
+        dao.updateCategory(category.copy(isArchived = false).bumpRevision())
+
+        val eventId = UUID.randomUUID().toString()
+        dao.insertEvent(ActivityEventEntity(
+            id = eventId,
+            type = LedgerType.REALLOCATION,
+            title = "Pulihkan kategori ${category.name}",
+            note = trimmedNote,
+            source = "USER",
+            effectiveEpochDay = LocalDate.now().toEpochDay(),
+            accountId = activeId,
+        ))
+
+        val budgetLines = mutableListOf<BudgetJournalLineEntity>()
+        val existingAllocs = dao.allocationsForCategory(periodId, categoryId)
+        if (cashAmount > 0) {
+            val existingCash = existingAllocs.firstOrNull { it.fundingChannel == FundingChannel.CASH }
+            val allocId = if (existingCash != null) {
+                dao.updateAllocation(existingCash.copy(plannedAmount = existingCash.plannedAmount + cashAmount).bumpRevision())
+                existingCash.id
+            } else {
+                dao.insertAllocation(AllocationEntity(periodId = periodId, categoryId = categoryId, fundingChannel = FundingChannel.CASH, plannedAmount = cashAmount))
+            }
+            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = allocId, fundingChannel = FundingChannel.CASH, amount = cashAmount, accountId = activeId))
+            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.CASH, amount = -cashAmount, accountId = activeId))
+        }
+        if (eBudgetAmount > 0) {
+            val existingEBudget = existingAllocs.firstOrNull { it.fundingChannel == FundingChannel.EBUDGET }
+            val allocId = if (existingEBudget != null) {
+                dao.updateAllocation(existingEBudget.copy(plannedAmount = existingEBudget.plannedAmount + eBudgetAmount).bumpRevision())
+                existingEBudget.id
+            } else {
+                dao.insertAllocation(AllocationEntity(periodId = periodId, categoryId = categoryId, fundingChannel = FundingChannel.EBUDGET, plannedAmount = eBudgetAmount))
+            }
+            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = allocId, fundingChannel = FundingChannel.EBUDGET, amount = eBudgetAmount, accountId = activeId))
+            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.EBUDGET, amount = -eBudgetAmount, accountId = activeId))
+        }
+        if (budgetLines.isNotEmpty()) dao.insertBudgetLines(budgetLines)
+
+        val existingTemplate = dao.templateForCategory(portfolio.id, categoryId)
+        if (existingTemplate == null) {
+            dao.insertAllocationTemplate(PortfolioAllocationTemplateEntity(portfolioId = portfolio.id, categoryId = categoryId, plannedAmount = plannedAmount, cashPercentage = cashPercentage))
+        } else {
+            dao.updateAllocationTemplate(existingTemplate.copy(plannedAmount = plannedAmount, cashPercentage = cashPercentage))
+        }
+
+        dao.insertAudit(AuditSnapshotEntity(
+            eventId = eventId,
+            reason = trimmedNote,
+            beforeJson = "{\"periodId\":$periodId,\"categoryId\":$categoryId,\"archived\":true}",
+            afterJson = "{\"periodId\":$periodId,\"categoryId\":$categoryId,\"archived\":false,\"plannedAmount\":$plannedAmount,\"cashPercentage\":$cashPercentage}",
+        ))
+
         refreshPeriodStatus(periodId)
         assertInvariant()
         eventId

@@ -246,7 +246,8 @@ private fun ActiveBudgetCard(
         Spacer(Modifier.height(12.dp))
         BudgetProgress(booked, available)
         Spacer(Modifier.height(14.dp))
-        rows.forEach { row ->
+        val visibleRows = rows.filter { it.isActive }
+        visibleRows.forEach { row ->
             Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                     ChannelBadge(row.fundingChannel)
