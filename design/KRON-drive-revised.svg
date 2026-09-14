@@ -1,0 +1,182 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1650" viewBox="0 0 2200 1650">
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0 0 L12 6 L0 12 Z" fill="#64748b"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+    <style>
+      .title { font: 700 38px Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 20px Arial, sans-serif; fill: #475569; }
+      .panelTitle { font: 700 26px Arial, sans-serif; fill: #0f172a; }
+      .panelSub { font: 400 17px Arial, sans-serif; fill: #475569; }
+      .node { font: 700 20px Arial, sans-serif; fill: #0f172a; text-anchor: middle; }
+      .nodeSmall { font: 700 18px Arial, sans-serif; fill: #0f172a; text-anchor: middle; }
+      .body { font: 400 18px Arial, sans-serif; fill: #334155; }
+      .bodySmall { font: 400 16px Arial, sans-serif; fill: #475569; }
+      .label { font: 700 16px Arial, sans-serif; fill: #475569; }
+      .status { font: 700 18px Arial, sans-serif; fill: #166534; text-anchor: middle; }
+      .danger { font: 700 18px Arial, sans-serif; fill: #991b1b; text-anchor: middle; }
+      .line { stroke: #64748b; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .lineThin { stroke: #94a3b8; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="2200" height="1650" fill="#f8fafc"/>
+  <rect x="28" y="24" width="2144" height="1600" rx="24" fill="#ffffff" stroke="#cbd5e1" stroke-width="2" filter="url(#shadow)"/>
+  <text x="70" y="78" class="title">KRON Drive Flow</text>
+  <text x="70" y="112" class="subtitle">Private Drive menjadi sumber koneksi utama. Team mengikuti Private Sync. Kapsul bersifat immutable dan read-only.</text>
+
+  <g transform="translate(70 145)">
+    <circle cx="50" cy="34" r="30" fill="#0f172a"/>
+    <text x="50" y="41" class="nodeSmall" fill="#ffffff">Mulai</text>
+    <path d="M80 34 H170" class="line"/>
+    <rect x="170" y="4" width="190" height="60" rx="12" fill="#e2e8f0" stroke="#94a3b8" stroke-width="2"/>
+    <text x="265" y="41" class="nodeSmall">Buka KRON</text>
+    <path d="M360 34 H450" class="line"/>
+    <rect x="450" y="4" width="220" height="60" rx="12" fill="#e2e8f0" stroke="#94a3b8" stroke-width="2"/>
+    <text x="560" y="41" class="nodeSmall">Validasi database lokal</text>
+    <path d="M670 34 H760" class="line"/>
+    <polygon points="830,0 900,34 830,68 760,34" fill="#fff7ed" stroke="#fb923c" stroke-width="2"/>
+    <text x="830" y="29" class="nodeSmall">Sesi Google</text>
+    <text x="830" y="51" class="nodeSmall">valid?</text>
+    <text x="916" y="28" class="label">ya</text>
+    <path d="M900 34 H1010" class="line"/>
+    <rect x="1010" y="4" width="260" height="60" rx="12" fill="#ecfeff" stroke="#22d3ee" stroke-width="2"/>
+    <text x="1140" y="41" class="nodeSmall">Pilih: Sync / Switch / Capsule</text>
+    <text x="770" y="102" class="label">tidak: Connect</text>
+    <path d="M830 68 V118" class="lineThin"/>
+    <rect x="720" y="118" width="220" height="54" rx="12" fill="#fff7ed" stroke="#fb923c" stroke-width="2"/>
+    <text x="830" y="152" class="nodeSmall">Connect</text>
+  </g>
+
+  <g transform="translate(70 340)">
+    <rect width="1000" height="500" rx="20" fill="#f8fafc" stroke="#93c5fd" stroke-width="3"/>
+    <text x="28" y="44" class="panelTitle">1. Connect / Fresh Device</text>
+    <text x="28" y="72" class="panelSub">Akun kosong tidak masuk Conflict Center.</text>
+    <rect x="34" y="104" width="210" height="58" rx="12" fill="#e0f2fe" stroke="#38bdf8" stroke-width="2"/>
+    <text x="139" y="139" class="nodeSmall">Pilih akun Google</text>
+    <path d="M244 133 H270" class="lineThin"/>
+    <rect x="270" y="104" width="210" height="58" rx="12" fill="#e0f2fe" stroke="#38bdf8" stroke-width="2"/>
+    <text x="375" y="139" class="nodeSmall">Input passphrase</text>
+    <path d="M480 133 H506" class="lineThin"/>
+    <rect x="506" y="104" width="250" height="58" rx="12" fill="#e0f2fe" stroke="#38bdf8" stroke-width="2"/>
+    <text x="631" y="139" class="nodeSmall">Validasi key + dataset</text>
+    <path d="M756 133 H790" class="lineThin"/>
+    <polygon points="850,98 910,133 850,168 790,133" fill="#fff7ed" stroke="#fb923c" stroke-width="2"/>
+    <text x="850" y="128" class="nodeSmall">Lokal</text>
+    <text x="850" y="150" class="nodeSmall">kosong?</text>
+
+    <path d="M790 133 H675 V220" class="lineThin"/>
+    <text x="700" y="124" class="label">tidak</text>
+    <rect x="520" y="220" width="300" height="62" rx="12" fill="#fffbeb" stroke="#fbbf24" stroke-width="2"/>
+    <text x="670" y="247" class="nodeSmall">Drive kosong?</text>
+    <text x="670" y="270" class="bodySmall" text-anchor="middle">ya: konfirmasi upload pertama</text>
+    <path d="M850 168 V220" class="lineThin"/>
+    <text x="865" y="197" class="label">ya</text>
+    <path d="M520 251 H440 V350" class="lineThin"/>
+    <rect x="34" y="350" width="280" height="62" rx="12" fill="#dcfce7" stroke="#4ade80" stroke-width="2"/>
+    <text x="174" y="377" class="nodeSmall">Drive kosong</text>
+    <text x="174" y="400" class="bodySmall" text-anchor="middle">Start Fresh / New</text>
+    <path d="M820 251 H860 V350" class="lineThin"/>
+    <rect x="350" y="350" width="610" height="62" rx="12" fill="#dcfce7" stroke="#4ade80" stroke-width="2"/>
+    <text x="655" y="377" class="nodeSmall">Drive punya snapshot</text>
+    <text x="655" y="400" class="bodySmall" text-anchor="middle">Download → stage + validate → apply → cek Team copy</text>
+    <text x="34" y="458" class="body">Lokal berisi + Drive kosong: tawarkan “Start Fresh” atau “Gunakan data lokal”.</text>
+  </g>
+
+  <g transform="translate(1130 340)">
+    <rect width="1000" height="500" rx="20" fill="#f8fafc" stroke="#c4b5fd" stroke-width="3"/>
+    <text x="28" y="44" class="panelTitle">2. Sync / Conflict</text>
+    <text x="28" y="72" class="panelSub">Bandingkan perubahan lokal dan remote sebelum menulis apa pun.</text>
+    <rect x="34" y="104" width="150" height="58" rx="12" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+    <text x="109" y="139" class="nodeSmall">Sync</text>
+    <path d="M184 133 H240" class="lineThin"/>
+    <rect x="240" y="104" width="230" height="58" rx="12" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+    <text x="355" y="139" class="nodeSmall">Lokal berubah?</text>
+    <path d="M470 133 H526" class="lineThin"/>
+    <rect x="526" y="104" width="230" height="58" rx="12" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+    <text x="641" y="139" class="nodeSmall">Remote berubah?</text>
+    <text x="778" y="126" class="label">hasil</text>
+
+    <rect x="34" y="220" width="430" height="74" rx="12" fill="#dcfce7" stroke="#4ade80" stroke-width="2"/>
+    <text x="249" y="250" class="status">Tidak / Tidak: Sudah tersinkron</text>
+    <text x="249" y="276" class="bodySmall" text-anchor="middle">tidak ada upload atau download</text>
+    <rect x="500" y="220" width="430" height="74" rx="12" fill="#dcfce7" stroke="#4ade80" stroke-width="2"/>
+    <text x="715" y="250" class="status">Ya / Tidak: Upload lokal</text>
+    <text x="715" y="276" class="bodySmall" text-anchor="middle">buat snapshot child baru</text>
+    <rect x="34" y="314" width="430" height="74" rx="12" fill="#dcfce7" stroke="#4ade80" stroke-width="2"/>
+    <text x="249" y="344" class="status">Tidak / Ya: Download</text>
+    <text x="249" y="370" class="bodySmall" text-anchor="middle">stage + validate + apply</text>
+    <rect x="500" y="314" width="430" height="74" rx="12" fill="#ffedd5" stroke="#fb923c" stroke-width="2"/>
+    <text x="715" y="344" class="danger">Ya / Ya: Conflict Center</text>
+    <text x="715" y="370" class="bodySmall" text-anchor="middle">jangan overwrite otomatis</text>
+    <text x="34" y="430" class="body">Resolusi: Gabungkan aman · Gunakan Drive · Gunakan lokal · Simpan kedua versi</text>
+    <text x="34" y="462" class="bodySmall">Semua pilihan: recovery copy → staging → validasi → atomic apply.</text>
+  </g>
+
+  <g transform="translate(70 870)">
+    <rect width="1000" height="430" rx="20" fill="#f8fafc" stroke="#99f6e4" stroke-width="3"/>
+    <text x="28" y="44" class="panelTitle">3. Switch Google Account</text>
+    <text x="28" y="72" class="panelSub">Switch mengganti dataset Google, bukan konflik dengan database lokal.</text>
+    <rect x="34" y="110" width="220" height="58" rx="12" fill="#ccfbf1" stroke="#14b8a6" stroke-width="2"/>
+    <text x="144" y="145" class="nodeSmall">Pilih akun Google</text>
+    <path d="M254 139 H280" class="lineThin"/>
+    <rect x="280" y="110" width="250" height="58" rx="12" fill="#ccfbf1" stroke="#14b8a6" stroke-width="2"/>
+    <text x="405" y="145" class="nodeSmall">Passphrase tujuan</text>
+    <path d="M530 139 H556" class="lineThin"/>
+    <rect x="556" y="110" width="250" height="58" rx="12" fill="#ccfbf1" stroke="#14b8a6" stroke-width="2"/>
+    <text x="681" y="145" class="nodeSmall">Validasi key + sesi</text>
+    <rect x="34" y="220" width="410" height="74" rx="12" fill="#dcfce7" stroke="#4ade80" stroke-width="2"/>
+    <text x="239" y="250" class="status">Private kosong: Start Fresh</text>
+    <text x="239" y="276" class="bodySmall" text-anchor="middle">tidak membuka Conflict Center</text>
+    <rect x="480" y="220" width="480" height="74" rx="12" fill="#dcfce7" stroke="#4ade80" stroke-width="2"/>
+    <text x="720" y="250" class="status">Private ada: Sync Private</text>
+    <text x="720" y="276" class="bodySmall" text-anchor="middle">selesai dulu, baru cek recovery Team</text>
+    <text x="34" y="360" class="body">Akun Google baru/kosong tidak dianggap konflik. Upload pertama memerlukan konfirmasi.</text>
+  </g>
+
+  <g transform="translate(1130 870)">
+    <rect width="1000" height="430" rx="20" fill="#f8fafc" stroke="#fde68a" stroke-width="3"/>
+    <text x="28" y="44" class="panelTitle">4. Team Follow-up</text>
+    <text x="28" y="72" class="panelSub">Team selalu diperiksa setelah Private Sync dan tetap terisolasi.</text>
+    <rect x="34" y="110" width="220" height="58" rx="12" fill="#fef3c7" stroke="#f59e0b" stroke-width="2"/>
+    <text x="144" y="145" class="nodeSmall">Recovery copy Team?</text>
+    <path d="M254 139 H280" class="lineThin"/>
+    <rect x="280" y="110" width="240" height="58" rx="12" fill="#fef3c7" stroke="#f59e0b" stroke-width="2"/>
+    <text x="400" y="145" class="nodeSmall">Workspace tersedia?</text>
+    <path d="M520 139 H546" class="lineThin"/>
+    <rect x="546" y="110" width="240" height="58" rx="12" fill="#fef3c7" stroke="#f59e0b" stroke-width="2"/>
+    <text x="666" y="145" class="nodeSmall">Snapshot tersedia?</text>
+    <path d="M786 139 H812" class="lineThin"/>
+    <rect x="812" y="110" width="150" height="58" rx="12" fill="#fef3c7" stroke="#f59e0b" stroke-width="2"/>
+    <text x="887" y="145" class="nodeSmall">Role</text>
+    <rect x="34" y="220" width="430" height="74" rx="12" fill="#f1f5f9" stroke="#94a3b8" stroke-width="2"/>
+    <text x="249" y="250" class="nodeSmall">Team belum tersedia</text>
+    <text x="249" y="276" class="bodySmall" text-anchor="middle">Private tetap sukses, Team pending</text>
+    <rect x="500" y="220" width="462" height="74" rx="12" fill="#fef3c7" stroke="#f59e0b" stroke-width="2"/>
+    <text x="731" y="250" class="nodeSmall">Owner / Editor: push, pull, resolve</text>
+    <text x="731" y="276" class="bodySmall" text-anchor="middle">Viewer: pull only</text>
+    <text x="34" y="360" class="body">Jika izin atau jaringan belum siap, tandai pending dan minta tindakan saat aplikasi dibuka.</text>
+  </g>
+
+  <g transform="translate(70 1330)">
+    <rect width="2060" height="220" rx="20" fill="#fdf2f8" stroke="#f9a8d4" stroke-width="3"/>
+    <text x="28" y="42" class="panelTitle">5. Capsule</text>
+    <text x="28" y="70" class="panelSub">Tidak mengubah akun aktif, Room, Private Sync, atau Team Sync.</text>
+    <rect x="34" y="100" width="220" height="58" rx="12" fill="#fce7f3" stroke="#ec4899" stroke-width="2"/><text x="144" y="135" class="nodeSmall">Input kode</text>
+    <path d="M254 129 H280" class="lineThin"/>
+    <rect x="280" y="100" width="260" height="58" rx="12" fill="#fce7f3" stroke="#ec4899" stroke-width="2"/><text x="410" y="135" class="nodeSmall">Buka exact fileId</text>
+    <path d="M540 129 H566" class="lineThin"/>
+    <rect x="566" y="100" width="250" height="58" rx="12" fill="#fce7f3" stroke="#ec4899" stroke-width="2"/><text x="691" y="135" class="nodeSmall">Validasi envelope</text>
+    <path d="M816 129 H842" class="lineThin"/>
+    <rect x="842" y="100" width="250" height="58" rx="12" fill="#fce7f3" stroke="#ec4899" stroke-width="2"/><text x="967" y="135" class="nodeSmall">Biometrik atau PIN</text>
+    <path d="M1092 129 H1118" class="lineThin"/>
+    <rect x="1118" y="100" width="390" height="58" rx="12" fill="#dcfce7" stroke="#4ade80" stroke-width="2"/><text x="1313" y="135" class="nodeSmall">Viewer read-only selama 24 jam</text>
+    <rect x="1540" y="100" width="260" height="58" rx="12" fill="#fee2e2" stroke="#f87171" stroke-width="2"/><text x="1670" y="135" class="danger">404 / revoked / expired</text>
+    <text x="1830" y="135" class="bodySmall">gagal secara aman, plaintext tidak dibuka</text>
+  </g>
+
+  <text x="70" y="1600" class="subtitle">Semua download dan resolusi memakai staging, recovery copy, validasi, lalu atomic activation. Kegagalan tidak mengubah database aktif.</text>
+</svg>
