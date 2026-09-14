@@ -13,8 +13,10 @@ import android.view.WindowManager
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -202,6 +204,9 @@ private val destinations = listOf(
 )
 
 private fun routePosition(route: String?): Int = destinations.indexOfFirst { it.route == route }.takeIf { it >= 0 } ?: 0
+
+private val PageTransitionEasing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
+private const val PAGE_TRANSITION_DURATION = 420
 
 @Composable
 private fun AccessCodeField(
@@ -1111,10 +1116,10 @@ private fun MainScaffold(
                     }
                     slideIntoContainer(
                         towards = direction,
-                        animationSpec = tween(280, easing = FastOutSlowInEasing),
-                        initialOffset = { fullWidth -> (fullWidth * 0.12f).toInt() },
+                        animationSpec = tween(PAGE_TRANSITION_DURATION, easing = PageTransitionEasing),
+                        initialOffset = { fullWidth -> (fullWidth * 0.45f).toInt() },
                     ) + fadeIn(
-                        animationSpec = tween(280, easing = FastOutSlowInEasing),
+                        animationSpec = tween(360, easing = LinearOutSlowInEasing),
                     )
                 }
             },
@@ -1127,10 +1132,10 @@ private fun MainScaffold(
                     }
                     slideOutOfContainer(
                         towards = direction,
-                        animationSpec = tween(240, easing = FastOutSlowInEasing),
-                        targetOffset = { fullWidth -> -(fullWidth * 0.12f).toInt() },
+                        animationSpec = tween(PAGE_TRANSITION_DURATION, easing = PageTransitionEasing),
+                        targetOffset = { fullWidth -> -(fullWidth * 0.45f).toInt() },
                     ) + fadeOut(
-                        animationSpec = tween(200, easing = FastOutLinearInEasing),
+                        animationSpec = tween(300, easing = FastOutLinearInEasing),
                     )
                 }
             },
@@ -1143,10 +1148,10 @@ private fun MainScaffold(
                     }
                     slideIntoContainer(
                         towards = direction,
-                        animationSpec = tween(280, easing = FastOutSlowInEasing),
-                        initialOffset = { fullWidth -> (fullWidth * 0.12f).toInt() },
+                        animationSpec = tween(PAGE_TRANSITION_DURATION, easing = PageTransitionEasing),
+                        initialOffset = { fullWidth -> (fullWidth * 0.45f).toInt() },
                     ) + fadeIn(
-                        animationSpec = tween(280, easing = FastOutSlowInEasing),
+                        animationSpec = tween(360, easing = LinearOutSlowInEasing),
                     )
                 }
             },
@@ -1159,10 +1164,10 @@ private fun MainScaffold(
                     }
                     slideOutOfContainer(
                         towards = direction,
-                        animationSpec = tween(240, easing = FastOutSlowInEasing),
-                        targetOffset = { fullWidth -> -(fullWidth * 0.12f).toInt() },
+                        animationSpec = tween(PAGE_TRANSITION_DURATION, easing = PageTransitionEasing),
+                        targetOffset = { fullWidth -> -(fullWidth * 0.45f).toInt() },
                     ) + fadeOut(
-                        animationSpec = tween(200, easing = FastOutLinearInEasing),
+                        animationSpec = tween(300, easing = FastOutLinearInEasing),
                     )
                 }
             },
