@@ -96,12 +96,12 @@ fun ActivityScreen(state: KronUiState, onEvent: (String) -> Unit, modifier: Modi
     LazyColumn(
         state = listState,
         modifier = modifier,
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item {
-            Text("TRANSAKSI & AUDIT", style = MaterialTheme.typography.headlineMedium)
-            Text("Semua kejadian tetap tersimpan dan dapat ditelusuri", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("TRANSAKSI & AUDIT", style = MaterialTheme.typography.headlineMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            Text("Semua kejadian tersimpan dan dapat ditelusuri", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("Akun aktif: ${state.activeAccount?.name ?: "Belum ada"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
         }
         item {
@@ -190,78 +190,81 @@ private fun ActivityCard(event: ActivityRow, valuesVisible: Boolean, channels: S
     val impact = event.primaryImpact()
     val money = displayMoney(impact, valuesVisible)
     val reversed = event.reversedByEventId != null
-    val auditOnly = reversed || event.type in setOf("ARCHIVE", "RESTORE", "REVERSAL")
+    val date = LocalDate.ofEpochDay(event.effectiveEpochDay).format(fullDateFormat)
+    val time = java.time.Instant.ofEpochMilli(event.createdAt)
+        .atZone(java.time.ZoneId.systemDefault())
+        .format(timeFormat)
     HudCard(
         modifier = Modifier
             .fillMaxWidth()
             .then(if (readOnly) Modifier else Modifier.clickable { onEvent(event.id) })
             .semantics(mergeDescendants = true) { role = Role.Button },
     ) {
-        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f).padding(end = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(
                     event.title,
-                    modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.titleMedium.copy(textDecoration = if (reversed) TextDecoration.LineThrough else null),
-                    maxLines = 3,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (channels.isNotEmpty()) {
+                        channels.sorted().forEach { ChannelBadge(it) }
+                    } else {
+                        Text(eventTypeLabel(event.type), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+                    }
+                    Text(
+                        "$date, $time",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (event.note.isNotBlank()) {
+                    Text(event.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    money,
+                    color = signedColor(impact),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    maxLines = 1,
                 )
                 ActivityStatus(event)
             }
-            Text(
-                money,
-                color = signedColor(impact),
-                style = MaterialTheme.typography.titleLarge,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                eventTypeLabel(event.type),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.tertiary,
-            )
-            if (channels.isNotEmpty()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    channels.sorted().forEach { ChannelBadge(it) }
-                }
-            }
-            val date = LocalDate.ofEpochDay(event.effectiveEpochDay).format(fullDateFormat)
-            val time = java.time.Instant.ofEpochMilli(event.createdAt)
-                .atZone(java.time.ZoneId.systemDefault())
-                .format(timeFormat)
-            Text(
-                "$date, $time",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (event.note.isNotBlank()) {
-                Text(event.note, style = MaterialTheme.typography.bodySmall, maxLines = 4, overflow = TextOverflow.Ellipsis)
-            }
-            Text(
-                if (readOnly) "Mode baca - akun Team Viewer"
-                else if (auditOnly) "Ketuk untuk melihat audit" else "Ketuk untuk melihat audit atau membuat koreksi",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-            )
         }
     }
 }
 
 @Composable
 private fun ActivityStatus(event: ActivityRow) {
-    val label = when {
-        event.reversedByEventId != null -> "DIBATALKAN"
-        event.type == "ARCHIVE" -> "ARSIP"
-        event.type == "RESTORE" || event.type == "RESTORE_REVERSAL" -> "DIPULIHKAN"
-        event.source == "SYSTEM" -> "SISTEM"
-        event.source == "AUTOMATION" || event.type == "AUTOMATION" -> "OTOMATIS"
-        else -> "TERCATAT"
+    val (label, tint) = when {
+        event.reversedByEventId != null -> "BATAL" to MaterialTheme.colorScheme.error
+        event.type == "ARCHIVE" -> "ARSIP" to MaterialTheme.colorScheme.onSurfaceVariant
+        event.type == "RESTORE" || event.type == "RESTORE_REVERSAL" -> "PULIH" to MaterialTheme.colorScheme.tertiary
+        event.source == "SYSTEM" -> "SISTEM" to MaterialTheme.colorScheme.onSurfaceVariant
+        event.source == "AUTOMATION" || event.type == "AUTOMATION" -> "AUTO" to MaterialTheme.colorScheme.tertiary
+        else -> return
     }
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = MaterialTheme.shapes.extraSmall,
+        color = tint.copy(alpha = 0.12f),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(3.dp),
     ) {
-        Text(label, modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall)
+        Text(
+            label,
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = tint,
+        )
     }
 }
 

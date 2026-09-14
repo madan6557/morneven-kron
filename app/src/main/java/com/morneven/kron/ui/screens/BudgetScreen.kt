@@ -85,8 +85,8 @@ fun BudgetScreen(
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column {
-                    Text("BUDGET", style = MaterialTheme.typography.headlineMedium)
-                    Text("Portfolio bulanan dan tahunan", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("BUDGET", style = MaterialTheme.typography.headlineMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                    Text("Portfolio bulanan dan tahunan", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("Akun aktif: ${state.activeAccount?.name ?: "Belum ada"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
                 }
                 if (!showArchive && !readOnly) {
@@ -248,14 +248,14 @@ private fun ActiveBudgetCard(
         Spacer(Modifier.height(14.dp))
         val visibleRows = rows.filter { it.isActive }
         visibleRows.forEach { row ->
-            Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                     ChannelBadge(row.fundingChannel)
-                    Text(row.categoryName, maxLines = 1)
+                    Text(row.categoryName, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 }
                 Column(horizontalAlignment = Alignment.End) {
-                    Text(displayMoney(row.availableAmount, visible), color = signedColor(row.availableAmount), style = MaterialTheme.typography.labelLarge)
-                    Text("booking ${displayMoney(row.bookedAmount, visible)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(displayMoney(row.availableAmount, visible), color = signedColor(row.availableAmount), style = MaterialTheme.typography.titleSmall)
+                    Text("booking ${displayMoney(row.bookedAmount, visible)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }

@@ -173,64 +173,65 @@ fun wordIdr(value: Long): String {
 @Composable
 fun HudCard(
     modifier: Modifier = Modifier,
-    accent: Color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+    accent: Color = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f),
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Card(
         modifier = modifier,
-        shape = RoundedCornerShape(topStart = 4.dp, topEnd = 18.dp, bottomEnd = 4.dp, bottomStart = 18.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, accent),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        border = BorderStroke(0.8.dp, accent),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
-        Column(modifier = Modifier.padding(16.dp), content = content)
+        Column(modifier = Modifier.padding(14.dp), content = content)
     }
 }
 
 @Composable
 fun SectionHeader(title: String, action: String? = null, onAction: (() -> Unit)? = null) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(title.uppercase(), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.tertiary)
+        Text(title.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
         if (action != null && onAction != null) {
-            androidx.compose.material3.TextButton(onClick = onAction) { Text(action) }
+            androidx.compose.material3.TextButton(
+                onClick = onAction,
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+            ) { Text(action, style = MaterialTheme.typography.labelMedium) }
         }
     }
-    Spacer(Modifier.height(8.dp))
-    Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)))
-    Spacer(Modifier.height(12.dp))
 }
 
 @Composable
 fun ChannelBadge(channel: String) {
     val cash = channel == FundingChannel.CASH
+    val color = if (cash) KronGold else KronBlue
     Surface(
-        shape = RoundedCornerShape(6.dp),
-        color = (if (cash) KronGold else KronBlue).copy(alpha = 0.15f),
-        border = BorderStroke(1.dp, (if (cash) KronGold else KronBlue).copy(alpha = 0.45f)),
+        shape = RoundedCornerShape(4.dp),
+        color = color.copy(alpha = 0.12f),
+        border = BorderStroke(0.7.dp, color.copy(alpha = 0.35f)),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
         ) {
             Icon(
                 imageVector = if (cash) Icons.Outlined.Payments else Icons.Outlined.AccountBalanceWallet,
                 contentDescription = null,
-                tint = if (cash) KronGold else KronBlue,
-                modifier = Modifier.height(13.dp),
+                tint = color,
+                modifier = Modifier.height(11.dp),
             )
-            Text(if (cash) "Cash" else "eBudget", style = MaterialTheme.typography.labelSmall, color = if (cash) KronGold else KronBlue)
+            Text(if (cash) "Cash" else "eBudget", style = MaterialTheme.typography.labelSmall, color = color)
         }
     }
 }
 
 @Composable
 fun Metric(label: String, value: String, modifier: Modifier = Modifier, color: Color = MaterialTheme.colorScheme.onSurface) {
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, style = MaterialTheme.typography.titleMedium, color = color, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
@@ -247,7 +248,7 @@ fun BudgetProgress(booked: Long, available: Long, modifier: Modifier = Modifier)
     }
     LinearProgressIndicator(
         progress = { progress },
-        modifier = modifier.fillMaxWidth().height(6.dp),
+        modifier = modifier.fillMaxWidth().height(4.dp),
         color = color,
         trackColor = MaterialTheme.colorScheme.surfaceVariant,
     )

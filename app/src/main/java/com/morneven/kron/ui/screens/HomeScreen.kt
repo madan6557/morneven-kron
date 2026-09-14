@@ -101,13 +101,13 @@ fun HomeScreen(
 
     LazyColumn(
         modifier = modifier,
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column {
-                    Text("KRON", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Black)
+                    Text("KRON", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                     Text(state.activeAccount?.name ?: "Belum ada akun aktif", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
                     Text(
                         LocalDate.now().format(DateTimeFormatter.ofPattern("MMMM yyyy", Locale.forLanguageTag("id-ID"))).uppercase(),
@@ -125,42 +125,44 @@ fun HomeScreen(
         }
 
         item {
-            HudCard(accent = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)) {
-                Text("SALDO AKUN AKTIF", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
-                Spacer(Modifier.height(8.dp))
+            HudCard(accent = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("SALDO AKUN AKTIF", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+                    Text(state.activeAccount?.name ?: "", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Spacer(Modifier.height(6.dp))
                 Text(
                     displayPrimaryHomeMoney(state.totalAssets, visible),
                     modifier = Modifier.clickable(enabled = visible && shouldCompactPrimaryHomeMoney(state.totalAssets)) { exactMoney = "Total aset nyata" to state.totalAssets },
                     style = MaterialTheme.typography.displaySmall,
-                    fontWeight = FontWeight.Black,
+                    fontWeight = FontWeight.Bold,
                     maxLines = 1,
                 )
-                Text("Total Cash dan eBudget pada akun aktif", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(18.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                Spacer(Modifier.height(12.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Metric("Cash", displaySecondaryHomeMoney(cashAssets, visible), Modifier.weight(1f).clickable(enabled = visible && shouldCompactSecondaryHomeMoney(cashAssets)) { exactMoney = "Total Cash" to cashAssets }, KronGold)
                     Metric("eBudget", displaySecondaryHomeMoney(eBudgetAssets, visible), Modifier.weight(1f).clickable(enabled = visible && shouldCompactSecondaryHomeMoney(eBudgetAssets)) { exactMoney = "Total eBudget" to eBudgetAssets }, KronBlue)
                 }
-                Spacer(Modifier.height(16.dp))
-                Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f), shape = MaterialTheme.shapes.medium) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Main Vault", style = MaterialTheme.typography.labelLarge)
-                            Text(displaySecondaryHomeMoney(state.totalVault, visible), modifier = Modifier.clickable(enabled = visible && shouldCompactSecondaryHomeMoney(state.totalVault)) { exactMoney = "Main Vault" to state.totalVault }, style = MaterialTheme.typography.labelLarge, maxLines = 1)
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { ChannelBadge(FundingChannel.CASH) }
-                            Text(displaySecondaryHomeMoney(state.vaultCash, visible), modifier = Modifier.clickable(enabled = visible && shouldCompactSecondaryHomeMoney(state.vaultCash)) { exactMoney = "Main Vault Cash" to state.vaultCash }, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { ChannelBadge(FundingChannel.EBUDGET) }
-                            Text(displaySecondaryHomeMoney(state.vaultEBudget, visible), modifier = Modifier.clickable(enabled = visible && shouldCompactSecondaryHomeMoney(state.vaultEBudget)) { exactMoney = "Main Vault eBudget" to state.vaultEBudget }, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Reserve rollover", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
-                            val rollover = state.rolloverCash + state.rolloverEBudget
-                            Text(displaySecondaryHomeMoney(rollover, visible), modifier = Modifier.clickable(enabled = visible && shouldCompactSecondaryHomeMoney(rollover)) { exactMoney = "Reserve rollover" to rollover }, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
-                        }
+                Spacer(Modifier.height(10.dp))
+                androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+                Spacer(Modifier.height(10.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Vault", style = MaterialTheme.typography.labelMedium)
+                        ChannelBadge(FundingChannel.CASH)
+                        Text(displaySecondaryHomeMoney(state.vaultCash, visible), modifier = Modifier.clickable(enabled = visible && shouldCompactSecondaryHomeMoney(state.vaultCash)) { exactMoney = "Main Vault Cash" to state.vaultCash }, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        ChannelBadge(FundingChannel.EBUDGET)
+                        Text(displaySecondaryHomeMoney(state.vaultEBudget, visible), modifier = Modifier.clickable(enabled = visible && shouldCompactSecondaryHomeMoney(state.vaultEBudget)) { exactMoney = "Main Vault eBudget" to state.vaultEBudget }, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                val rollover = state.rolloverCash + state.rolloverEBudget
+                if (rollover > 0 || !visible) {
+                    Spacer(Modifier.height(6.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("Reserve rollover", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+                        Text(displaySecondaryHomeMoney(rollover, visible), modifier = Modifier.clickable(enabled = visible && shouldCompactSecondaryHomeMoney(rollover)) { exactMoney = "Reserve rollover" to rollover }, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -251,11 +253,11 @@ fun HomeScreen(
             Column {
                 SectionHeader("Cash flow bulan ini")
                 HudCard {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Metric("Masuk", displayMoney(state.cashflow.income, visible), Modifier.fillMaxWidth(), KronGreen)
-                        Metric("Keluar", displayMoney(state.cashflow.expense, visible), Modifier.fillMaxWidth(), MaterialTheme.colorScheme.error)
-                        val net = state.cashflow.income - state.cashflow.expense
-                        Metric("Net", displayMoney(net, visible), Modifier.fillMaxWidth(), signedColor(net))
+                    val net = state.cashflow.income - state.cashflow.expense
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Metric("Masuk", displayMoney(state.cashflow.income, visible), Modifier.weight(1f), KronGreen)
+                        Metric("Keluar", displayMoney(state.cashflow.expense, visible), Modifier.weight(1f), MaterialTheme.colorScheme.error)
+                        Metric("Net", displayMoney(net, visible), Modifier.weight(1f), signedColor(net))
                     }
                 }
             }
@@ -360,14 +362,14 @@ fun HomeScreen(
 
 @Composable
 private fun QuickAction(icon: ImageVector, label: String, color: Color, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Surface(
-            modifier = Modifier.size(52.dp).clickable(onClick = onClick),
-            shape = MaterialTheme.shapes.medium,
-            color = color.copy(alpha = 0.14f),
-            border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.4f)),
+            modifier = Modifier.size(46.dp).clickable(onClick = onClick),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+            color = color.copy(alpha = 0.12f),
+            border = androidx.compose.foundation.BorderStroke(0.8.dp, color.copy(alpha = 0.35f)),
         ) {
-            Box(contentAlignment = Alignment.Center) { Icon(icon, contentDescription = label, tint = color) }
+            Box(contentAlignment = Alignment.Center) { Icon(icon, contentDescription = label, tint = color, modifier = Modifier.size(22.dp)) }
         }
         Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false)
     }
