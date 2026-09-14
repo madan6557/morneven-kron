@@ -1,5 +1,16 @@
 # KRON Changelog
 
+## 1.7.6 - 2026-09-14
+
+- Redesain antarmuka (UI/UX) minimalis: tata letak terstruktur, tipografi proporsional, serta visual yang lebih bersih dan lega di seluruh layar aplikasi.
+- Kartu transaksi anti-clipping: struktur 3 baris terpisah (judul dan nominal, catatan transaksi, metadata badge kanal, status, dan tanggal-waktu) sehingga nominal uang tidak lagi terpotong atau turun baris.
+- Kartu saldo beranda: menampilkan total Main Vault terpadu dan menghilangkan redundansi judul pada badge kanal [CASH] dan [EBUDGET].
+- Hierarki margin dan kontainer terstandarisasi: sudut kartu (14 dp), tombol dan kolom input (10 dp), dan chip filter (8 dp) yang konsisten dengan gaya HUD.
+- Peningkatan menu navigasi bawah (Bottom Navigation Bar): meniadakan kotak/rectangle highlight pada tab aktif dan menggantinya dengan ikon solid merah serta teks tebal minimalis.
+- Transisi halaman horizontal geser murni: menghilangkan efek ghost / cross-fade transparansi dengan transisi geser horizontal penuh (350 ms, FastOutSlowInEasing) dan latar belakang layar 100% solid.
+- Standarisasi ukuran ikon aplikasi: menyesuaikan skala foreground adaptive icon (0.68x -> 0.48x) pada build release dan debug agar proporsional dan selaras dengan standar aplikasi Android lainnya.
+- Bump versionCode 97 -> 98 dan versionName 1.7.5 -> 1.7.6.
+
 ## 1.7.5 - 2026-09-14
 
 - Perbaikan kategori budget: aksi hapus kategori kini mengarsipkan kategori (isArchived = true), mengembalikan sisa dana ke Main Vault, dan menghapus template portfolio periode mendatang.
