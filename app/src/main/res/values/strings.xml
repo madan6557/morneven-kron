@@ -3,5 +3,13 @@
     <string name="app_name">KRON</string>
     <string name="notification_channel_name">Aktivitas Keuangan</string>
     <string name="notification_channel_description">Pengingat budget dan transaksi otomatis KRON</string>
+    <string name="widget_name">KRON Ringkasan &amp; Pintasan</string>
+    <string name="widget_description">Pantau saldo akun aktif dan akses pintasan transaksi cepat KRON</string>
+    <string name="widget_action_expense">Keluar</string>
+    <string name="widget_action_income">Masuk</string>
+    <string name="widget_action_transfer">Transfer</string>
+    <string name="widget_total_balance_label">TOTAL SALDO</string>
+    <string name="widget_cash_label">Cash</string>
+    <string name="widget_ebudget_label">eBudget</string>
 </resources>
 

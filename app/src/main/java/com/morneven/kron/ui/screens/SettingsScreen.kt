@@ -60,10 +60,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.material.icons.outlined.Widgets
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import android.widget.Toast
 import com.morneven.kron.BuildConfig
+import com.morneven.kron.widget.KronWidgetManager
 import com.morneven.kron.data.AccountEntity
 import com.morneven.kron.data.AccountBalanceRow
 import com.morneven.kron.data.AccountSharingMode
@@ -170,6 +174,7 @@ fun SettingsScreen(
 ) {
     var showArchive by rememberSaveable { mutableStateOf(false) }
     var showGlossary by rememberSaveable { mutableStateOf(false) }
+    val context = LocalContext.current
     val activeAccounts = state.accountBalances
     val privateAccounts = activeAccounts.filter { account ->
         state.accounts.firstOrNull { it.id == account.id }?.sharingMode != AccountSharingMode.TEAM
@@ -497,6 +502,21 @@ fun SettingsScreen(
                         )
                     }
                 }
+                SettingRow(
+                    Icons.Outlined.Widgets,
+                    "Widget Layar Utama",
+                    "Pasang widget saldo dan transaksi cepat ke layar utama",
+                    onClick = {
+                        val pinned = KronWidgetManager.pinWidgetToHomeScreen(context)
+                        if (!pinned) {
+                            Toast.makeText(
+                                context,
+                                "Launcher tidak mendukung pin otomatis. Silakan pasang dari menu widget home screen.",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                    },
+                )
             }
         }
 

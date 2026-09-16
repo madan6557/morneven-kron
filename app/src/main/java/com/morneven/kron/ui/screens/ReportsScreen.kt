@@ -615,7 +615,7 @@ private data class CashFlowBucket(
 }
 
 private fun ActivityRow.isCashFlowEvent(): Boolean = when (type) {
-    "INCOME", "OPENING_BALANCE", "EXPENSE", "UNEXPECTED_EXPENSE", "AUTOMATION" -> cashImpact != 0L
+    "INCOME", "OPENING_BALANCE", "EXPENSE", "UNEXPECTED_EXPENSE", "AUTOMATION", "TRANSFER" -> cashImpact != 0L
     else -> false
 }
 

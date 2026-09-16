@@ -77,6 +77,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.morneven.kron.data.AccountEntity
 import com.morneven.kron.data.ActivityRow
 import com.morneven.kron.data.AuditSnapshotEntity
+import com.morneven.kron.data.AccountSharingMode
 import com.morneven.kron.data.AllocationBalanceRow
 import com.morneven.kron.data.AllocationDraft
 import com.morneven.kron.data.CategoryEntity
@@ -441,39 +442,42 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, St
 
 @Composable
 fun TransferDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, String, Long, String, Long, String) -> Unit) {
-    val accounts = state.accounts
     val sourceAccount = state.activeAccount
+    val allowedAccounts = remember(state.accounts, sourceAccount) {
+        state.accounts.filter { target ->
+            !target.isArchived && (sourceAccount?.sharingMode == AccountSharingMode.TEAM || target.sharingMode != AccountSharingMode.TEAM)
+        }
+    }
     var fromChannel by rememberSaveable { mutableStateOf(FundingChannel.CASH) }
-    var toAccountId by rememberSaveable { mutableStateOf(sourceAccount?.id ?: accounts.firstOrNull()?.id) }
+    var toAccountId by rememberSaveable { mutableStateOf(sourceAccount?.id ?: allowedAccounts.firstOrNull()?.id) }
     var toChannel by rememberSaveable { mutableStateOf(FundingChannel.EBUDGET) }
     var amount by rememberSaveable { mutableStateOf("") }
     var note by rememberSaveable { mutableStateOf("") }
-    val sourceRow = state.accountBalances.firstOrNull { it.id == sourceAccount?.id }
-    val sourceBalance = if (fromChannel == FundingChannel.CASH) sourceRow?.cashBalance ?: 0L else sourceRow?.eBudgetBalance ?: 0L
-    val targetAccount = accounts.firstOrNull { it.id == toAccountId }
+    val availableVault = if (fromChannel == FundingChannel.CASH) state.vaultCash else state.vaultEBudget
+    val targetAccount = allowedAccounts.firstOrNull { it.id == toAccountId } ?: state.accounts.firstOrNull { it.id == toAccountId }
     val distinctTarget = sourceAccount?.id != toAccountId || fromChannel != toChannel
-    FormDialog("Transfer dana", onDismiss, confirmEnabled = sourceAccount != null && toAccountId != null && distinctTarget && money(amount) in 1..sourceBalance, onConfirm = {
+    FormDialog("Transfer dana", onDismiss, confirmEnabled = sourceAccount != null && toAccountId != null && distinctTarget && money(amount) in 1..availableVault, onConfirm = {
         onSubmit(requireNotNull(sourceAccount).id, fromChannel, requireNotNull(toAccountId), toChannel, money(amount), note)
     }) {
         Text("Akun sumber: ${sourceAccount?.name ?: "Belum ada"}", style = MaterialTheme.typography.titleMedium)
         Text("Kanal sumber", style = MaterialTheme.typography.labelLarge)
         ChannelSelector(fromChannel) { fromChannel = it }
-        Text("Tersedia ${displayMoney(sourceBalance, state.valuesVisible)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        ChoiceField("Akun tujuan", toAccountId, accounts, { it.id }, { it.name }) { toAccountId = it }
+        Text("Tersedia di Main Vault ${displayMoney(availableVault, state.valuesVisible)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ChoiceField("Akun tujuan", toAccountId, allowedAccounts, { it.id }, { it.name }) { toAccountId = it }
         Text("Kanal tujuan", style = MaterialTheme.typography.labelLarge)
         ChannelSelector(toChannel) { toChannel = it }
         Text("Dari ${sourceAccount?.name ?: "-"} · ${channelLabel(fromChannel)} ke ${targetAccount?.name ?: "-"} · ${channelLabel(toChannel)}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.tertiary)
-        if (fromChannel != toChannel) {
-            Text("Transfer lintas kanal hanya memakai Main Vault. Dana kategori yang sudah terbooking tidak dapat dipindahkan dari sini.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
-        }
+        Text("Transfer dana selalu bersumber dari Main Vault. Dana kategori yang sudah terbooking tidak dapat ditransfer.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
         MoneyField(amount, { amount = it }, "Nominal")
         OutlinedTextField(note, { note = it }, label = { Text("Catatan") }, modifier = Modifier.fillMaxWidth())
         if (money(amount) > 0 && sourceAccount != null && targetAccount != null) {
+            val isInterAccount = sourceAccount.id != targetAccount.id
+            val flowDesc = if (isInterAccount) "Transfer antar akun mengubah saldo kas masing-masing akun." else "Konversi kanal tidak mengubah total saldo akun."
             LedgerPreviewCard(
                 debit = "Aset tujuan ${targetAccount.name} ${channelLabel(toChannel)} bertambah ${displayMoney(money(amount), state.valuesVisible)}",
                 credit = "Aset sumber ${sourceAccount.name} ${channelLabel(fromChannel)} berkurang ${displayMoney(money(amount), state.valuesVisible)}",
-                budget = "Cash flow tidak berubah. Main Vault mengikuti akun dan kanal tujuan.",
-                after = "Saldo sumber setelah transfer ${displayMoney(sourceBalance - money(amount), state.valuesVisible)}",
+                budget = flowDesc,
+                after = "Sisa Main Vault sumber setelah transfer ${displayMoney(availableVault - money(amount), state.valuesVisible)}",
             )
         }
     }

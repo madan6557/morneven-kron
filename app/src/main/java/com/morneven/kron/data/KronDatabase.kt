@@ -1374,7 +1374,7 @@ abstract class KronDatabase : RoomDatabase() {
                     db.execSQL("DROP TRIGGER IF EXISTS sync_write_guard_${table}_$operation")
                 }
             }
-            // ponytail: sync_write_guard removed — transactions await SnapshotOperationLock instead of ABORT; re-add guard only if invariant proves race without DB trigger
+            // ponytail: sync_write_guard removed; transactions await SnapshotOperationLock instead of ABORT; re-add guard only if invariant proves race without DB trigger
             // previously guardedTables were blocked during SYNCING/DOWNLOADING/RESTART_REQUIRED; now sync and writes serialize via shared Mutex
         }
 

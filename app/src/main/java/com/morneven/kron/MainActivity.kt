@@ -57,9 +57,12 @@ import com.morneven.kron.team.TeamDriveScopeProbe
 import com.morneven.kron.team.TeamDriveScopeProbeFactory
 import com.morneven.kron.team.TeamSyncRuntime
 import com.morneven.kron.team.TeamSyncScheduler
+import android.content.Intent
+import com.morneven.kron.ui.ActionDialog
 import com.morneven.kron.ui.KronApp
 import com.morneven.kron.ui.MainViewModel
 import com.morneven.kron.ui.theme.KronTheme
+import com.morneven.kron.widget.KronWidgetProvider
 import dagger.Lazy
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -89,6 +92,7 @@ class MainActivity : FragmentActivity() {
     private var databaseOpening = false
     private var freshInstall = false
     private var pendingSyncActivation = false
+    private var pendingQuickAction by mutableStateOf<ActionDialog?>(null)
     private val stagedActivationMutex = Mutex()
 
     private val createPreUpgradeBackup = registerForActivityResult(
@@ -121,6 +125,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleQuickAction(intent)
         lifecycleScope.launch {
             databaseRuntime.pendingSyncActivation.collect { pending ->
                 if (pending) applyPendingSyncActivationIfSafe()
@@ -152,6 +157,22 @@ class MainActivity : FragmentActivity() {
         super.onResume()
         if (DatabaseAccessGate.isReady()) viewModel.refreshForCurrentDate()
         applyPendingSyncActivationIfSafe()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleQuickAction(intent)
+    }
+
+    private fun handleQuickAction(intent: Intent?) {
+        val action = intent?.getStringExtra(KronWidgetProvider.EXTRA_QUICK_ACTION) ?: return
+        pendingQuickAction = when (action) {
+            KronWidgetProvider.ACTION_EXPENSE -> ActionDialog.EXPENSE
+            KronWidgetProvider.ACTION_INCOME -> ActionDialog.INCOME
+            KronWidgetProvider.ACTION_TRANSFER -> ActionDialog.TRANSFER
+            else -> null
+        }
     }
 
     private fun applyPendingSyncActivationIfSafe() {
@@ -235,6 +256,8 @@ class MainActivity : FragmentActivity() {
                         driveSyncRuntime = driveSyncRuntime,
                         teamDriveScopeProbe = teamDriveScopeProbe,
                         capsuleDriveScopeProbe = capsuleDriveScopeProbe,
+                        initialActionDialog = pendingQuickAction,
+                        onConsumeInitialAction = { pendingQuickAction = null },
                         onApplyStagedSnapshot = ::applyStagedSnapshot,
                     )
                 }

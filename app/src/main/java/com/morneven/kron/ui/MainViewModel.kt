@@ -380,6 +380,21 @@ class MainViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            uiState.collect { state ->
+                val active = state.activeAccount
+                if (active != null) {
+                    com.morneven.kron.widget.KronWidgetManager.updateCache(
+                        context = context,
+                        accountName = active.name,
+                        totalBalance = state.totalAssets,
+                        cashBalance = state.totalCashAssets,
+                        ebudgetBalance = state.totalEBudgetAssets,
+                        valuesVisible = state.valuesVisible,
+                    )
+                }
+            }
+        }
+        viewModelScope.launch {
             combine(repository.allocations, preferences.budgetAlertsEnabled) { allocations, enabled -> allocations to enabled }
                 .collect { (allocations, enabled) ->
                     if (enabled) budgetNotifier.sync(allocations.filter { !it.portfolioArchived && it.periodStatus != PeriodStatus.CLOSED })

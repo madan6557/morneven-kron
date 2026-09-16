@@ -270,13 +270,13 @@ interface KronDao {
                e.relatedEventId,
                COALESCE(e.reversedByEventId, (SELECT rv.id FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id ORDER BY rv.createdAt, rv.id LIMIT 1)) AS reversedByEventId,
                e.accountId,
-               COALESCE((SELECT SUM(amount) FROM cash_journal_lines WHERE eventId = e.id), 0) AS cashImpact,
-               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'VAULT'), 0) AS vaultImpact,
-               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND allocationId IS NOT NULL), 0) AS budgetImpact,
-               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'ROLLOVER'), 0) AS rolloverImpact,
-               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'UNALLOCATED'), 0) AS unallocatedImpact,
-               COALESCE((SELECT SUM(amount) FROM ledger_lines WHERE eventId = e.id AND side = 'DEBIT'), 0) AS ledgerDebit,
-               COALESCE((SELECT SUM(amount) FROM ledger_lines WHERE eventId = e.id AND side = 'CREDIT'), 0) AS ledgerCredit,
+               COALESCE((SELECT SUM(amount) FROM cash_journal_lines WHERE eventId = e.id AND accountId = :accountId), 0) AS cashImpact,
+               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'VAULT' AND accountId = :accountId), 0) AS vaultImpact,
+               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND allocationId IS NOT NULL AND accountId = :accountId), 0) AS budgetImpact,
+               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'ROLLOVER' AND accountId = :accountId), 0) AS rolloverImpact,
+               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'UNALLOCATED' AND accountId = :accountId), 0) AS unallocatedImpact,
+               COALESCE((SELECT SUM(amount) FROM ledger_lines WHERE eventId = e.id AND side = 'DEBIT' AND accountId = :accountId), 0) AS ledgerDebit,
+               COALESCE((SELECT SUM(amount) FROM ledger_lines WHERE eventId = e.id AND side = 'CREDIT' AND accountId = :accountId), 0) AS ledgerCredit,
                CASE
                    WHEN EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) THEN 'Reversed'
                    WHEN e.type = 'CORRECTION' THEN 'Corrected'
@@ -291,13 +291,15 @@ interface KronDao {
                         (SELECT deviceId FROM journal_seals s WHERE s.eventId=e.id),'Tidak tersedia') AS deviceId
         FROM activity_events e
         WHERE e.accountId = :accountId
+           OR EXISTS (SELECT 1 FROM cash_journal_lines c WHERE c.eventId = e.id AND c.accountId = :accountId)
+           OR EXISTS (SELECT 1 FROM budget_journal_lines b WHERE b.eventId = e.id AND b.accountId = :accountId)
         ORDER BY e.effectiveEpochDay DESC, e.createdAt DESC
     """)
     fun observeActivitiesForAccount(accountId: Long): Flow<List<ActivityRow>>
 
     @Query("SELECT DISTINCT eventId, fundingChannel FROM cash_journal_lines ORDER BY eventId, fundingChannel")
     fun observeEventChannels(): Flow<List<EventChannelRow>>
-    @Query("SELECT DISTINCT c.eventId, c.fundingChannel FROM cash_journal_lines c JOIN activity_events e ON e.id = c.eventId WHERE e.accountId = :accountId ORDER BY c.eventId, c.fundingChannel")
+    @Query("SELECT DISTINCT c.eventId, c.fundingChannel FROM cash_journal_lines c WHERE c.accountId = :accountId ORDER BY c.eventId, c.fundingChannel")
     fun observeEventChannelsForAccount(accountId: Long): Flow<List<EventChannelRow>>
 
     @Query("""
@@ -311,13 +313,22 @@ interface KronDao {
     """)
     fun observeCashflow(startDay: Long, endDay: Long): Flow<CashflowRow>
     @Query("""
+        WITH event_impacts AS (
+            SELECT
+                e.id,
+                e.type,
+                SUM(c.amount) AS net_cash
+            FROM activity_events e
+            JOIN cash_journal_lines c ON c.eventId = e.id
+            WHERE e.effectiveEpochDay BETWEEN :startDay AND :endDay
+              AND c.accountId = :accountId
+              AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id)
+            GROUP BY e.id, e.type
+        )
         SELECT
-            COALESCE(SUM(CASE WHEN e.type IN ('INCOME','OPENING_BALANCE','AUTOMATION') AND c.amount > 0 THEN c.amount ELSE 0 END), 0) AS income,
-            -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','UNEXPECTED_EXPENSE','AUTOMATION') AND c.amount < 0 THEN c.amount ELSE 0 END), 0) AS expense
-        FROM activity_events e
-        JOIN cash_journal_lines c ON c.eventId = e.id
-        WHERE e.effectiveEpochDay BETWEEN :startDay AND :endDay AND e.accountId = :accountId
-          AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id)
+            COALESCE(SUM(CASE WHEN (type IN ('INCOME','OPENING_BALANCE','AUTOMATION','TRANSFER')) AND net_cash > 0 THEN net_cash ELSE 0 END), 0) AS income,
+            -COALESCE(SUM(CASE WHEN (type IN ('EXPENSE','UNEXPECTED_EXPENSE','AUTOMATION','TRANSFER')) AND net_cash < 0 THEN net_cash ELSE 0 END), 0) AS expense
+        FROM event_impacts
     """)
     fun observeCashflow(startDay: Long, endDay: Long, accountId: Long): Flow<CashflowRow>
 
@@ -460,13 +471,13 @@ interface KronDao {
                e.relatedEventId,
                COALESCE(e.reversedByEventId, (SELECT rv.id FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id ORDER BY rv.createdAt, rv.id LIMIT 1)) AS reversedByEventId,
                e.accountId,
-               COALESCE((SELECT SUM(amount) FROM cash_journal_lines WHERE eventId = e.id), 0) AS cashImpact,
-               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'VAULT'), 0) AS vaultImpact,
-               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND allocationId IS NOT NULL), 0) AS budgetImpact,
-               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'ROLLOVER'), 0) AS rolloverImpact,
-               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'UNALLOCATED'), 0) AS unallocatedImpact,
-               COALESCE((SELECT SUM(amount) FROM ledger_lines WHERE eventId = e.id AND side = 'DEBIT'), 0) AS ledgerDebit,
-               COALESCE((SELECT SUM(amount) FROM ledger_lines WHERE eventId = e.id AND side = 'CREDIT'), 0) AS ledgerCredit,
+               COALESCE((SELECT SUM(amount) FROM cash_journal_lines WHERE eventId = e.id AND accountId = :accountId), 0) AS cashImpact,
+               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'VAULT' AND accountId = :accountId), 0) AS vaultImpact,
+               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND allocationId IS NOT NULL AND accountId = :accountId), 0) AS budgetImpact,
+               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'ROLLOVER' AND accountId = :accountId), 0) AS rolloverImpact,
+               COALESCE((SELECT SUM(amount) FROM budget_journal_lines WHERE eventId = e.id AND bucket = 'UNALLOCATED' AND accountId = :accountId), 0) AS unallocatedImpact,
+               COALESCE((SELECT SUM(amount) FROM ledger_lines WHERE eventId = e.id AND side = 'DEBIT' AND accountId = :accountId), 0) AS ledgerDebit,
+               COALESCE((SELECT SUM(amount) FROM ledger_lines WHERE eventId = e.id AND side = 'CREDIT' AND accountId = :accountId), 0) AS ledgerCredit,
                CASE
                    WHEN EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) THEN 'Reversed'
                    WHEN e.type = 'CORRECTION' THEN 'Corrected'
@@ -481,6 +492,8 @@ interface KronDao {
                         (SELECT deviceId FROM journal_seals s WHERE s.eventId=e.id),'Tidak tersedia') AS deviceId
         FROM activity_events e
         WHERE e.accountId = :accountId
+           OR EXISTS (SELECT 1 FROM cash_journal_lines c WHERE c.eventId = e.id AND c.accountId = :accountId)
+           OR EXISTS (SELECT 1 FROM budget_journal_lines b WHERE b.eventId = e.id AND b.accountId = :accountId)
         ORDER BY e.effectiveEpochDay DESC, e.createdAt DESC
     """)
     suspend fun activitiesForAccount(accountId: Long): List<ActivityRow>
@@ -500,7 +513,7 @@ interface KronDao {
     @Query("SELECT * FROM budget_periods WHERE portfolioId IN (:portfolioIds) ORDER BY startEpochDay DESC")
     suspend fun periodsForPortfolios(portfolioIds: List<Long>): List<BudgetPeriodEntity>
 
-    // ponytail: budget category CRUD helpers — reuse existing tables, no new entity
+    // ponytail: budget category CRUD helpers - reuse existing tables, no new entity
     @Query("SELECT * FROM allocations WHERE periodId = :periodId AND categoryId = :categoryId") suspend fun allocationsForCategory(periodId: Long, categoryId: Long): List<AllocationEntity>
     @Query("SELECT COUNT(*) FROM budget_journal_lines WHERE allocationId = :allocationId") suspend fun budgetLineCountForAllocation(allocationId: Long): Int
     @Query("SELECT COUNT(*) FROM transaction_splits WHERE allocationId = :allocationId") suspend fun splitCountForAllocation(allocationId: Long): Int

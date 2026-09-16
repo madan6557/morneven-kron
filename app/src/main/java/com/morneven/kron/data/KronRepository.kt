@@ -733,7 +733,11 @@ class KronRepository private constructor(
         dao.insertEvent(ActivityEventEntity(
             id = eventId,
             type = LedgerType.TRANSFER,
-            title = if (fromChannel == toChannel) "Transfer antar akun" else "Konversi $fromChannel ke $toChannel",
+            title = if (fromAccountId == toAccountId) {
+                "Konversi $fromChannel ke $toChannel"
+            } else {
+                "Transfer: ${fromAccount.name} → ${toAccount.name}"
+            },
             note = note,
             source = "USER",
             effectiveEpochDay = LocalDate.now().toEpochDay(),
@@ -1107,7 +1111,7 @@ class KronRepository private constructor(
         eventId
     }
 
-    // ponytail: CRUD kategori budget — reuse Category/Allocation/Template, no new table
+    // ponytail: CRUD kategori budget - reuse Category/Allocation/Template, no new table
     suspend fun addBudgetCategoryToPeriod(
         periodId: Long,
         categoryName: String,
@@ -1219,7 +1223,7 @@ class KronRepository private constructor(
         eventId
     }
 
-    // ponytail: periode-isolasi rename — history (periode < current) tetap pakai kategori lama
+    // ponytail: periode-isolasi rename - history (periode < current) tetap pakai kategori lama
     suspend fun renameBudgetCategoryInPeriod(periodId: Long, categoryId: Long, newName: String) = database.withTransaction {
         val trimmed = newName.trim()
         require(trimmed.isNotBlank()) { "Nama kategori wajib diisi" }
@@ -1236,7 +1240,7 @@ class KronRepository private constructor(
         require(!oldCategory.name.equals(trimmed, ignoreCase = true)) { "Tidak ada perubahan nama" }
         val duplicate = dao.categoriesForAccount(activeId).firstOrNull { it.direction == TransactionDirection.EXPENSE && it.name.equals(trimmed, ignoreCase = true) }
         require(duplicate == null) { "Nama kategori sudah dipakai" }
-        // buat kategori baru — history tetap pakai kategori lama
+        // buat kategori baru - history tetap pakai kategori lama
         val newCategoryId = dao.insertCategory(CategoryEntity(name = trimmed, direction = TransactionDirection.EXPENSE, color = oldCategory.color, icon = oldCategory.icon, accountId = oldCategory.accountId))
         val allocs = dao.allocationsForCategory(periodId, categoryId)
         require(allocs.isNotEmpty()) { "Kategori tidak ada di periode ini" }
@@ -1463,12 +1467,17 @@ class KronRepository private constructor(
                 "Hanya pembayaran hutang terakhir yang dapat dibatalkan"
             }
         }
-        requireActiveAccount(original.accountId)
+        val involvedAccounts = buildSet {
+            add(original.accountId)
+            addAll(dao.cashLinesForEvent(originalEventId).map { it.accountId })
+        }
+        val activeId = activeAccountId()
+        require(activeId in involvedAccounts) { "Hanya dapat memodifikasi akun aktif" }
         require(!dao.isEventReversed(originalEventId)) { "Event sudah dibalik" }
         require(original.type != LedgerType.REVERSAL) { "Reversal tidak dapat dibalik langsung" }
         require(original.type !in setOf(LedgerType.ARCHIVE, LedgerType.RESTORE)) { "Gunakan tindakan Pulihkan atau Arsipkan dari halaman terkait" }
         val eventId = UUID.randomUUID().toString()
-        val reversalAccountId = original.accountId
+        val reversalAccountId = activeId
         dao.insertEvent(ActivityEventEntity(
             id = eventId,
             type = LedgerType.REVERSAL,

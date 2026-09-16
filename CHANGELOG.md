@@ -1,5 +1,15 @@
 # KRON Changelog
 
+## 1.7.7 - 2026-09-16
+
+- Widget Layar Utama (Home Screen AppWidget 4x2): menampilkan ringkasan saldo akun aktif, rincian kanal Cash dan eBudget, tombol privasi toggle mata (Rp ••••••), serta tombol aksi cepat (- Keluar, + Masuk, ⇄ Transfer).
+- Aksi Cepat Widget: mengetuk tombol aksi pada widget langsung membuka aplikasi ke dialog pencatatan pengeluaran, pemasukan, atau transfer yang dituju.
+- Kolom nominal interaktif dengan kalkulator: mendukung evaluasi ekspresi aritmatika (+, -, ×, ÷) di semua dialog nominal uang dengan live preview hasil hitung dan baris tombol operator cepat di atas keyboard.
+- Audit dan mutasi transfer antar akun: pencatatan audit mencatat mutasi keluar bertanda minus pada akun sumber dan mutasi masuk bertanda plus pada akun penerima dengan deskripsi riwayat transaksi yang jelas.
+- Perbaikan laporan arus kas: transfer antar akun dihitung secara tepat pada arus kas Masuk/Keluar di Laporan, sementara konversi antar kanal internal satu akun tetap netral (Rp 0).
+- Integrasi pasang widget langsung dari menu Pengaturan (Tampilan -> Widget Layar Utama).
+- Bump versionCode 98 -> 99 dan versionName 1.7.6 -> 1.7.7.
+
 ## 1.7.6 - 2026-09-14
 
 - Redesain antarmuka (UI/UX) minimalis: tata letak terstruktur, tipografi proporsional, serta visual yang lebih bersih dan lega di seluruh layar aplikasi.

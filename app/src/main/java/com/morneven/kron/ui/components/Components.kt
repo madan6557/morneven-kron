@@ -15,10 +15,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Payments
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -57,9 +59,18 @@ fun formatIdr(value: Long): String = "Rp " + NumberFormat.getIntegerInstance(Loc
 
 fun sanitizeMoneyDigits(value: String): String = value.filter(Char::isDigit).trimStart('0')
 
-fun parseMoneyInput(value: String): Long = sanitizeMoneyDigits(value).toLongOrNull() ?: 0L
+fun parseMoneyInput(value: String): Long {
+    if (MoneyExpressionEvaluator.isExpression(value)) {
+        val evaluated = MoneyExpressionEvaluator.evaluate(value)
+        if (evaluated != null) return evaluated.coerceAtLeast(0L)
+    }
+    return sanitizeMoneyDigits(value).toLongOrNull() ?: 0L
+}
 
 fun formatMoneyInput(value: String): String {
+    if (MoneyExpressionEvaluator.isExpression(value)) {
+        return MoneyExpressionEvaluator.sanitizeExpression(value)
+    }
     val digits = sanitizeMoneyDigits(value)
     if (digits.isEmpty()) return ""
     return digits.toLongOrNull()?.let {
@@ -89,7 +100,7 @@ fun kronTextFieldColors() = androidx.compose.material3.OutlinedTextFieldDefaults
     unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
 )
 
-/** Keeps the raw Rupiah digits in state while presenting grouped Indonesian digits. */
+/** Keeps the raw Rupiah digits or arithmetic expression in state while presenting grouped Indonesian digits. */
 @Composable
 fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
     var field by remember { mutableStateOf(TextFieldValue(formatMoneyInput(value))) }
@@ -98,32 +109,117 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
         val formatted = formatMoneyInput(value)
         if (field.text != formatted) field = TextFieldValue(formatted, TextRange(formatted.length))
     }
-    androidx.compose.material3.OutlinedTextField(
-        value = field,
-        onValueChange = { candidate ->
-            touched = true
-            val raw = sanitizeMoneyDigits(candidate.text)
-            if (raw.isNotEmpty() && raw.toLongOrNull() == null) return@OutlinedTextField
-            val digitsBeforeCursor = digitCountBefore(candidate.text, candidate.selection.start)
-            val formatted = formatMoneyInput(raw)
-            val cursor = offsetForDigitCount(formatted, digitsBeforeCursor.coerceAtMost(formatted.count(Char::isDigit)))
-            field = TextFieldValue(formatted, TextRange(cursor))
-            onValue(raw)
-        },
-        label = { Text(label) },
-        prefix = { Text("Rp ", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) },
-        modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
-        shape = com.morneven.kron.ui.theme.KronFieldShape,
-        colors = kronTextFieldColors(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        isError = touched && parseMoneyInput(value) <= 0,
-        supportingText = if (touched && parseMoneyInput(value) <= 0) {
-            { Text("Nominal harus lebih dari nol") }
-        } else {
-            null
-        },
-    )
+
+    val isExpr = MoneyExpressionEvaluator.isExpression(field.text)
+    val evaluated = if (isExpr) MoneyExpressionEvaluator.evaluate(field.text) else null
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        androidx.compose.material3.OutlinedTextField(
+            value = field,
+            onValueChange = { candidate ->
+                touched = true
+                if (MoneyExpressionEvaluator.isExpression(candidate.text)) {
+                    val sanitized = MoneyExpressionEvaluator.sanitizeExpression(candidate.text)
+                    field = TextFieldValue(sanitized, candidate.selection)
+                    onValue(sanitized)
+                } else {
+                    val raw = sanitizeMoneyDigits(candidate.text)
+                    if (raw.isNotEmpty() && raw.toLongOrNull() == null) return@OutlinedTextField
+                    val digitsBeforeCursor = digitCountBefore(candidate.text, candidate.selection.start)
+                    val formatted = formatMoneyInput(raw)
+                    val cursor = offsetForDigitCount(formatted, digitsBeforeCursor.coerceAtMost(formatted.count(Char::isDigit)))
+                    field = TextFieldValue(formatted, TextRange(cursor))
+                    onValue(raw)
+                }
+            },
+            label = { Text(label) },
+            prefix = { Text("Rp ", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) },
+            trailingIcon = if (isExpr && evaluated != null) {
+                {
+                    IconButton(onClick = {
+                        val resStr = evaluated.toString()
+                        val formatted = formatMoneyInput(resStr)
+                        field = TextFieldValue(formatted, TextRange(formatted.length))
+                        onValue(resStr)
+                    }) {
+                        Icon(Icons.Outlined.Check, contentDescription = "Terapkan hasil hitung", tint = KronGreen)
+                    }
+                }
+            } else null,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            shape = com.morneven.kron.ui.theme.KronFieldShape,
+            colors = kronTextFieldColors(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            isError = touched && parseMoneyInput(value) <= 0,
+            supportingText = {
+                if (isExpr) {
+                    if (evaluated != null) {
+                        Text(
+                            text = "= " + formatIdr(evaluated),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = KronGreen,
+                        )
+                    } else {
+                        Text(
+                            text = "Menghitung...",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else if (touched && parseMoneyInput(value) <= 0) {
+                    Text("Nominal harus lebih dari nol")
+                }
+            },
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val ops = listOf("+" to " + ", "-" to " - ", "×" to " × ", "÷" to " ÷ ")
+            ops.forEach { (symbol, toInsert) ->
+                Surface(
+                    onClick = {
+                        touched = true
+                        val current = field.text.trimEnd()
+                        val newText = if (current.isEmpty()) "0$toInsert" else "$current$toInsert"
+                        field = TextFieldValue(newText, TextRange(newText.length))
+                        onValue(newText)
+                    },
+                    shape = RoundedCornerShape(6.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.weight(1f).height(30.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(symbol, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+            Surface(
+                onClick = {
+                    if (evaluated != null) {
+                        val resStr = evaluated.toString()
+                        val formatted = formatMoneyInput(resStr)
+                        field = TextFieldValue(formatted, TextRange(formatted.length))
+                        onValue(resStr)
+                    }
+                },
+                enabled = evaluated != null,
+                shape = RoundedCornerShape(6.dp),
+                color = if (evaluated != null) KronGreen.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f),
+                modifier = Modifier.weight(1f).height(30.dp),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text("=", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = if (evaluated != null) KronGreen else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f))
+                }
+            }
+        }
+    }
 }
 
 private const val MONEY_MASK = "Rp ••••••"

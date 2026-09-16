@@ -62,4 +62,13 @@ class MoneyFormatterTest {
         assertEquals("Rp ••••••", displayPrimaryHomeMoney(7_222_223_225_222, false))
         assertEquals("Rp ••••••", displaySecondaryHomeMoney(7_222_223_225_222, false))
     }
+
+    @Test
+    fun parsesArithmeticExpressionsInNominalFields() {
+        assertEquals(20L, parseMoneyInput("10+10"))
+        assertEquals(40L, parseMoneyInput("50-10"))
+        assertEquals(35000L, parseMoneyInput("10.000 + 25.000"))
+        assertEquals(100000L, parseMoneyInput("5 * 20000"))
+        assertEquals(50000L, parseMoneyInput("100000 / 2"))
+    }
 }

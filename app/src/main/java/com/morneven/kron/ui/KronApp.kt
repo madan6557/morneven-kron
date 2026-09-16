@@ -180,7 +180,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.launch
 
-private enum class ActionDialog { INCOME, EXPENSE, TRANSFER, PORTFOLIO, RESOLVE, CHANNEL_TRANSFER, ACCOUNT }
+enum class ActionDialog { INCOME, EXPENSE, TRANSFER, PORTFOLIO, RESOLVE, CHANNEL_TRANSFER, ACCOUNT }
 
 private data class Destination(
     val route: String,
@@ -237,6 +237,8 @@ fun KronApp(
     driveSyncRuntime: DriveSyncRuntime?,
     teamDriveScopeProbe: TeamDriveScopeProbe?,
     capsuleDriveScopeProbe: CapsuleDriveScopeProbe?,
+    initialActionDialog: ActionDialog? = null,
+    onConsumeInitialAction: () -> Unit = {},
     onApplyStagedSnapshot: suspend () -> Result<Unit>,
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -355,7 +357,17 @@ fun KronApp(
         if (locked) {
             LockScreen(lockError, state.authFailures, state.authLockedUntil, authenticate)
         } else {
-            MainScaffold(state, viewModel, activity, driveSyncRuntime, teamDriveScopeProbe, capsuleDriveScopeProbe, onApplyStagedSnapshot)
+            MainScaffold(
+                state,
+                viewModel,
+                activity,
+                driveSyncRuntime,
+                teamDriveScopeProbe,
+                capsuleDriveScopeProbe,
+                initialActionDialog,
+                onConsumeInitialAction,
+                onApplyStagedSnapshot,
+            )
         }
     }
 }
@@ -368,6 +380,8 @@ private fun MainScaffold(
     driveSyncRuntime: DriveSyncRuntime?,
     teamDriveScopeProbe: TeamDriveScopeProbe?,
     capsuleDriveScopeProbe: CapsuleDriveScopeProbe?,
+    initialActionDialog: ActionDialog? = null,
+    onConsumeInitialAction: () -> Unit = {},
     onApplyStagedSnapshot: suspend () -> Result<Unit>,
 ) {
     val navController = rememberNavController()
@@ -376,7 +390,13 @@ private fun MainScaffold(
     val teamReadOnly = state.activeAccount?.sharingMode == AccountSharingMode.TEAM &&
         state.teamWorkspace?.localRole == TeamRole.VIEWER
     val snackbar = remember { SnackbarHostState() }
-    var dialog by remember { mutableStateOf<ActionDialog?>(null) }
+    var dialog by remember { mutableStateOf<ActionDialog?>(initialActionDialog) }
+    LaunchedEffect(initialActionDialog) {
+        if (initialActionDialog != null) {
+            dialog = initialActionDialog
+            onConsumeInitialAction()
+        }
+    }
     var auditId by remember { mutableStateOf<String?>(null) }
     var detailPeriod by remember { mutableStateOf<Pair<Long, Boolean>?>(null) }
     var historyPortfolioId by remember { mutableStateOf<Long?>(null) }
