@@ -1,5 +1,15 @@
 # KRON Changelog
 
+## 1.7.8 - 2026-09-16
+
+- Keypad Kalkulator KRON sebagai keyboard default saat input nominal: kolom nominal pada dialog transaksi (keluar, masuk, transfer) otomatis membuka keypad kalkulator KRON secara default untuk kemudahan perhitungan langsung.
+- Pencegahan pemunculan keyboard numerik Android: integrasi InterceptPlatformTextInput dan touch interceptor overlay memastikan keyboard sistem Android tidak muncul tiba-tiba saat kolom nominal disentuh.
+- Fleksibilitas keyboard sistem dan strip operator: tetap menyediakan toggle keyboard sistem dan baris operator cepat ([ + ] [ − ] [ × ] [ ÷ ] [ ( ] [ ) ] [ 000 ] [ = ]) saat pengguna memilih mengetik dengan keyboard bawaan perangkat.
+- Widget adaptif ukuran Nx2: widget layar utama kini mendukung penyesuaian ukuran horizontal (Nx2) dengan label tombol aksi yang otomatis disembunyikan pada ukuran ringkas (lebar < 240 dp) agar tata letak tetap proporsional dan rapi.
+- Logo resmi KRON pada widget: widget menggunakan visual logo pita interlocking gradien resmi KRON serta pratinjau resolusi tinggi pada menu widget launcher perangkat.
+- Dukungan aksi cepat widget dengan kunci aplikasi: penekanan tombol aksi pada widget (- Keluar, + Masuk, ⇄ Transfer) langsung melanjutkan ke dialog yang dituju setelah autentikasi biometrik atau PIN berhasil diselesaikan.
+- Bump versionCode 99 -> 100 dan versionName 1.7.7 -> 1.7.8.
+
 ## 1.7.7 - 2026-09-16
 
 - Widget Layar Utama (Home Screen AppWidget 4x2): menampilkan ringkasan saldo akun aktif, rincian kanal Cash dan eBudget, tombol privasi toggle mata (Rp ••••••), serta tombol aksi cepat (- Keluar, + Masuk, ⇄ Transfer).
