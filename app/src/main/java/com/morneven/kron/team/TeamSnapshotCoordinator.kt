@@ -453,11 +453,7 @@ class TeamSnapshotCoordinator @Inject constructor(
             if (updated != 1) throw TeamSnapshotConflictException()
             mergeParents.clear(workspace.teamId)
             markPrivateRecoveryChanged()
-            try {
-                uploadReceiptBlobs(accessToken, accountId, teamKey)
-            } catch (_: Exception) {
-                // ponytail: gagal upload bukti bukan kegagalan snapshot
-            }
+            // Receipt blobs are excluded from cloud upload to conserve bandwidth and speed up sync.
             return uploaded
         } finally {
             teamKey.fill(0)

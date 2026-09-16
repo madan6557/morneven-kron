@@ -181,9 +181,12 @@
                 android:src="@drawable/ic_widget_remove" />
 
             <TextView
+                android:id="@+id/tv_widget_action_expense_label"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="4dp"
+                android:ellipsize="none"
+                android:singleLine="true"
                 android:text="@string/widget_action_expense"
                 android:textColor="#B94D59"
                 android:textSize="12sp"
@@ -211,9 +214,12 @@
                 android:src="@drawable/ic_widget_add" />
 
             <TextView
+                android:id="@+id/tv_widget_action_income_label"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="4dp"
+                android:ellipsize="none"
+                android:singleLine="true"
                 android:text="@string/widget_action_income"
                 android:textColor="#57B58C"
                 android:textSize="12sp"
@@ -240,9 +246,12 @@
                 android:src="@drawable/ic_widget_transfer" />
 
             <TextView
+                android:id="@+id/tv_widget_action_transfer_label"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="4dp"
+                android:ellipsize="none"
+                android:singleLine="true"
                 android:text="@string/widget_action_transfer"
                 android:textColor="#65A9EF"
                 android:textSize="12sp"

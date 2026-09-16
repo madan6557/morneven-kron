@@ -5,6 +5,8 @@ import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
+import android.view.View
 import android.widget.RemoteViews
 import com.morneven.kron.MainActivity
 import com.morneven.kron.R
@@ -29,6 +31,15 @@ class KronWidgetProvider : AppWidgetProvider() {
         }
     }
 
+    override fun onAppWidgetOptionsChanged(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetId: Int,
+        newOptions: Bundle,
+    ) {
+        updateAppWidget(context, appWidgetManager, appWidgetId)
+    }
+
     companion object {
         const val ACTION_TOGGLE_VISIBILITY = "com.morneven.kron.action.TOGGLE_VISIBILITY"
         const val ACTION_REQUEST_PIN = "com.morneven.kron.action.REQUEST_PIN"
@@ -40,6 +51,15 @@ class KronWidgetProvider : AppWidgetProvider() {
         fun updateAppWidget(context: Context, appWidgetManager: AppWidgetManager, appWidgetId: Int) {
             val snapshot = KronWidgetManager.getSnapshot(context)
             val views = RemoteViews(context.packageName, R.layout.kron_app_widget)
+
+            // Adapt action buttons for Nx2 sizes (e.g. 2x2, 3x2, 4x2)
+            val options = appWidgetManager.getAppWidgetOptions(appWidgetId)
+            val minWidth = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH) ?: 0
+            val showLabels = minWidth == 0 || minWidth >= 240
+            val labelVisibility = if (showLabels) View.VISIBLE else View.GONE
+            views.setViewVisibility(R.id.tv_widget_action_expense_label, labelVisibility)
+            views.setViewVisibility(R.id.tv_widget_action_income_label, labelVisibility)
+            views.setViewVisibility(R.id.tv_widget_action_transfer_label, labelVisibility)
 
             // Account and balances
             views.setTextViewText(R.id.tv_widget_account_name, snapshot.accountName)

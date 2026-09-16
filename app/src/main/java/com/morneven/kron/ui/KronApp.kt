@@ -271,6 +271,13 @@ fun KronApp(
             return@KronTheme
         }
         var locked by rememberSaveable { mutableStateOf(false) }
+        var queuedQuickAction by rememberSaveable { mutableStateOf<ActionDialog?>(null) }
+        LaunchedEffect(initialActionDialog) {
+            if (initialActionDialog != null) {
+                queuedQuickAction = initialActionDialog
+                onConsumeInitialAction()
+            }
+        }
         var backgroundAt by remember { mutableLongStateOf(0L) }
         var lockError by remember { mutableStateOf<String?>(null) }
         DisposableEffect(activity, locked) {
@@ -355,18 +362,24 @@ fun KronApp(
             onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
         }
         if (locked) {
-            LockScreen(lockError, state.authFailures, state.authLockedUntil, authenticate)
+            val pendingLabel = when (queuedQuickAction) {
+                ActionDialog.EXPENSE -> "Catat Pengeluaran"
+                ActionDialog.INCOME -> "Catat Pemasukan"
+                ActionDialog.TRANSFER -> "Transfer"
+                else -> null
+            }
+            LockScreen(lockError, state.authFailures, state.authLockedUntil, authenticate, pendingLabel)
         } else {
             MainScaffold(
-                state,
-                viewModel,
-                activity,
-                driveSyncRuntime,
-                teamDriveScopeProbe,
-                capsuleDriveScopeProbe,
-                initialActionDialog,
-                onConsumeInitialAction,
-                onApplyStagedSnapshot,
+                state = state,
+                viewModel = viewModel,
+                activity = activity,
+                driveSyncRuntime = driveSyncRuntime,
+                teamDriveScopeProbe = teamDriveScopeProbe,
+                capsuleDriveScopeProbe = capsuleDriveScopeProbe,
+                initialActionDialog = queuedQuickAction,
+                onConsumeInitialAction = { queuedQuickAction = null },
+                onApplyStagedSnapshot = onApplyStagedSnapshot,
             )
         }
     }
@@ -2714,7 +2727,7 @@ private fun MainScaffold(
 }
 
 @Composable
-private fun LockScreen(error: String?, failures: Int, lockedUntil: Long, onUnlock: () -> Unit) {
+private fun LockScreen(error: String?, failures: Int, lockedUntil: Long, onUnlock: () -> Unit, pendingActionLabel: String? = null) {
     val primary = MaterialTheme.colorScheme.primary
     val tertiary = MaterialTheme.colorScheme.tertiary
     var now by remember(lockedUntil) { mutableLongStateOf(System.currentTimeMillis()) }
@@ -2779,6 +2792,23 @@ private fun LockScreen(error: String?, failures: Int, lockedUntil: Long, onUnloc
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(top = 8.dp),
                 )
+                if (pendingActionLabel != null) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
+                    ) {
+                        Text(
+                            "Melanjutkan ke: $pendingActionLabel",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            textAlign = TextAlign.Center,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(8.dp),
+                        )
+                    }
+                }
                 if (error != null) {
                     Surface(
                         modifier = Modifier.fillMaxWidth().padding(top = 18.dp),

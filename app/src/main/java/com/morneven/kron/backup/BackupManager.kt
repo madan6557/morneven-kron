@@ -124,7 +124,7 @@ class BackupManager @Inject constructor(
     suspend fun createPortableSnapshotPayload(): ByteArray = withContext(Dispatchers.IO) {
         snapshotOperationLock.withLock {
             ByteArrayOutputStream().use { output ->
-                writePortableSnapshot(output)
+                writePortableSnapshot(output, includeAttachments = false)
                 require(output.size().toLong() <= MAX_SYNC_PAYLOAD_BYTES) { "Snapshot terlalu besar untuk sinkronisasi Drive" }
                 output.toByteArray()
             }
@@ -134,7 +134,7 @@ class BackupManager @Inject constructor(
     suspend fun createTeamSnapshotPayload(accountId: Long): ByteArray = withContext(Dispatchers.IO) {
         snapshotOperationLock.withLock {
             ByteArrayOutputStream().use { output ->
-                writePortableSnapshot(output, accountId)
+                writePortableSnapshot(output, accountId, includeAttachments = false)
                 require(output.size().toLong() <= MAX_SYNC_PAYLOAD_BYTES) { "Snapshot Team terlalu besar" }
                 output.toByteArray()
             }
@@ -438,7 +438,11 @@ class BackupManager @Inject constructor(
         }
     }
 
-    private suspend fun writePortableSnapshot(output: OutputStream, teamAccountId: Long? = null) {
+    private suspend fun writePortableSnapshot(
+        output: OutputStream,
+        teamAccountId: Long? = null,
+        includeAttachments: Boolean = true,
+    ) {
         database.openHelper.writableDatabase.query("PRAGMA wal_checkpoint(FULL)").use { it.moveToFirst() }
         val databaseFile = context.getDatabasePath(KronDatabase.DATABASE_NAME)
         require(databaseFile.exists()) { "Database belum tersedia" }
@@ -456,9 +460,13 @@ class BackupManager @Inject constructor(
                 require(workspace.teamId == account.teamId) { "Workspace Team tidak cocok" }
                 TeamSnapshotScope(accountId, workspace.teamId, workspace.generation)
             }
-            val receipts = teamScope?.let { database.kronDao().receiptsForAccount(it.accountId) }
-                ?: database.kronDao().receiptsForPrivateAccounts()
-            val attachments = collectAttachments(receipts)
+            val receipts = if (includeAttachments) {
+                teamScope?.let { database.kronDao().receiptsForAccount(it.accountId) }
+                    ?: database.kronDao().receiptsForPrivateAccounts()
+            } else {
+                emptyList()
+            }
+            val attachments = if (includeAttachments) collectAttachments(receipts) else emptyList()
             databaseEncryption.exportPlaintext(databaseFile, portable)
             if (teamScope == null) teamRecovery += buildTeamRecoveryCopies(portable)
             if (teamScope != null) {
@@ -584,6 +592,7 @@ class BackupManager @Inject constructor(
                 if (!hasRemoteTeams) {
                     preserveLocalTeams(validationFile, pendingReceipts)
                 }
+                preserveExistingReceiptFiles(validationFile, pendingReceipts)
                 normalizeSyncState(validationFile, extracted.manifest, preserveTargetSyncAccount, driveMetadata)
             }
             val recoveryKeys = importTeamRecoveryCopies(validationFile, teamRecoveryCopies(extracted))
@@ -869,6 +878,31 @@ class BackupManager @Inject constructor(
                         target.execSQL(
                             "UPDATE receipts SET localPath=? WHERE storageId=?",
                             arrayOf(attachmentStore.destination(storageId).absolutePath, storageId),
+                        )
+                    }
+                }
+            }
+        } finally {
+            target.close()
+        }
+    }
+
+    private fun preserveExistingReceiptFiles(candidate: File, pendingReceipts: File) {
+        val target = SQLiteDatabase.openDatabase(candidate.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+        try {
+            target.rawQuery("SELECT storageId FROM receipts", null).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val storageId = cursor.getString(0) ?: continue
+                    if (!STORAGE_ID.matches(storageId)) continue
+                    val existingFile = attachmentStore.destination(storageId)
+                    if (existingFile.isFile && isAppPrivate(existingFile)) {
+                        val staged = File(pendingReceipts, "$storageId.kat")
+                        if (!staged.exists()) {
+                            copyFileToNewAndSync(existingFile, staged)
+                        }
+                        target.execSQL(
+                            "UPDATE receipts SET localPath=? WHERE storageId=?",
+                            arrayOf(existingFile.absolutePath, storageId),
                         )
                     }
                 }
@@ -1282,16 +1316,26 @@ class BackupManager @Inject constructor(
                 "Jumlah metadata lampiran melebihi jumlah receipt"
             }
             if (receiptCount > attachments.size.toLong()) {
-                val placeholders = attachments.values.joinToString(",") { "?" }
-                val params = attachments.values.map { it.storageId }.toTypedArray()
-                sqlite.execSQL(
-                    """
-                        UPDATE receipts
-                        SET localPath = NULL
-                        WHERE localPath IS NOT NULL AND storageId NOT IN ($placeholders)
-                    """.trimIndent(),
-                    params,
-                )
+                if (attachments.isEmpty()) {
+                    sqlite.execSQL(
+                        """
+                            UPDATE receipts
+                            SET localPath = NULL
+                            WHERE localPath IS NOT NULL
+                        """.trimIndent(),
+                    )
+                } else {
+                    val placeholders = attachments.values.joinToString(",") { "?" }
+                    val params = attachments.values.map { it.storageId }.toTypedArray()
+                    sqlite.execSQL(
+                        """
+                            UPDATE receipts
+                            SET localPath = NULL
+                            WHERE localPath IS NOT NULL AND storageId NOT IN ($placeholders)
+                        """.trimIndent(),
+                        params,
+                    )
+                }
             }
             attachments.values.forEach { attachment ->
                 val exists = sqlite.rawQuery(
