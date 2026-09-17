@@ -697,7 +697,7 @@ fun SettingsScreen(
                                         modifier = Modifier.fillMaxSize(),
                                     ) {
                                         Text(
-                                            text = if (curr == WidgetCurrency.KRON) "KRM" else curr.shortCode,
+                                            text = curr.shortCode,
                                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                                             color = if (isSelected) KronGold else MaterialTheme.colorScheme.onSurface,
                                         )
