@@ -389,7 +389,6 @@ class MainViewModel @Inject constructor(
                         totalBalance = state.totalAssets,
                         cashBalance = state.totalCashAssets,
                         ebudgetBalance = state.totalEBudgetAssets,
-                        valuesVisible = state.valuesVisible,
                     )
                 }
             }

@@ -60,12 +60,31 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Payments
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.text.font.FontWeight
+import com.morneven.kron.ui.components.formatIdr
+import com.morneven.kron.ui.theme.KronGold
+import com.morneven.kron.widget.KronCurrencyManager
+import com.morneven.kron.widget.WidgetCurrency
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import android.widget.Toast
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
+import java.text.DecimalFormat
+import java.text.DecimalFormatSymbols
 import com.morneven.kron.BuildConfig
 import com.morneven.kron.widget.KronWidgetManager
 import com.morneven.kron.data.AccountEntity
@@ -174,7 +193,9 @@ fun SettingsScreen(
 ) {
     var showArchive by rememberSaveable { mutableStateOf(false) }
     var showGlossary by rememberSaveable { mutableStateOf(false) }
+    var showCurrencyDialog by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val activeAccounts = state.accountBalances
     val privateAccounts = activeAccounts.filter { account ->
         state.accounts.firstOrNull { it.id == account.id }?.sharingMode != AccountSharingMode.TEAM
@@ -517,6 +538,13 @@ fun SettingsScreen(
                         }
                     },
                 )
+                val defaultCurrency = KronWidgetManager.getDefaultCurrency(context)
+                SettingRow(
+                    Icons.Outlined.Payments,
+                    "Mata Uang & Kurs Widget",
+                    "Mata uang: ${defaultCurrency.displayName} • Ketuk untuk ubah atau sinkronkan kurs online",
+                    onClick = { showCurrencyDialog = true },
+                )
             }
         }
 
@@ -578,6 +606,214 @@ fun SettingsScreen(
                 }
             },
             confirmButton = { TextButton(onClick = { showGlossary = false }) { Text("Tutup") } },
+        )
+    }
+
+    if (showCurrencyDialog) {
+        var currentCurrency by remember { mutableStateOf(KronWidgetManager.getDefaultCurrency(context)) }
+        var isSyncing by remember { mutableStateOf(false) }
+        val lastSyncedAt = remember(isSyncing) { KronCurrencyManager.getLastSyncedTime(context) }
+        val syncDateText = if (lastSyncedAt > 0L) {
+            val instant = Instant.ofEpochMilli(lastSyncedAt)
+            val formatter = DateTimeFormatter.ofPattern("dd MMM yyyy, HH:mm", Locale.forLanguageTag("id-ID"))
+            formatter.format(instant.atZone(ZoneId.systemDefault()))
+        } else {
+            "Belum pernah"
+        }
+
+        AlertDialog(
+            onDismissRequest = { if (!isSyncing) showCurrencyDialog = false },
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.Widgets,
+                        contentDescription = null,
+                        tint = KronGold,
+                    )
+                    Text("Mata Uang & Kurs Widget")
+                }
+            },
+            text = {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    item {
+                        Text(
+                            "Pilih mata uang tampilan untuk widget KRON di Home Screen. Anda juga dapat mengetuk tombol mata uang langsung pada widget untuk beralih secara instan.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    items(WidgetCurrency.ALL, key = { it.code }) { curr ->
+                        val isSelected = curr == currentCurrency
+                        val idrRate = KronCurrencyManager.getIdrPerUnit(context, curr)
+                        val symbols = DecimalFormatSymbols(Locale.forLanguageTag("id-ID")).apply {
+                            groupingSeparator = '.'
+                            decimalSeparator = ','
+                        }
+                        val idrFormatter = DecimalFormat("#,##0", symbols)
+                        val rateDesc = when (curr) {
+                            WidgetCurrency.IDR -> "Mata uang utama (Basis 1:1)"
+                            WidgetCurrency.KRON -> "1 KRM = Rp ${idrFormatter.format(idrRate)}"
+                            else -> {
+                                val rateFormatter = DecimalFormat("#,##0.00", symbols)
+                                "1 ${curr.code} = Rp ${rateFormatter.format(idrRate)}"
+                            }
+                        }
+
+                        HudCard(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    currentCurrency = curr
+                                    KronWidgetManager.setDefaultCurrency(context, curr)
+                                    Toast.makeText(
+                                        context,
+                                        "Mata uang widget: ${curr.displayName}",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                },
+                            accent = if (isSelected) KronGold else MaterialTheme.colorScheme.primary.copy(alpha = 0.20f),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isSelected) KronGold.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
+                                    modifier = Modifier.size(40.dp),
+                                ) {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier.fillMaxSize(),
+                                    ) {
+                                        Text(
+                                            text = if (curr == WidgetCurrency.KRON) "KRM" else curr.shortCode,
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = if (isSelected) KronGold else MaterialTheme.colorScheme.onSurface,
+                                        )
+                                    }
+                                }
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = curr.displayName,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        )
+                                    }
+                                    Text(
+                                        text = rateDesc,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (isSelected) KronGold.copy(alpha = 0.9f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+
+                                RadioButton(
+                                    selected = isSelected,
+                                    onClick = {
+                                        currentCurrency = curr
+                                        KronWidgetManager.setDefaultCurrency(context, curr)
+                                        Toast.makeText(
+                                            context,
+                                            "Mata uang widget: ${curr.displayName}",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    },
+                                    colors = RadioButtonDefaults.colors(
+                                        selectedColor = KronGold,
+                                    ),
+                                )
+                            }
+                        }
+                    }
+
+                    item {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Sinkronisasi Kurs Pasar:",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            "Terakhir diperbarui: $syncDateText",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "* Kurs KRM berfluktuasi secara sintetis (mulai dari Rp 1.200). Kurs pasar otomatis diperbarui setiap 30 menit.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(6.dp))
+
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    isSyncing = true
+                                    val result = KronCurrencyManager.syncRatesOnline(context)
+                                    isSyncing = false
+                                    if (result.isSuccess) {
+                                        Toast.makeText(
+                                            context,
+                                            "Kurs berhasil diperbarui!",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    } else {
+                                        val errorMsg = result.exceptionOrNull()?.message ?: "Gagal memperbarui"
+                                        Toast.makeText(
+                                            context,
+                                            "Gagal sync kurs: $errorMsg (menggunakan kurs tersimpan/fallback)",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                }
+                            },
+                            enabled = !isSyncing,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            ),
+                        ) {
+                            if (isSyncing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = KronGold,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text("Menghubungi server kurs...")
+                            } else {
+                                Icon(
+                                    Icons.Outlined.Sync,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text("Sinkronkan Kurs Online Sekarang")
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showCurrencyDialog = false }) {
+                    Text("Tutup")
+                }
+            },
         )
     }
 }

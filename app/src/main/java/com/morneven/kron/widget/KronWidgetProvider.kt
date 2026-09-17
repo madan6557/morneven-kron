@@ -11,11 +11,36 @@ import android.widget.RemoteViews
 import com.morneven.kron.MainActivity
 import com.morneven.kron.R
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
 class KronWidgetProvider : AppWidgetProvider() {
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == ACTION_TOGGLE_VISIBILITY) {
-            KronWidgetManager.toggleVisibility(context)
+            val appWidgetId = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID)
+            if (appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                KronWidgetManager.toggleWidgetVisibilitySilent(context, appWidgetId)
+                val appWidgetManager = AppWidgetManager.getInstance(context)
+                if (appWidgetManager != null) {
+                    updateAppWidget(context, appWidgetManager, appWidgetId)
+                }
+            } else {
+                KronWidgetManager.toggleVisibility(context)
+            }
+            return
+        }
+        if (intent.action == ACTION_CYCLE_CURRENCY) {
+            val appWidgetId = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID)
+            if (appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                KronWidgetManager.cycleWidgetCurrencySilent(context, appWidgetId)
+                val appWidgetManager = AppWidgetManager.getInstance(context)
+                if (appWidgetManager != null) {
+                    updateAppWidget(context, appWidgetManager, appWidgetId)
+                }
+            }
             return
         }
         if (intent.action == ACTION_REQUEST_PIN) {
@@ -25,9 +50,28 @@ class KronWidgetProvider : AppWidgetProvider() {
         super.onReceive(context, intent)
     }
 
+    override fun onDeleted(context: Context, appWidgetIds: IntArray) {
+        KronWidgetManager.removeWidgetPreferences(context, appWidgetIds)
+        super.onDeleted(context, appWidgetIds)
+    }
+
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         for (appWidgetId in appWidgetIds) {
             updateAppWidget(context, appWidgetManager, appWidgetId)
+        }
+        val pendingResult = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                KronCurrencyManager.checkAndAutoSync(context)
+            } catch (_: Exception) {
+            } finally {
+                withContext(Dispatchers.Main) {
+                    for (appWidgetId in appWidgetIds) {
+                        updateAppWidget(context, appWidgetManager, appWidgetId)
+                    }
+                    pendingResult.finish()
+                }
+            }
         }
     }
 
@@ -42,6 +86,7 @@ class KronWidgetProvider : AppWidgetProvider() {
 
     companion object {
         const val ACTION_TOGGLE_VISIBILITY = "com.morneven.kron.action.TOGGLE_VISIBILITY"
+        const val ACTION_CYCLE_CURRENCY = "com.morneven.kron.action.CYCLE_CURRENCY"
         const val ACTION_REQUEST_PIN = "com.morneven.kron.action.REQUEST_PIN"
         const val EXTRA_QUICK_ACTION = "com.morneven.kron.extra.QUICK_ACTION"
         const val ACTION_EXPENSE = "EXPENSE"
@@ -49,7 +94,8 @@ class KronWidgetProvider : AppWidgetProvider() {
         const val ACTION_TRANSFER = "TRANSFER"
 
         fun updateAppWidget(context: Context, appWidgetManager: AppWidgetManager, appWidgetId: Int) {
-            val snapshot = KronWidgetManager.getSnapshot(context)
+            val snapshot = KronWidgetManager.getSnapshot(context, appWidgetId)
+            val currency = snapshot.currency
             val views = RemoteViews(context.packageName, R.layout.kron_app_widget)
 
             // Adapt action buttons for Nx2 sizes (e.g. 2x2, 3x2, 4x2)
@@ -61,19 +107,36 @@ class KronWidgetProvider : AppWidgetProvider() {
             views.setViewVisibility(R.id.tv_widget_action_income_label, labelVisibility)
             views.setViewVisibility(R.id.tv_widget_action_transfer_label, labelVisibility)
 
+            // Currency toggle button (displays 3-char code: IDR, KRM, USD, EUR, SGD, JPY)
+            val currencyBadgeText = currency.code
+            views.setTextViewText(R.id.btn_widget_currency, currencyBadgeText)
+
+            val cycleIntent = Intent(context, KronWidgetProvider::class.java).apply {
+                action = ACTION_CYCLE_CURRENCY
+                putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+                data = android.net.Uri.parse("kron://widget/currency/$appWidgetId")
+            }
+            val pendingCycle = PendingIntent.getBroadcast(
+                context,
+                2000 + appWidgetId,
+                cycleIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            views.setOnClickPendingIntent(R.id.btn_widget_currency, pendingCycle)
+
             // Account and balances
             views.setTextViewText(R.id.tv_widget_account_name, snapshot.accountName)
             views.setTextViewText(
                 R.id.tv_widget_total_balance,
-                KronWidgetManager.formatBalance(snapshot.totalBalance, snapshot.valuesVisible),
+                KronWidgetManager.formatBalance(snapshot.totalBalance, snapshot.valuesVisible, currency, context),
             )
             views.setTextViewText(
                 R.id.tv_widget_cash_balance,
-                KronWidgetManager.formatBalance(snapshot.cashBalance, snapshot.valuesVisible),
+                KronWidgetManager.formatBalance(snapshot.cashBalance, snapshot.valuesVisible, currency, context),
             )
             views.setTextViewText(
                 R.id.tv_widget_ebudget_balance,
-                KronWidgetManager.formatBalance(snapshot.ebudgetBalance, snapshot.valuesVisible),
+                KronWidgetManager.formatBalance(snapshot.ebudgetBalance, snapshot.valuesVisible, currency, context),
             )
 
             // Visibility toggle icon
@@ -96,13 +159,15 @@ class KronWidgetProvider : AppWidgetProvider() {
             )
             views.setOnClickPendingIntent(R.id.layout_widget_balance, pendingOpen)
 
-            // Intent: Toggle Visibility
+            // Intent: Toggle Visibility (per widget ID)
             val toggleIntent = Intent(context, KronWidgetProvider::class.java).apply {
                 action = ACTION_TOGGLE_VISIBILITY
+                putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+                data = android.net.Uri.parse("kron://widget/toggle/$appWidgetId")
             }
             val pendingToggle = PendingIntent.getBroadcast(
                 context,
-                101,
+                appWidgetId,
                 toggleIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )

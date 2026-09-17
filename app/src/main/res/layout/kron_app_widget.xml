@@ -34,7 +34,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
-            android:layout_marginEnd="8dp"
+            android:layout_marginEnd="6dp"
             android:layout_weight="1"
             android:background="@drawable/bg_widget_pill"
             android:ellipsize="end"
@@ -47,6 +47,24 @@
             android:textColor="#E2BD4D"
             android:textSize="11sp"
             android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/btn_widget_currency"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="6dp"
+            android:background="@drawable/bg_widget_currency_pill"
+            android:gravity="center"
+            android:minWidth="34dp"
+            android:paddingStart="7dp"
+            android:paddingTop="3dp"
+            android:paddingEnd="7dp"
+            android:paddingBottom="3dp"
+            android:text="IDR"
+            android:textColor="#D4A373"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:contentDescription="Ubah Mata Uang Widget" />
 
         <ImageView
             android:id="@+id/btn_widget_toggle_visibility"

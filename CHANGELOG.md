@@ -1,5 +1,15 @@
 # KRON Changelog
 
+## 1.7.9 - 2026-09-17
+
+- Fitur multi-mata uang pada Widget Layar Utama (Home Screen AppWidget) dan Pengaturan: mendukung konversi real-time IDR, KRM (Kron Morneven), USD, EUR, SGD, dan JPY langsung dari widget atau dialog pengaturan.
+- Pergantian mata uang instan pada widget: penekanan tombol mata uang (pill badge) pada widget memperbarui tampilan nominal secara real-time tanpa penundaan broadcast antrian sistem.
+- Sinkronisasi kurs otomatis 30 menit: auto-refresh nilai tukar pasar setiap 30 menit melalui API kurs publik terintegrasi langsung pada siklus update widget berkala.
+- Nilai tukar dinamis sintetis KRM (Kron Morneven): basis acuan awal 1 KRM = Rp 1.200 dengan fluktuasi sintetis berkala (peluang fluktuasi besar dan halus), mekanisme mean-reversion, serta batas pengaman (guard) anti-minus (Rp 100 s.d. Rp 50.000).
+- Penyesuaian layout dan dimensi widget Nx2: standarisasi ukuran minimum widget (minWidth 250 dp) untuk memastikan widget default mengisi lebar penuh (4 kolom) dan mendukung pengubahan ukuran dinamis horizontal maupun vertikal.
+- Peningkatan keypad kalkulator: pembenahan fokus dan penataan tombol input nominal yang lebih responsif serta penyesuaian skala ikon aplikasi 20% lebih proporsional.
+- Bump versionCode 100 -> 101 dan versionName 1.7.8 -> 1.7.9.
+
 ## 1.7.8 - 2026-09-16
 
 - Keypad Kalkulator KRON sebagai keyboard default saat input nominal: kolom nominal pada dialog transaksi (keluar, masuk, transfer) otomatis membuka keypad kalkulator KRON secara default untuk kemudahan perhitungan langsung.

@@ -12,17 +12,36 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Calculate
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Keyboard
+import androidx.compose.material.icons.outlined.KeyboardHide
 import androidx.compose.material.icons.outlined.Payments
+import androidx.compose.material.icons.automirrored.outlined.Backspace
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -99,11 +118,16 @@ private fun offsetForDigitCount(value: String, digits: Int): Int {
 }
 
 @Composable
-fun kronTextFieldColors() = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-    focusedBorderColor = MaterialTheme.colorScheme.primary,
-    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.28f),
-    focusedLabelColor = MaterialTheme.colorScheme.primary,
-    unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+fun kronTextFieldColors(isCustomFocused: Boolean = false) = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+    focusedBorderColor = if (isCustomFocused) KronGold else MaterialTheme.colorScheme.primary,
+    unfocusedBorderColor = if (isCustomFocused) KronGold else MaterialTheme.colorScheme.outline.copy(alpha = 0.28f),
+    focusedLabelColor = if (isCustomFocused) KronGold else MaterialTheme.colorScheme.primary,
+    unfocusedLabelColor = if (isCustomFocused) KronGold else MaterialTheme.colorScheme.onSurfaceVariant,
+    focusedContainerColor = if (isCustomFocused) KronGold.copy(alpha = 0.08f) else Color.Transparent,
+    unfocusedContainerColor = if (isCustomFocused) KronGold.copy(alpha = 0.08f) else Color.Transparent,
+    cursorColor = KronGold,
+    focusedPrefixColor = if (isCustomFocused) KronGold else MaterialTheme.colorScheme.primary,
+    unfocusedPrefixColor = if (isCustomFocused) KronGold else MaterialTheme.colorScheme.onSurfaceVariant,
 )
 
 private fun applyKeypadAction(
@@ -217,34 +241,269 @@ private fun applyKeypadAction(
     }
 }
 
+class CalculatorKeypadHostState {
+    var activeFieldId by mutableStateOf<String?>(null)
+    var label by mutableStateOf("")
+    var onKeyAction by mutableStateOf<((String) -> Unit)?>(null)
+    var onSwitchToSystemKeyboard by mutableStateOf<(() -> Unit)?>(null)
+
+    val isVisible: Boolean get() = activeFieldId != null
+
+    fun dismiss() {
+        activeFieldId = null
+    }
+}
+
+val LocalCalculatorKeypadHost = compositionLocalOf<CalculatorKeypadHostState?> { null }
+
+@Composable
+fun CalculatorKeypadView(
+    host: CalculatorKeypadHostState,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .navigationBarsPadding()
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // Header bar / accessory strip
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.weight(1f, fill = false),
+            ) {
+                Icon(
+                    Icons.Outlined.Calculate,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.height(18.dp),
+                )
+                Text(
+                    if (host.label.isNotBlank()) "Kalkulator · ${host.label}" else "Keypad Kalkulator KRON",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Surface(
+                    onClick = { host.onSwitchToSystemKeyboard?.invoke() },
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Keyboard,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(14.dp),
+                        )
+                        Text(
+                            "Sistem",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+                Surface(
+                    onClick = { host.dismiss() },
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                ) {
+                    Text(
+                        "Selesai",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                    )
+                }
+            }
+        }
+
+        val rows = listOf(
+            listOf("7", "8", "9", "÷", "C"),
+            listOf("4", "5", "6", "×", "("),
+            listOf("1", "2", "3", "−", ")"),
+            listOf("0", "000", "=", "+", "⌫"),
+        )
+
+        rows.forEach { rowKeys ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                rowKeys.forEach { key ->
+                    val isOperator = key in listOf("+", "−", "×", "÷", "(", ")")
+                    val isAction = key in listOf("C", "⌫", "=")
+                    val isEquals = key == "="
+                    val isClear = key == "C"
+                    val isBackspace = key == "⌫"
+
+                    val bg = when {
+                        isClear -> MaterialTheme.colorScheme.error.copy(alpha = 0.18f)
+                        isOperator || isEquals -> MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                        isAction -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                    }
+
+                    val border = when {
+                        isClear -> BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.3f))
+                        isOperator || isEquals -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f))
+                        else -> null
+                    }
+
+                    val textColor = when {
+                        isClear -> MaterialTheme.colorScheme.error
+                        isOperator || isEquals -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.onSurface
+                    }
+
+                    Surface(
+                        onClick = { host.onKeyAction?.invoke(key) },
+                        shape = RoundedCornerShape(10.dp),
+                        color = bg,
+                        border = border,
+                        tonalElevation = 2.dp,
+                        shadowElevation = 1.dp,
+                        modifier = Modifier.weight(1f).height(52.dp),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            if (isBackspace) {
+                                Icon(
+                                    Icons.AutoMirrored.Outlined.Backspace,
+                                    contentDescription = "Hapus",
+                                    tint = textColor,
+                                    modifier = Modifier.size(22.dp),
+                                )
+                            } else {
+                                Text(
+                                    text = key,
+                                    style = if (key == "000") {
+                                        MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                                    } else if (isOperator || isEquals) {
+                                        MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                                    } else {
+                                        MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold)
+                                    },
+                                    color = textColor,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** Keeps the raw Rupiah digits or arithmetic expression in state while presenting grouped Indonesian digits. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
     var field by remember { mutableStateOf(TextFieldValue(formatMoneyInput(value))) }
     var touched by rememberSaveable { mutableStateOf(false) }
     val keyboardController = LocalSoftwareKeyboardController.current
-    var showCalculator by rememberSaveable { mutableStateOf(true) }
+    var useSystemKeyboard by rememberSaveable { mutableStateOf(false) }
+    val keypadHost = LocalCalculatorKeypadHost.current
+    val fieldId = rememberSaveable { java.util.UUID.randomUUID().toString() }
+    val isHostActive = keypadHost?.activeFieldId == fieldId
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+    val coroutineScope = rememberCoroutineScope()
+    var localShowCalculator by rememberSaveable { mutableStateOf(false) }
+    val isCustomActive = isHostActive || localShowCalculator
+    val focusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
 
     LaunchedEffect(value) {
         val formatted = formatMoneyInput(value)
         if (field.text != formatted) field = TextFieldValue(formatted, TextRange(formatted.length))
     }
 
-    LaunchedEffect(showCalculator) {
-        if (showCalculator) {
-            keyboardController?.hide()
-        }
-    }
-
     val isExpr = MoneyExpressionEvaluator.isExpression(field.text)
     val evaluated = if (isExpr) MoneyExpressionEvaluator.evaluate(field.text) else null
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    fun activateCalculator() {
+        touched = true
+        useSystemKeyboard = false
+        keyboardController?.hide()
+        focusRequester.requestFocus()
+        if (keypadHost != null) {
+            keypadHost.activeFieldId = fieldId
+            keypadHost.label = label
+            keypadHost.onKeyAction = { key ->
+                val (newField, newVal) = applyKeypadAction(field, key, evaluated)
+                field = newField
+                onValue(newVal)
+            }
+            keypadHost.onSwitchToSystemKeyboard = {
+                useSystemKeyboard = true
+                keypadHost.dismiss()
+            }
+            coroutineScope.launch {
+                delay(150)
+                bringIntoViewRequester.bringIntoView()
+            }
+        } else {
+            localShowCalculator = true
+        }
+    }
+
+    LaunchedEffect(field, evaluated, isHostActive) {
+        if (isHostActive) {
+            keypadHost.label = label
+            keypadHost.onKeyAction = { key ->
+                val (newField, newVal) = applyKeypadAction(field, key, evaluated)
+                field = newField
+                onValue(newVal)
+            }
+            keypadHost.onSwitchToSystemKeyboard = {
+                useSystemKeyboard = true
+                keypadHost.dismiss()
+            }
+        }
+    }
+
+    LaunchedEffect(isHostActive) {
+        if (!isHostActive && !useSystemKeyboard) {
+            focusManager.clearFocus()
+        } else if (isHostActive) {
+            focusRequester.requestFocus()
+            delay(120)
+            bringIntoViewRequester.bringIntoView()
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .bringIntoViewRequester(bringIntoViewRequester)
+    ) {
         Box(modifier = Modifier.fillMaxWidth()) {
             @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
             androidx.compose.ui.platform.InterceptPlatformTextInput(
                 interceptor = { request, nextHandler ->
-                    if (showCalculator) {
+                    if (!useSystemKeyboard) {
                         kotlinx.coroutines.awaitCancellation()
                     } else {
                         nextHandler.startInputMethod(request)
@@ -270,8 +529,8 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
                         }
                     },
                     label = { Text(label) },
-                    prefix = { Text("Rp ", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                    readOnly = showCalculator,
+                    prefix = { Text("Rp ", style = MaterialTheme.typography.labelLarge, color = if (isCustomActive) KronGold else MaterialTheme.colorScheme.onSurfaceVariant) },
+                    readOnly = false,
                     trailingIcon = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             if (isExpr && evaluated != null) {
@@ -284,20 +543,9 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
                                     Icon(Icons.Outlined.Check, contentDescription = "Terapkan hasil hitung", tint = KronGreen)
                                 }
                             }
-                            if (showCalculator) {
+                            if (useSystemKeyboard) {
                                 IconButton(onClick = {
-                                    showCalculator = false
-                                }) {
-                                    Icon(
-                                        Icons.Outlined.Keyboard,
-                                        contentDescription = "Gunakan keyboard sistem",
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            } else {
-                                IconButton(onClick = {
-                                    showCalculator = true
-                                    keyboardController?.hide()
+                                    activateCalculator()
                                 }) {
                                     Icon(
                                         Icons.Outlined.Calculate,
@@ -305,21 +553,36 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
                                         tint = MaterialTheme.colorScheme.primary,
                                     )
                                 }
+                            } else {
+                                IconButton(onClick = {
+                                    if (isHostActive || localShowCalculator) {
+                                        if (keypadHost != null) keypadHost.dismiss() else localShowCalculator = false
+                                    } else {
+                                        activateCalculator()
+                                    }
+                                }) {
+                                    Icon(
+                                        if (isHostActive || localShowCalculator) Icons.Outlined.KeyboardHide else Icons.Outlined.Calculate,
+                                        contentDescription = if (isHostActive || localShowCalculator) "Tutup kalkulator" else "Buka keypad kalkulator",
+                                        tint = if (isHostActive || localShowCalculator) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
                         }
                     },
                     modifier = Modifier
                         .fillMaxWidth()
+                        .focusRequester(focusRequester)
                         .onFocusChanged { focusState ->
-                            if (focusState.isFocused && showCalculator) {
+                            if (focusState.isFocused && !useSystemKeyboard) {
                                 keyboardController?.hide()
                             }
                         },
                     singleLine = true,
                     shape = com.morneven.kron.ui.theme.KronFieldShape,
-                    colors = kronTextFieldColors(),
+                    colors = kronTextFieldColors(isCustomFocused = isCustomActive),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    isError = touched && parseMoneyInput(value) <= 0,
+                    isError = touched && !isCustomActive && parseMoneyInput(value) <= 0,
                     supportingText = {
                         if (isExpr) {
                             if (evaluated != null) {
@@ -336,14 +599,14 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                        } else if (touched && parseMoneyInput(value) <= 0) {
+                        } else if (touched && !isCustomActive && parseMoneyInput(value) <= 0) {
                             Text("Nominal harus lebih dari nol")
                         }
                     },
                 )
             }
 
-            if (showCalculator) {
+            if (!useSystemKeyboard) {
                 Box(
                     modifier = Modifier
                         .matchParentSize()
@@ -352,125 +615,13 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
                         ) {
-                            showCalculator = true
-                            keyboardController?.hide()
+                            activateCalculator()
                         }
                 )
             }
         }
 
-        if (showCalculator) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp)
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
-                    .padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Icon(
-                            Icons.Outlined.Calculate,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.height(14.dp),
-                        )
-                        Text(
-                            "Keypad Kalkulator KRON",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Text(
-                            "Keyboard Sistem",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.clickable {
-                                showCalculator = false
-                            },
-                        )
-                        Text(
-                            "Tutup",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.clickable {
-                                showCalculator = false
-                            },
-                        )
-                    }
-                }
-
-                val rows = listOf(
-                    listOf("7", "8", "9", "÷", "C"),
-                    listOf("4", "5", "6", "×", "("),
-                    listOf("1", "2", "3", "−", ")"),
-                    listOf("0", "000", "=", "+", "⌫"),
-                )
-
-                rows.forEach { rowKeys ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        rowKeys.forEach { key ->
-                            val isOperator = key in listOf("+", "−", "×", "÷", "(", ")")
-                            val isAction = key in listOf("C", "⌫", "=")
-                            val isEquals = key == "="
-                            val isClear = key == "C"
-
-                            val bg = when {
-                                isEquals && evaluated != null -> KronGreen.copy(alpha = 0.25f)
-                                isClear -> MaterialTheme.colorScheme.error.copy(alpha = 0.18f)
-                                isOperator -> MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                                isAction -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-                            }
-
-                            val textColor = when {
-                                isEquals && evaluated != null -> KronGreen
-                                isClear -> MaterialTheme.colorScheme.error
-                                isOperator -> MaterialTheme.colorScheme.primary
-                                else -> MaterialTheme.colorScheme.onSurface
-                            }
-
-                            Surface(
-                                onClick = {
-                                    touched = true
-                                    val (newField, newVal) = applyKeypadAction(field, key, evaluated)
-                                    field = newField
-                                    onValue(newVal)
-                                },
-                                shape = RoundedCornerShape(8.dp),
-                                color = bg,
-                                modifier = Modifier.weight(1f).height(38.dp),
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Text(
-                                        text = key,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.Bold,
-                                        color = textColor,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
+        if (useSystemKeyboard) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -519,6 +670,134 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Text("=", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = if (evaluated != null) KronGreen else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f))
+                    }
+                }
+            }
+        } else if (keypadHost == null && localShowCalculator) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
+                    .padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Keypad Kalkulator KRON",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Surface(
+                            onClick = {
+                                useSystemKeyboard = true
+                                localShowCalculator = false
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                        ) {
+                            Text(
+                                "Keyboard Sistem",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            )
+                        }
+                        Surface(
+                            onClick = { localShowCalculator = false },
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                        ) {
+                            Text(
+                                "Tutup",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            )
+                        }
+                    }
+                }
+                val rows = listOf(
+                    listOf("7", "8", "9", "÷", "C"),
+                    listOf("4", "5", "6", "×", "("),
+                    listOf("1", "2", "3", "−", ")"),
+                    listOf("0", "000", "=", "+", "⌫"),
+                )
+                rows.forEach { rowKeys ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        rowKeys.forEach { key ->
+                            val isOperator = key in listOf("+", "−", "×", "÷", "(", ")")
+                            val isAction = key in listOf("C", "⌫", "=")
+                            val isEquals = key == "="
+                            val isClear = key == "C"
+                            val isBackspace = key == "⌫"
+
+                            val bg = when {
+                                isClear -> MaterialTheme.colorScheme.error.copy(alpha = 0.18f)
+                                isOperator || isEquals -> MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                                isAction -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                            }
+
+                            val border = when {
+                                isClear -> BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.3f))
+                                isOperator || isEquals -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f))
+                                else -> null
+                            }
+
+                            val textColor = when {
+                                isClear -> MaterialTheme.colorScheme.error
+                                isOperator || isEquals -> MaterialTheme.colorScheme.primary
+                                else -> MaterialTheme.colorScheme.onSurface
+                            }
+
+                            Surface(
+                                onClick = {
+                                    touched = true
+                                    val (newField, newVal) = applyKeypadAction(field, key, evaluated)
+                                    field = newField
+                                    onValue(newVal)
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                color = bg,
+                                border = border,
+                                tonalElevation = 2.dp,
+                                shadowElevation = 1.dp,
+                                modifier = Modifier.weight(1f).height(52.dp),
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    if (isBackspace) {
+                                        Icon(
+                                            Icons.AutoMirrored.Outlined.Backspace,
+                                            contentDescription = "Hapus",
+                                            tint = textColor,
+                                            modifier = Modifier.size(22.dp),
+                                        )
+                                    } else {
+                                        Text(
+                                            text = key,
+                                            style = if (key == "000") {
+                                                MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                                            } else if (isOperator || isEquals) {
+                                                MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                                            } else {
+                                                MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold)
+                                            },
+                                            color = textColor,
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -50,7 +52,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -94,8 +102,11 @@ import com.morneven.kron.ui.theme.KronGold
 import com.morneven.kron.ui.theme.KronGreen
 import com.morneven.kron.ui.theme.KronRed
 import com.morneven.kron.ui.KronUiState
+import com.morneven.kron.ui.components.CalculatorKeypadHostState
+import com.morneven.kron.ui.components.CalculatorKeypadView
 import com.morneven.kron.ui.components.ChannelBadge
 import com.morneven.kron.ui.components.HudCard
+import com.morneven.kron.ui.components.LocalCalculatorKeypadHost
 import com.morneven.kron.ui.components.compactIdr
 import com.morneven.kron.ui.components.displayMoney
 import com.morneven.kron.ui.components.eventTypeLabel
@@ -1381,35 +1392,82 @@ fun EvidenceCenterDialog(
 
 @Composable
 internal fun FormDialog(title: String, onDismiss: () -> Unit, confirmText: String = "Simpan", confirmEnabled: Boolean, onConfirm: () -> Unit, content: @Composable () -> Unit) {
+    val keypadHost = remember { CalculatorKeypadHostState() }
+
+    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+    val isImeVisible = androidx.compose.foundation.layout.WindowInsets.isImeVisible
+    LaunchedEffect(isImeVisible) {
+        if (isImeVisible && keypadHost.isVisible) {
+            keypadHost.dismiss()
+        }
+    }
+
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            if (keypadHost.isVisible) {
+                keypadHost.dismiss()
+            } else {
+                onDismiss()
+            }
+        },
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
-        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                    IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, contentDescription = "Tutup") }
+        CompositionLocalProvider(LocalCalculatorKeypadHost provides keypadHost) {
+            Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                        IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, contentDescription = "Tutup") }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+                    Column(
+                        Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        content()
+                        Spacer(Modifier.height(16.dp))
+                    }
+
+                    // Hover Keypad docked at bottom like system keyboard
+                    AnimatedVisibility(
+                        visible = keypadHost.isVisible,
+                        enter = slideInVertically { it } + fadeIn(),
+                        exit = slideOutVertically { it } + fadeOut(),
+                    ) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.surface,
+                            tonalElevation = 8.dp,
+                            shadowElevation = 16.dp,
+                        ) {
+                            Column {
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                                CalculatorKeypadView(host = keypadHost)
+                            }
+                        }
+                    }
+
+                    // Confirm button bar
+                    AnimatedVisibility(
+                        visible = !keypadHost.isVisible,
+                        enter = fadeIn(),
+                        exit = fadeOut(),
+                    ) {
+                        Column {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+                            Button(
+                                onClick = onConfirm,
+                                enabled = confirmEnabled,
+                                shape = KronButtonShape,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp).height(48.dp),
+                            ) { Text(confirmText, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
+                        }
+                    }
                 }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
-                Column(
-                    Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    content()
-                    Spacer(Modifier.height(16.dp))
-                }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
-                Button(
-                    onClick = onConfirm,
-                    enabled = confirmEnabled,
-                    shape = KronButtonShape,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp).height(48.dp),
-                ) { Text(confirmText, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
             }
         }
     }
