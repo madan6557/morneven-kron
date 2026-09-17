@@ -327,6 +327,7 @@ class KronRepository private constructor(
         eventType: String,
         source: String,
         targetAllocationId: Long? = null,
+        relatedEventId: String? = null,
     ): String {
         require(amount > 0) { "Nominal harus lebih dari nol" }
         require(fundingChannel in setOf(FundingChannel.CASH, FundingChannel.EBUDGET)) { "Kanal dana tidak valid" }
@@ -347,6 +348,7 @@ class KronRepository private constructor(
             source = source,
             effectiveEpochDay = effectiveDate.toEpochDay(),
             targetAllocationId = targetAllocationId,
+            relatedEventId = relatedEventId,
             accountId = accountId,
         ))
         dao.insertCashLines(listOf(CashJournalLineEntity(eventId = eventId, accountId = accountId, fundingChannel = fundingChannel, amount = amount)))
@@ -391,6 +393,7 @@ class KronRepository private constructor(
         source: String,
         unexpected: Boolean = false,
         reduceVault: Boolean = false,
+        relatedEventId: String? = null,
     ): String {
         require(amount > 0) { "Nominal harus lebih dari nol" }
         require(splits.isNotEmpty() && splits.all { it.amount > 0 } && splits.sumOf { it.amount } == amount) {
@@ -430,6 +433,7 @@ class KronRepository private constructor(
             note = note,
             source = source,
             effectiveEpochDay = effectiveDate.toEpochDay(),
+            relatedEventId = relatedEventId,
             accountId = accountId,
         ))
         dao.insertCashLines(listOf(CashJournalLineEntity(eventId = eventId, accountId = accountId, fundingChannel = fundingChannel, amount = -amount)))
@@ -589,10 +593,16 @@ class KronRepository private constructor(
         require(!effectiveDate.isBefore(LocalDate.ofEpochDay(debt.interestAnchorEpochDay))) { "Tanggal pembayaran tidak boleh sebelum pembayaran terakhir" }
         val interestBefore = DebtCalculator.currentInterest(debt, effectiveDate)
         val due = Math.addExact(debt.principalOutstanding, interestBefore)
-        require(amount <= due) { "Nominal melebihi total hutang berjalan" }
-        val interestPaid = min(amount, interestBefore)
-        val principalPaid = amount - interestPaid
-        val title = if (debt.role == DebtRole.DEBTOR) "Bayar hutang: ${debt.title}" else "Terima piutang: ${debt.title}"
+        val excessAmount = if (amount > due) amount - due else 0L
+        val debtPaymentAmount = if (amount > due) due else amount
+        val interestPaid = min(debtPaymentAmount, interestBefore)
+        val principalPaid = debtPaymentAmount - interestPaid
+        val isSettled = debt.principalOutstanding == principalPaid && interestBefore == interestPaid
+        val title = if (debt.role == DebtRole.DEBTOR) {
+            if (isSettled) "Pelunasan hutang: ${debt.title}" else "Bayar hutang: ${debt.title}"
+        } else {
+            if (isSettled) "Pelunasan piutang: ${debt.title}" else "Terima piutang: ${debt.title}"
+        }
         val balanceBefore = if (fundingSource == DebtFundingSource.EXTERNAL) 0L else dao.accountBalance(debt.accountId, fundingSource)
         val vaultBefore = if (fundingSource == DebtFundingSource.EXTERNAL) 0L else dao.vaultBalance(fundingSource, debt.accountId)
         val eventId = if (fundingSource == DebtFundingSource.EXTERNAL) {
@@ -611,8 +621,8 @@ class KronRepository private constructor(
             postExpenseInternal(
                 accountId = debt.accountId,
                 fundingChannel = fundingSource,
-                amount = amount,
-                splits = listOf(ExpenseSplitInput(categoryId = categoryId, allocationId = null, amount = amount)),
+                amount = debtPaymentAmount,
+                splits = listOf(ExpenseSplitInput(categoryId = categoryId, allocationId = null, amount = debtPaymentAmount)),
                 title = title,
                 note = note.trim(),
                 effectiveDate = effectiveDate,
@@ -624,7 +634,7 @@ class KronRepository private constructor(
             postIncomeInternal(
                 accountId = debt.accountId,
                 fundingChannel = fundingSource,
-                amount = amount,
+                amount = debtPaymentAmount,
                 categoryId = categoryId,
                 title = title,
                 note = note.trim(),
@@ -642,6 +652,13 @@ class KronRepository private constructor(
             interestAnchorEpochDay = effectiveDate.toEpochDay(),
             status = if (settled) DebtStatus.SETTLED else DebtStatus.OPEN,
         ).bumpRevision())
+        val entryNote = when {
+            excessAmount > 0L && note.isNotBlank() ->
+                "${note.trim()} (Lebihan bonus terimakasih Rp $excessAmount dicatat terpisah)"
+            excessAmount > 0L ->
+                "Pelunasan lunas (Lebihan bonus terimakasih Rp $excessAmount dicatat terpisah)"
+            else -> note.trim()
+        }
         dao.insertDebtEntry(DebtEntryEntity(
             debtId = debt.id,
             accountId = debt.accountId,
@@ -651,11 +668,71 @@ class KronRepository private constructor(
             interestAmount = interestPaid,
             fundingSource = fundingSource,
             effectiveEpochDay = effectiveDate.toEpochDay(),
-            note = note.trim(),
+            note = entryNote,
         ))
+
+        var bonusEventId: String? = null
+        if (excessAmount > 0L) {
+            val bonusTitle = "Bonus terimakasih: ${debt.title}"
+            val bonusNote = if (note.isNotBlank()) {
+                "${note.trim()} (Bonus terimakasih)"
+            } else if (debt.role == DebtRole.DEBTOR) {
+                "Bonus terimakasih pelunasan hutang kepada ${debt.counterparty}"
+            } else {
+                "Bonus terimakasih penerimaan piutang dari ${debt.counterparty}"
+            }
+            bonusEventId = if (fundingSource == DebtFundingSource.EXTERNAL) {
+                val externalBonusId = UUID.randomUUID().toString()
+                dao.insertEvent(ActivityEventEntity(
+                    id = externalBonusId,
+                    type = LedgerType.DEBT_PAYMENT,
+                    title = bonusTitle,
+                    note = bonusNote,
+                    source = "USER",
+                    effectiveEpochDay = effectiveDate.toEpochDay(),
+                    relatedEventId = eventId,
+                    accountId = debt.accountId,
+                ))
+                externalBonusId
+            } else if (debt.role == DebtRole.DEBTOR) {
+                postExpenseInternal(
+                    accountId = debt.accountId,
+                    fundingChannel = fundingSource,
+                    amount = excessAmount,
+                    splits = listOf(ExpenseSplitInput(categoryId = categoryId, allocationId = null, amount = excessAmount)),
+                    title = bonusTitle,
+                    note = bonusNote,
+                    effectiveDate = effectiveDate,
+                    eventType = LedgerType.UNEXPECTED_EXPENSE,
+                    source = "USER",
+                    reduceVault = true,
+                    relatedEventId = eventId,
+                )
+            } else {
+                postIncomeInternal(
+                    accountId = debt.accountId,
+                    fundingChannel = fundingSource,
+                    amount = excessAmount,
+                    categoryId = categoryId,
+                    title = bonusTitle,
+                    note = bonusNote,
+                    effectiveDate = effectiveDate,
+                    eventType = LedgerType.INCOME,
+                    source = "USER",
+                    relatedEventId = eventId,
+                )
+            }
+        }
+
         dao.insertAudit(AuditSnapshotEntity(
             eventId = eventId,
-            reason = if (fundingSource == DebtFundingSource.EXTERNAL) "Pembayaran hutang dicatat dari sumber external" else "Pembayaran hutang dicatat bersama transaksi saldo",
+            reason = if (fundingSource == DebtFundingSource.EXTERNAL) {
+                if (excessAmount > 0L) "Pembayaran hutang dicatat dari sumber external dengan bonus terimakasih terpisah"
+                else "Pembayaran hutang dicatat dari sumber external"
+            } else {
+                if (excessAmount > 0L) "Pembayaran hutang dicatat bersama transaksi saldo dengan bonus terimakasih terpisah"
+                else "Pembayaran hutang dicatat bersama transaksi saldo"
+            },
             beforeJson = JSONObject()
                 .put("debtId", debt.id)
                 .put("principal", debt.principalOutstanding)
@@ -667,6 +744,9 @@ class KronRepository private constructor(
             afterJson = JSONObject()
                 .put("debtId", debt.id)
                 .put("payment", amount)
+                .put("debtPayment", debtPaymentAmount)
+                .put("excessAmount", excessAmount)
+                .put("bonusEventId", bonusEventId ?: JSONObject.NULL)
                 .put("principalPaid", principalPaid)
                 .put("interestPaid", interestPaid)
                 .put("principal", nextPrincipal)
@@ -1107,6 +1187,124 @@ class KronRepository private constructor(
         }
         dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = note, beforeJson = "{\"planned\":$oldPlanned,\"template\":${template?.plannedAmount ?: 0}}", afterJson = "{\"planned\":$newPlannedAmount,\"template\":${if (template != null) template.plannedAmount + delta else 0}}"))
         refreshPeriodStatus(allocation.periodId)
+        assertInvariant()
+        eventId
+    }
+
+    suspend fun correctBudgetCategorySplit(
+        periodId: Long,
+        categoryId: Long,
+        newTotalAmount: Long,
+        newCashPercentage: Int,
+        note: String,
+    ): String = database.withTransaction {
+        require(newTotalAmount >= 0) { "Nominal budget tidak boleh negatif" }
+        require(newCashPercentage in 0..100) { "Persentase cash tidak valid" }
+        require(note.isNotBlank()) { "Alasan koreksi wajib diisi" }
+        val period = requireNotNull(dao.periodById(periodId)) { "Periode tidak ditemukan" }
+        val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == period.portfolioId }) { "Portfolio tidak ditemukan" }
+        val activeId = activeAccountId()
+        require(portfolio.accountId == activeId) { "Kategori budget bukan milik akun aktif" }
+        require(!portfolio.isArchived) { "Portfolio sudah diarsip" }
+        require(period.status != PeriodStatus.CLOSED) { "Periode sudah tertutup" }
+
+        val category = requireNotNull(dao.categoryById(categoryId)) { "Kategori tidak ditemukan" }
+        val existingAllocs = dao.allocationsForCategory(periodId, categoryId)
+        val cashAlloc = existingAllocs.firstOrNull { it.fundingChannel == FundingChannel.CASH }
+        val eBudgetAlloc = existingAllocs.firstOrNull { it.fundingChannel == FundingChannel.EBUDGET }
+
+        val oldCash = cashAlloc?.plannedAmount ?: 0L
+        val oldEBudget = eBudgetAlloc?.plannedAmount ?: 0L
+        val oldTotal = oldCash + oldEBudget
+
+        val newCash = newTotalAmount * newCashPercentage / 100
+        val newEBudget = newTotalAmount - newCash
+
+        val cashSpent = if (cashAlloc != null) oldCash - dao.allocationAvailable(cashAlloc.id) else 0L
+        val eBudgetSpent = if (eBudgetAlloc != null) oldEBudget - dao.allocationAvailable(eBudgetAlloc.id) else 0L
+
+        require(newCash >= cashSpent) { "Budget Cash baru lebih kecil dari pengeluaran yang sudah tercatat" }
+        require(newEBudget >= eBudgetSpent) { "Budget eBudget baru lebih kecil dari pengeluaran yang sudah tercatat" }
+
+        val deltaCash = newCash - oldCash
+        val deltaEBudget = newEBudget - oldEBudget
+        require(deltaCash != 0L || deltaEBudget != 0L) { "Tidak ada perubahan nominal atau komposisi split" }
+
+        if (deltaCash > 0) require(dao.vaultBalance(FundingChannel.CASH, activeId) >= deltaCash) { "Main Vault Cash tidak mencukupi" }
+        if (deltaEBudget > 0) require(dao.vaultBalance(FundingChannel.EBUDGET, activeId) >= deltaEBudget) { "Main Vault eBudget tidak mencukupi" }
+
+        val eventId = UUID.randomUUID().toString()
+        dao.insertEvent(
+            ActivityEventEntity(
+                id = eventId,
+                type = LedgerType.REALLOCATION,
+                title = "Koreksi split budget ${category.name}",
+                note = note,
+                source = "USER",
+                effectiveEpochDay = LocalDate.now().toEpochDay(),
+                accountId = activeId,
+            ),
+        )
+
+        val budgetLines = mutableListOf<BudgetJournalLineEntity>()
+
+        if (deltaCash != 0L) {
+            val targetCashId = if (cashAlloc != null) {
+                dao.updateAllocation(cashAlloc.copy(plannedAmount = newCash).bumpRevision())
+                cashAlloc.id
+            } else {
+                dao.insertAllocation(AllocationEntity(periodId = periodId, categoryId = categoryId, fundingChannel = FundingChannel.CASH, plannedAmount = newCash))
+            }
+            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = targetCashId, fundingChannel = FundingChannel.CASH, amount = deltaCash, accountId = activeId))
+            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.CASH, amount = -deltaCash, accountId = activeId))
+        }
+
+        if (deltaEBudget != 0L) {
+            val targetEBudgetId = if (eBudgetAlloc != null) {
+                dao.updateAllocation(eBudgetAlloc.copy(plannedAmount = newEBudget).bumpRevision())
+                eBudgetAlloc.id
+            } else {
+                dao.insertAllocation(AllocationEntity(periodId = periodId, categoryId = categoryId, fundingChannel = FundingChannel.EBUDGET, plannedAmount = newEBudget))
+            }
+            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = targetEBudgetId, fundingChannel = FundingChannel.EBUDGET, amount = deltaEBudget, accountId = activeId))
+            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.EBUDGET, amount = -deltaEBudget, accountId = activeId))
+        }
+
+        if (budgetLines.isNotEmpty()) {
+            dao.insertBudgetLines(budgetLines)
+        }
+
+        val existingTemplate = dao.templateForCategory(portfolio.id, categoryId)
+        if (existingTemplate == null) {
+            dao.insertAllocationTemplate(
+                PortfolioAllocationTemplateEntity(
+                    portfolioId = portfolio.id,
+                    categoryId = categoryId,
+                    plannedAmount = newTotalAmount,
+                    cashPercentage = newCashPercentage,
+                ),
+            )
+        } else {
+            dao.updateAllocationTemplate(
+                existingTemplate.copy(
+                    plannedAmount = newTotalAmount,
+                    cashPercentage = newCashPercentage,
+                    revision = existingTemplate.revision + 1,
+                    updatedAt = System.currentTimeMillis(),
+                ),
+            )
+        }
+
+        dao.insertAudit(
+            AuditSnapshotEntity(
+                eventId = eventId,
+                reason = note,
+                beforeJson = "{\"cash\":$oldCash,\"eBudget\":$oldEBudget,\"total\":$oldTotal}",
+                afterJson = "{\"cash\":$newCash,\"eBudget\":$newEBudget,\"total\":$newTotalAmount,\"cashPct\":$newCashPercentage}",
+            ),
+        )
+
+        refreshPeriodStatus(periodId)
         assertInvariant()
         eventId
     }

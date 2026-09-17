@@ -1113,6 +1113,16 @@ class MainViewModel @Inject constructor(
         repository.correctAllocation(allocationId, newPlannedAmount, note)
     }
 
+    fun correctBudgetCategorySplit(
+        periodId: Long,
+        categoryId: Long,
+        newTotal: Long,
+        cashPercentage: Int,
+        note: String,
+    ) = runAction("Koreksi split budget tercatat") {
+        repository.correctBudgetCategorySplit(periodId, categoryId, newTotal, cashPercentage, note)
+    }
+
     fun addBudgetCategory(periodId: Long, categoryName: String, plannedAmount: Long, cashPercentage: Int, note: String) = runAction("Kategori budget ditambahkan") {
         repository.addBudgetCategoryToPeriod(periodId, categoryName, plannedAmount, cashPercentage, note)
     }

@@ -378,11 +378,23 @@ private fun DebtPaymentDialog(
     val interest = DebtCalculator.currentInterest(debt, paymentDate)
     val maximum = debt.principalOutstanding + interest
     val amountValue = parseMoneyInput(amount)
-    val valid = dateValid && amountValue in 1..maximum && (channel == DebtFundingSource.EXTERNAL || categories.isEmpty() || categoryId != null)
+    val isExcess = amountValue > maximum
+    val excessAmount = if (isExcess) amountValue - maximum else 0L
+    val channelBalance = when (channel) {
+        DebtFundingSource.CASH -> state.activeAccountBalance?.cashBalance ?: 0L
+        DebtFundingSource.EBUDGET -> state.activeAccountBalance?.eBudgetBalance ?: 0L
+        else -> Long.MAX_VALUE
+    }
+    val channelAvailable = channel == DebtFundingSource.EXTERNAL || debt.role != DebtRole.DEBTOR || amountValue <= channelBalance
+    val valid = dateValid && amountValue > 0 && channelAvailable && (channel == DebtFundingSource.EXTERNAL || categories.isEmpty() || categoryId != null)
     FormDialog(
         title = if (debt.role == DebtRole.DEBTOR) "Bayar hutang" else "Terima piutang",
         onDismiss = onDismiss,
-        confirmText = "Catat pembayaran",
+        confirmText = when {
+            isExcess -> "Catat pelunasan & bonus"
+            amountValue == maximum -> "Catat pelunasan"
+            else -> "Catat pembayaran"
+        },
         confirmEnabled = valid,
         onConfirm = { onSave(channel, amountValue, categoryId, note.trim(), paymentDate) },
     ) {
@@ -396,7 +408,57 @@ private fun DebtPaymentDialog(
             FilterChip(selected = channel == DebtFundingSource.EXTERNAL, onClick = { channel = DebtFundingSource.EXTERNAL }, label = { Text("External") })
         }
         MoneyField(amount, { amount = it }, "Nominal pembayaran")
-        Text("Maksimum ${displayMoney(maximum, state.valuesVisible)}", style = MaterialTheme.typography.bodySmall, color = if (amountValue > maximum) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(
+                onClick = { amount = maximum.toString() },
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+            ) {
+                Text("Pas lunas (${displayMoney(maximum, state.valuesVisible)})", style = MaterialTheme.typography.labelSmall)
+            }
+        }
+        if (isExcess) {
+            HudCard(accent = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.5f)) {
+                Text(
+                    "Lebihan / Bonus Terimakasih",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Pelunasan ${if (debt.role == DebtRole.DEBTOR) "hutang" else "piutang"}", style = MaterialTheme.typography.bodySmall)
+                    Text("${displayMoney(maximum, state.valuesVisible)} (Lunas)", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Bonus terimakasih", style = MaterialTheme.typography.bodySmall)
+                    Text("+${displayMoney(excessAmount, state.valuesVisible)}", style = MaterialTheme.typography.bodySmall, color = KronGreen, fontWeight = FontWeight.Bold)
+                }
+                Text(
+                    if (debt.role == DebtRole.DEBTOR) {
+                        "Lebihan ${displayMoney(excessAmount, state.valuesVisible)} otomatis dicatat terpisah sebagai pengeluaran bonus."
+                    } else {
+                        "Lebihan ${displayMoney(excessAmount, state.valuesVisible)} otomatis dicatat terpisah sebagai pemasukan bonus."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (!channelAvailable && amountValue > 0) {
+            Text(
+                "Saldo $channel tidak mencukupi (tersedia ${displayMoney(channelBalance, state.valuesVisible)}, butuh ${displayMoney(amountValue, state.valuesVisible)})",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
         if (channel != DebtFundingSource.EXTERNAL && categories.isNotEmpty()) {
             Text("Kategori transaksi", style = MaterialTheme.typography.labelLarge)
             Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

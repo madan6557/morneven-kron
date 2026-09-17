@@ -576,6 +576,7 @@ fun BudgetDetailDialog(
     readOnly: Boolean = false,
     onDismiss: () -> Unit,
     onCorrect: (Long, Long, String) -> Unit,
+    onCorrectSplit: ((Long, Long, Int, String) -> Unit)? = null,
     onAddCategory: ((String, Long, Int, String) -> Unit)? = null,
     onRenameCategory: ((Long, String) -> Unit)? = null,
     onDeleteCategory: ((Long, String) -> Unit)? = null,
@@ -590,8 +591,9 @@ fun BudgetDetailDialog(
     var restoreCashPct by rememberSaveable { mutableIntStateOf(50) }
     var restoreNote by rememberSaveable { mutableStateOf("Pulihkan kategori") }
     var correctionId by rememberSaveable { mutableStateOf<Long?>(null) }
-    var correctedAmount by rememberSaveable { mutableStateOf("") }
-    var reason by rememberSaveable { mutableStateOf("Koreksi nominal budget") }
+    var splitTotalAmount by rememberSaveable { mutableStateOf("") }
+    var splitCashPct by rememberSaveable { mutableIntStateOf(50) }
+    var splitReason by rememberSaveable { mutableStateOf("Koreksi budget") }
     var showAddCategory by rememberSaveable { mutableStateOf(false) }
     var addName by rememberSaveable { mutableStateOf("") }
     var addAmount by rememberSaveable { mutableStateOf("") }
@@ -708,12 +710,40 @@ fun BudgetDetailDialog(
                                     else if (remaining > 0) KronGold
                                     else MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                if (!readOnly) TextButton(onClick = { correctionId = row.id; correctedAmount = row.plannedAmount.toString() }) { Text("Koreksi") }
+                                if (!readOnly) {
+                                    TextButton(onClick = {
+                                        if (correctionId == row.id) {
+                                            correctionId = null
+                                            splitTotalAmount = ""
+                                        } else {
+                                            correctionId = row.id
+                                            val catRows = visibleRows.filter { it.categoryId == row.categoryId }
+                                            val cAlloc = catRows.firstOrNull { it.fundingChannel == FundingChannel.CASH }
+                                            val ebAlloc = catRows.firstOrNull { it.fundingChannel == FundingChannel.EBUDGET }
+                                            val curCash = cAlloc?.plannedAmount ?: 0L
+                                            val curEBudget = ebAlloc?.plannedAmount ?: 0L
+                                            val curTotal = curCash + curEBudget
+                                            splitTotalAmount = if (curTotal > 0L) curTotal.toString() else if (row.plannedAmount > 0L) row.plannedAmount.toString() else ""
+                                            splitCashPct = if (curTotal > 0L) {
+                                                ((curCash * 100) / curTotal).toInt()
+                                            } else if (row.fundingChannel == FundingChannel.CASH) {
+                                                100
+                                            } else if (row.fundingChannel == FundingChannel.EBUDGET) {
+                                                0
+                                            } else {
+                                                50
+                                            }
+                                            splitReason = "Koreksi budget ${row.categoryName}"
+                                            renameCategoryId = null
+                                            deleteCategoryId = null
+                                        }
+                                    }) { Text("Koreksi") }
+                                }
                             }
                             if (!readOnly && (onRenameCategory != null || onDeleteCategory != null)) {
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    if (onRenameCategory != null) TextButton(onClick = { renameCategoryId = row.categoryId; renameValue = row.categoryName; deleteCategoryId = null }) { Text("Ganti nama") }
-                                    if (onDeleteCategory != null) TextButton(onClick = { deleteCategoryId = row.categoryId; deleteNote = "Arsipkan kategori ${row.categoryName}"; renameCategoryId = null }) { Text("Arsipkan", color = MaterialTheme.colorScheme.error) }
+                                    if (onRenameCategory != null) TextButton(onClick = { renameCategoryId = row.categoryId; renameValue = row.categoryName; deleteCategoryId = null; correctionId = null }) { Text("Ganti nama") }
+                                    if (onDeleteCategory != null) TextButton(onClick = { deleteCategoryId = row.categoryId; deleteNote = "Arsipkan kategori ${row.categoryName}"; renameCategoryId = null; correctionId = null }) { Text("Arsipkan", color = MaterialTheme.colorScheme.error) }
                                 }
                             }
                         }
@@ -721,61 +751,136 @@ fun BudgetDetailDialog(
                             Spacer(Modifier.height(10.dp))
                             HorizontalDivider()
                             Spacer(Modifier.height(10.dp))
-                            val channelName = if (row.fundingChannel == FundingChannel.CASH) "Cash" else "eBudget"
-                            val newAmount = money(correctedAmount)
-                            val delta = newAmount - row.plannedAmount
-                            val vaultAvailable = if (row.fundingChannel == FundingChannel.CASH) state.vaultCash else state.vaultEBudget
-                            val exceedsSpent = newAmount >= row.spentAmount
-                            val enoughVault = delta <= 0 || delta <= vaultAvailable
-                            val hasChanged = newAmount != row.plannedAmount && correctedAmount.isNotBlank()
-                            val rowCorrectionValid = exceedsSpent && enoughVault && hasChanged && reason.isNotBlank()
+
+                            val catRows = remember(visibleRows, row.categoryId) { visibleRows.filter { it.categoryId == row.categoryId } }
+                            val cashAlloc = catRows.firstOrNull { it.fundingChannel == FundingChannel.CASH }
+                            val eBudgetAlloc = catRows.firstOrNull { it.fundingChannel == FundingChannel.EBUDGET }
+                            val oldCashPlanned = cashAlloc?.plannedAmount ?: 0L
+                            val oldEBudgetPlanned = eBudgetAlloc?.plannedAmount ?: 0L
+                            val oldTotalPlanned = oldCashPlanned + oldEBudgetPlanned
+                            val cashSpent = cashAlloc?.spentAmount ?: 0L
+                            val eBudgetSpent = eBudgetAlloc?.spentAmount ?: 0L
+
+                            val targetTotal = money(splitTotalAmount)
+                            val targetCash = targetTotal * splitCashPct / 100
+                            val targetEBudget = targetTotal - targetCash
+
+                            val deltaCash = targetCash - oldCashPlanned
+                            val deltaEBudget = targetEBudget - oldEBudgetPlanned
+
+                            val exceedsCashSpent = targetCash >= cashSpent
+                            val exceedsEBudgetSpent = targetEBudget >= eBudgetSpent
+                            val enoughVaultCash = deltaCash <= 0 || deltaCash <= state.vaultCash
+                            val enoughVaultEBudget = deltaEBudget <= 0 || deltaEBudget <= state.vaultEBudget
+                            val hasChanges = (deltaCash != 0L || deltaEBudget != 0L) && splitTotalAmount.isNotBlank()
+                            val splitCorrectionValid = exceedsCashSpent && exceedsEBudgetSpent && enoughVaultCash && enoughVaultEBudget && hasChanges && splitReason.isNotBlank()
 
                             Text(
-                                "Koreksi Alokasi $channelName",
+                                "Koreksi Budget & Split • ${row.categoryName}",
                                 style = MaterialTheme.typography.titleSmall,
                                 color = MaterialTheme.colorScheme.tertiary,
                                 fontWeight = FontWeight.Bold,
                             )
                             Text(
-                                "${row.categoryName} • Rencana saat ini: ${budgetMoney(row.plannedAmount)} • Terpakai: ${budgetMoney(row.spentAmount)}",
+                                "Total saat ini: ${budgetMoney(oldTotalPlanned)} (Cash: ${budgetMoney(oldCashPlanned)}, eBudget: ${budgetMoney(oldEBudgetPlanned)})",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            MoneyField(correctedAmount, { correctedAmount = it }, "Nominal rencana baru ($channelName)")
-                            if (!exceedsSpent && correctedAmount.isNotBlank()) {
+                            MoneyField(splitTotalAmount, { splitTotalAmount = it }, "Total nominal budget")
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("Cash $splitCashPct% (${budgetMoney(targetCash)})", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = KronGold)
+                                Text("eBudget ${100 - splitCashPct}% (${budgetMoney(targetEBudget)})", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.tertiary)
+                            }
+                            Slider(
+                                value = splitCashPct.toFloat(),
+                                onValueChange = { splitCashPct = it.toInt() },
+                                valueRange = 0f..100f,
+                                steps = 19,
+                            )
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                OutlinedButton(
+                                    onClick = { splitCashPct = 100 },
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
+                                ) {
+                                    Text("100% Cash", style = MaterialTheme.typography.labelSmall)
+                                }
+                                OutlinedButton(
+                                    onClick = { splitCashPct = 50 },
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
+                                ) {
+                                    Text("50 : 50", style = MaterialTheme.typography.labelSmall)
+                                }
+                                OutlinedButton(
+                                    onClick = { splitCashPct = 0 },
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
+                                ) {
+                                    Text("100% eBudget", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                            if (!exceedsCashSpent && splitTotalAmount.isNotBlank()) {
                                 Text(
-                                    "Budget baru tidak boleh lebih kecil dari pengeluaran yang sudah tercatat (${budgetMoney(row.spentAmount)})",
+                                    "Pagu Cash (${budgetMoney(targetCash)}) tidak boleh lebih kecil dari dana Cash terpakai (${budgetMoney(cashSpent)})",
                                     color = MaterialTheme.colorScheme.error,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
-                            } else if (delta > 0 && !enoughVault) {
+                            }
+                            if (!exceedsEBudgetSpent && splitTotalAmount.isNotBlank()) {
                                 Text(
-                                    "Main Vault $channelName tidak cukup (tersedia ${budgetMoney(vaultAvailable)}, butuh +${budgetMoney(delta)})",
+                                    "Pagu eBudget (${budgetMoney(targetEBudget)}) tidak boleh lebih kecil dari dana eBudget terpakai (${budgetMoney(eBudgetSpent)})",
                                     color = MaterialTheme.colorScheme.error,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
-                            } else if (delta > 0) {
+                            }
+                            if (deltaCash > 0 && !enoughVaultCash) {
                                 Text(
-                                    "Menambah +${budgetMoney(delta)} dari Main Vault $channelName (sisa saldo: ${budgetMoney(vaultAvailable - delta)})",
+                                    "Main Vault Cash tidak cukup (tersedia ${budgetMoney(state.vaultCash)}, butuh +${budgetMoney(deltaCash)})",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            } else if (deltaCash > 0) {
+                                Text(
+                                    "Cash: Menambah +${budgetMoney(deltaCash)} dari Main Vault Cash",
                                     color = MaterialTheme.colorScheme.tertiary,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
-                            } else if (delta < 0) {
+                            } else if (deltaCash < 0) {
                                 Text(
-                                    "Mengembalikan ${budgetMoney(-delta)} ke Main Vault $channelName",
+                                    "Cash: Mengembalikan ${budgetMoney(-deltaCash)} ke Main Vault Cash",
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            if (deltaEBudget > 0 && !enoughVaultEBudget) {
+                                Text(
+                                    "Main Vault eBudget tidak cukup (tersedia ${budgetMoney(state.vaultEBudget)}, butuh +${budgetMoney(deltaEBudget)})",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            } else if (deltaEBudget > 0) {
+                                Text(
+                                    "eBudget: Menambah +${budgetMoney(deltaEBudget)} dari Main Vault eBudget",
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            } else if (deltaEBudget < 0) {
+                                Text(
+                                    "eBudget: Mengembalikan ${budgetMoney(-deltaEBudget)} ke Main Vault eBudget",
                                     color = MaterialTheme.colorScheme.tertiary,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
                             OutlinedTextField(
-                                value = reason,
-                                onValueChange = { reason = it },
+                                value = splitReason,
+                                onValueChange = { splitReason = it },
                                 label = { Text("Alasan koreksi") },
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true,
                             )
                             Text(
-                                "Jurnal lama tetap tersimpan dan ditandai dikoreksi.",
+                                "Jurnal lama tetap tersimpan. Alokasi Cash & eBudget disesuaikan secara atomik.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -786,8 +891,8 @@ fun BudgetDetailDialog(
                                 TextButton(
                                     onClick = {
                                         correctionId = null
-                                        correctedAmount = ""
-                                        reason = "Koreksi nominal budget"
+                                        splitTotalAmount = ""
+                                        splitReason = "Koreksi budget ${row.categoryName}"
                                     },
                                     modifier = Modifier.weight(1f),
                                 ) {
@@ -796,12 +901,16 @@ fun BudgetDetailDialog(
                                 Button(
                                     onClick = {
                                         keypadHost.dismiss()
-                                        onCorrect(row.id, newAmount, reason.trim())
+                                        if (onCorrectSplit != null) {
+                                            onCorrectSplit(row.categoryId, targetTotal, splitCashPct, splitReason.trim())
+                                        } else {
+                                            onCorrect(row.id, targetTotal, splitReason.trim())
+                                        }
                                         correctionId = null
-                                        correctedAmount = ""
-                                        reason = "Koreksi nominal budget"
+                                        splitTotalAmount = ""
+                                        splitReason = "Koreksi budget ${row.categoryName}"
                                     },
-                                    enabled = rowCorrectionValid,
+                                    enabled = splitCorrectionValid,
                                     modifier = Modifier.weight(1f),
                                 ) {
                                     Text("Simpan koreksi")

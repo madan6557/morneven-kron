@@ -2356,6 +2356,7 @@ private fun MainScaffold(
             readOnly = readOnly,
             onDismiss = { detailPeriod = null },
             onCorrect = { id, amount, note -> authenticateCriticalAction("Koreksi budget") { viewModel.correctAllocation(id, amount, note) } },
+            onCorrectSplit = if (readOnly) null else { catId, total, pct, note -> authenticateCriticalAction("Koreksi split budget") { viewModel.correctBudgetCategorySplit(periodId, catId, total, pct, note) } },
             onAddCategory = if (readOnly) null else { name, amount, pct, note -> authenticateCriticalAction("Tambah kategori") { viewModel.addBudgetCategory(periodId, name, amount, pct, note) } },
             onRenameCategory = if (readOnly) null else { catId, newName -> authenticateCriticalAction("Ganti nama kategori") { viewModel.renameBudgetCategoryInPeriod(periodId, catId, newName) } },
             onDeleteCategory = if (readOnly) null else { catId, note -> authenticateCriticalAction("Arsipkan kategori") { viewModel.removeBudgetCategory(periodId, catId, note) } },
