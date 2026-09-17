@@ -1,5 +1,13 @@
 # KRON Changelog
 
+## 1.7.10 - 2026-09-17
+
+- Pembayaran hutang piutang melebihi tagihan dengan pencatatan bonus terpisah: pembayaran hutang atau piutang kini dapat melebihi sisa pokok dan bunga (misalnya saat memberi atau menerima bonus terimakasih). Pokok hutang terlunasi penuh dan kelebihan otomatis dicatat sebagai transaksi terpisah di buku besar (Pengeluaran untuk hutang, Pemasukan untuk piutang).
+- Kartu rincian bonus dan preset pelunasan pas: dialog pembayaran hutang menyediakan tombol cepat "Pas lunas" dan menampilkan kartu rincian interaktif saat nominal melebihi tagihan yang memisahkan porsi pelunasan dan bonus terimakasih.
+- Keypad kalkulator mengambang universal dan slider koreksi split kanal: integrasi keypad kalkulator KRON di seluruh dialog serta koreksi alokasi budget cerdas kanal Cash dan eBudget.
+- Penyesuaian tampilan badge mata uang Kr pada menu Pengaturan.
+- Bump versionCode 101 -> 102 dan versionName 1.7.9 -> 1.7.10.
+
 ## 1.7.9 - 2026-09-17
 
 - Fitur multi-mata uang pada Widget Layar Utama (Home Screen AppWidget) dan Pengaturan: mendukung konversi real-time IDR, KRM (Kron Morneven), USD, EUR, SGD, dan JPY langsung dari widget atau dialog pengaturan.
