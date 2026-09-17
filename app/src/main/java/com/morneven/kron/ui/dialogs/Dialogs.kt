@@ -592,8 +592,6 @@ fun BudgetDetailDialog(
     var correctionId by rememberSaveable { mutableStateOf<Long?>(null) }
     var correctedAmount by rememberSaveable { mutableStateOf("") }
     var reason by rememberSaveable { mutableStateOf("Koreksi nominal budget") }
-    val selected = rows.firstOrNull { it.id == correctionId }
-    val validCorrection = selected != null && money(correctedAmount) >= 0 && money(correctedAmount) != selected.plannedAmount && reason.isNotBlank()
     var showAddCategory by rememberSaveable { mutableStateOf(false) }
     var addName by rememberSaveable { mutableStateOf("") }
     var addAmount by rememberSaveable { mutableStateOf("") }
@@ -604,25 +602,42 @@ fun BudgetDetailDialog(
     var renameValue by rememberSaveable { mutableStateOf("") }
     var deleteCategoryId by rememberSaveable { mutableStateOf<Long?>(null) }
     var deleteNote by rememberSaveable { mutableStateOf("Hapus kategori") }
+    val keypadHost = remember { CalculatorKeypadHostState() }
+
+    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+    val isImeVisible = androidx.compose.foundation.layout.WindowInsets.isImeVisible
+    LaunchedEffect(isImeVisible) {
+        if (isImeVisible && keypadHost.isVisible) {
+            keypadHost.dismiss()
+        }
+    }
+
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            if (keypadHost.isVisible) {
+                keypadHost.dismiss()
+            } else {
+                onDismiss()
+            }
+        },
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
-        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(if (readOnly) "Detail budget arsip" else "Detail budget", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                    IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, contentDescription = "Tutup") }
-                }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
-                Column(
-                    Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 18.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
+        CompositionLocalProvider(LocalCalculatorKeypadHost provides keypadHost) {
+            Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(if (readOnly) "Detail budget arsip" else "Detail budget", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                        IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, contentDescription = "Tutup") }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+                    Column(
+                        Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 18.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
                 rows.firstOrNull()?.let { row ->
                     Text(row.portfolioName, style = MaterialTheme.typography.titleLarge)
                     Text("${LocalDate.ofEpochDay(row.startEpochDay)} sampai ${LocalDate.ofEpochDay(row.endEpochDay)} • ${row.periodStatus.replace('_', ' ')}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -706,10 +721,92 @@ fun BudgetDetailDialog(
                             Spacer(Modifier.height(10.dp))
                             HorizontalDivider()
                             Spacer(Modifier.height(10.dp))
-                            Text("Koreksi ${row.categoryName}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.tertiary)
-                            MoneyField(correctedAmount, { correctedAmount = it }, "Nominal rencana baru")
-                            OutlinedTextField(reason, { reason = it }, label = { Text("Alasan koreksi") }, modifier = Modifier.fillMaxWidth())
-                            Text("Jurnal lama tetap tersimpan dan ditandai dikoreksi.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            val channelName = if (row.fundingChannel == FundingChannel.CASH) "Cash" else "eBudget"
+                            val newAmount = money(correctedAmount)
+                            val delta = newAmount - row.plannedAmount
+                            val vaultAvailable = if (row.fundingChannel == FundingChannel.CASH) state.vaultCash else state.vaultEBudget
+                            val exceedsSpent = newAmount >= row.spentAmount
+                            val enoughVault = delta <= 0 || delta <= vaultAvailable
+                            val hasChanged = newAmount != row.plannedAmount && correctedAmount.isNotBlank()
+                            val rowCorrectionValid = exceedsSpent && enoughVault && hasChanged && reason.isNotBlank()
+
+                            Text(
+                                "Koreksi Alokasi $channelName",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.tertiary,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                "${row.categoryName} • Rencana saat ini: ${budgetMoney(row.plannedAmount)} • Terpakai: ${budgetMoney(row.spentAmount)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            MoneyField(correctedAmount, { correctedAmount = it }, "Nominal rencana baru ($channelName)")
+                            if (!exceedsSpent && correctedAmount.isNotBlank()) {
+                                Text(
+                                    "Budget baru tidak boleh lebih kecil dari pengeluaran yang sudah tercatat (${budgetMoney(row.spentAmount)})",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            } else if (delta > 0 && !enoughVault) {
+                                Text(
+                                    "Main Vault $channelName tidak cukup (tersedia ${budgetMoney(vaultAvailable)}, butuh +${budgetMoney(delta)})",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            } else if (delta > 0) {
+                                Text(
+                                    "Menambah +${budgetMoney(delta)} dari Main Vault $channelName (sisa saldo: ${budgetMoney(vaultAvailable - delta)})",
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            } else if (delta < 0) {
+                                Text(
+                                    "Mengembalikan ${budgetMoney(-delta)} ke Main Vault $channelName",
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            OutlinedTextField(
+                                value = reason,
+                                onValueChange = { reason = it },
+                                label = { Text("Alasan koreksi") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                            )
+                            Text(
+                                "Jurnal lama tetap tersimpan dan ditandai dikoreksi.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                TextButton(
+                                    onClick = {
+                                        correctionId = null
+                                        correctedAmount = ""
+                                        reason = "Koreksi nominal budget"
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text("Batal")
+                                }
+                                Button(
+                                    onClick = {
+                                        keypadHost.dismiss()
+                                        onCorrect(row.id, newAmount, reason.trim())
+                                        correctionId = null
+                                        correctedAmount = ""
+                                        reason = "Koreksi nominal budget"
+                                    },
+                                    enabled = rowCorrectionValid,
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text("Simpan koreksi")
+                                }
+                            }
                         }
                         if (!readOnly && renameCategoryId == row.categoryId && onRenameCategory != null) {
                             Spacer(Modifier.height(10.dp))
@@ -809,13 +906,24 @@ fun BudgetDetailDialog(
                     }
                 }
                 }
-                if (!readOnly) {
-                    HorizontalDivider()
-                    Button(
-                        onClick = { onCorrect(requireNotNull(correctionId), money(correctedAmount), reason); onDismiss() },
-                        enabled = validCorrection,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp).height(52.dp),
-                    ) { Text("Simpan koreksi") }
+                    // Floating Keypad docked at bottom like system keyboard
+                    AnimatedVisibility(
+                        visible = keypadHost.isVisible,
+                        enter = slideInVertically { it } + fadeIn(),
+                        exit = slideOutVertically { it } + fadeOut(),
+                    ) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.surface,
+                            tonalElevation = 8.dp,
+                            shadowElevation = 16.dp,
+                        ) {
+                            Column {
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                                CalculatorKeypadView(host = keypadHost)
+                            }
+                        }
+                    }
                 }
             }
         }

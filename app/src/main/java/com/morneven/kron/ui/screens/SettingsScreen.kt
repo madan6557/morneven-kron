@@ -541,7 +541,7 @@ fun SettingsScreen(
                 val defaultCurrency = KronWidgetManager.getDefaultCurrency(context)
                 SettingRow(
                     Icons.Outlined.Payments,
-                    "Mata Uang & Kurs Widget",
+                    "Mata Uang",
                     "Mata uang: ${defaultCurrency.displayName} • Ketuk untuk ubah atau sinkronkan kurs online",
                     onClick = { showCurrencyDialog = true },
                 )
@@ -633,7 +633,7 @@ fun SettingsScreen(
                         contentDescription = null,
                         tint = KronGold,
                     )
-                    Text("Mata Uang & Kurs Widget")
+                    Text("Mata Uang")
                 }
             },
             text = {
@@ -658,7 +658,7 @@ fun SettingsScreen(
                         }
                         val idrFormatter = DecimalFormat("#,##0", symbols)
                         val rateDesc = when (curr) {
-                            WidgetCurrency.IDR -> "Mata uang utama (Basis 1:1)"
+                            WidgetCurrency.IDR -> "Mata uang utama"
                             WidgetCurrency.KRON -> "1 KRM = Rp ${idrFormatter.format(idrRate)}"
                             else -> {
                                 val rateFormatter = DecimalFormat("#,##0.00", symbols)
