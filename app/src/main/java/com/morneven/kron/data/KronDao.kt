@@ -304,8 +304,8 @@ interface KronDao {
 
     @Query("""
         SELECT
-            COALESCE(SUM(CASE WHEN e.type IN ('INCOME','OPENING_BALANCE','AUTOMATION') AND c.amount > 0 THEN c.amount ELSE 0 END), 0) AS income,
-            -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','UNEXPECTED_EXPENSE','AUTOMATION') AND c.amount < 0 THEN c.amount ELSE 0 END), 0) AS expense
+            COALESCE(SUM(CASE WHEN e.type IN ('INCOME','OPENING_BALANCE','AUTOMATION','DEBT_OPEN') AND c.amount > 0 THEN c.amount ELSE 0 END), 0) AS income,
+            -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','UNEXPECTED_EXPENSE','AUTOMATION','DEBT_OPEN') AND c.amount < 0 THEN c.amount ELSE 0 END), 0) AS expense
         FROM activity_events e
         JOIN cash_journal_lines c ON c.eventId = e.id
         WHERE e.effectiveEpochDay BETWEEN :startDay AND :endDay
@@ -326,8 +326,8 @@ interface KronDao {
             GROUP BY e.id, e.type
         )
         SELECT
-            COALESCE(SUM(CASE WHEN (type IN ('INCOME','OPENING_BALANCE','AUTOMATION','TRANSFER')) AND net_cash > 0 THEN net_cash ELSE 0 END), 0) AS income,
-            -COALESCE(SUM(CASE WHEN (type IN ('EXPENSE','UNEXPECTED_EXPENSE','AUTOMATION','TRANSFER')) AND net_cash < 0 THEN net_cash ELSE 0 END), 0) AS expense
+            COALESCE(SUM(CASE WHEN (type IN ('INCOME','OPENING_BALANCE','AUTOMATION','TRANSFER','DEBT_OPEN')) AND net_cash > 0 THEN net_cash ELSE 0 END), 0) AS income,
+            -COALESCE(SUM(CASE WHEN (type IN ('EXPENSE','UNEXPECTED_EXPENSE','AUTOMATION','TRANSFER','DEBT_OPEN')) AND net_cash < 0 THEN net_cash ELSE 0 END), 0) AS expense
         FROM event_impacts
     """)
     fun observeCashflow(startDay: Long, endDay: Long, accountId: Long): Flow<CashflowRow>
@@ -357,6 +357,7 @@ interface KronDao {
     @Query("SELECT * FROM debts WHERE id = :id LIMIT 1") suspend fun debtById(id: String): DebtEntity?
     @Query("SELECT * FROM debt_entries WHERE debtId = :debtId ORDER BY effectiveEpochDay, createdAt, rowid") suspend fun debtEntries(debtId: String): List<DebtEntryEntity>
     @Query("SELECT * FROM debt_entries WHERE eventId = :eventId LIMIT 1") suspend fun debtEntryForEvent(eventId: String): DebtEntryEntity?
+    @Query("SELECT MAX(effectiveEpochDay) FROM debt_entries WHERE debtId = :debtId") suspend fun lastDebtEntryEpochDay(debtId: String): Long?
     @Query("SELECT * FROM team_workspaces WHERE accountId = :accountId LIMIT 1") suspend fun teamWorkspace(accountId: Long): TeamWorkspaceEntity?
     @Query("SELECT * FROM team_workspaces WHERE teamId = :teamId LIMIT 1") suspend fun teamWorkspaceByTeamId(teamId: String): TeamWorkspaceEntity?
     @Query("SELECT teamId FROM team_workspaces") suspend fun allTeamWorkspaceIds(): List<String>
@@ -520,7 +521,7 @@ interface KronDao {
     @Query("SELECT * FROM budget_periods WHERE portfolioId IN (:portfolioIds) ORDER BY startEpochDay DESC")
     suspend fun periodsForPortfolios(portfolioIds: List<Long>): List<BudgetPeriodEntity>
 
-    // ponytail: budget category CRUD helpers - reuse existing tables, no new entity
+    // Budget category CRUD helpers. These reuse the existing tables, no new entity.
     @Query("SELECT * FROM allocations WHERE periodId = :periodId AND categoryId = :categoryId") suspend fun allocationsForCategory(periodId: Long, categoryId: Long): List<AllocationEntity>
     @Query("SELECT COUNT(*) FROM budget_journal_lines WHERE allocationId = :allocationId") suspend fun budgetLineCountForAllocation(allocationId: Long): Int
     @Query("SELECT COUNT(*) FROM transaction_splits WHERE allocationId = :allocationId") suspend fun splitCountForAllocation(allocationId: Long): Int

@@ -53,6 +53,7 @@ import com.morneven.kron.data.CategoryEntity
 import com.morneven.kron.data.DebtCalculator
 import com.morneven.kron.data.DebtRole
 import com.morneven.kron.data.DebtStatus
+import com.morneven.kron.data.DebtSummary
 import com.morneven.kron.data.FundingChannel
 import com.morneven.kron.data.PeriodStatus
 import com.morneven.kron.data.TransactionSplitEntity
@@ -145,12 +146,10 @@ fun ReportsScreen(
 
     val today = LocalDate.now()
     val reportDebts = state.debts
-    val debtPayable = reportDebts.filter { it.status == DebtStatus.OPEN && it.role == DebtRole.DEBTOR }
-        .sumOf { it.principalOutstanding + DebtCalculator.currentInterest(it, today) }
-    val debtReceivable = reportDebts.filter { it.status == DebtStatus.OPEN && it.role == DebtRole.CREDITOR }
-        .sumOf { it.principalOutstanding + DebtCalculator.currentInterest(it, today) }
-    val debtInterest = reportDebts.filter { it.status == DebtStatus.OPEN }
-        .sumOf { DebtCalculator.currentInterest(it, today) }
+    val debtSummary = remember(state.debts, today.toEpochDay()) { DebtSummary.of(state.debts, today) }
+    val debtPayable = debtSummary.payable
+    val debtReceivable = debtSummary.receivable
+    val debtInterest = debtSummary.interest
     val customStart = LocalDate.ofEpochDay(customStartDay)
     val customEnd = LocalDate.ofEpochDay(customEndDay)
     val end = if (range == ReportRange.CUSTOM) customEnd else today
@@ -208,7 +207,9 @@ fun ReportsScreen(
     val unexpectedTotal = cashFlowEvents.filter { it.type == "UNEXPECTED_EXPENSE" }.sumOf { (-it.cashImpact).coerceAtLeast(0L) }
     val unexpectedEvents = cashFlowEvents.filter { it.type == "UNEXPECTED_EXPENSE" }
     val unexpectedSplitsByCategory = remember(unexpectedEvents, state.splits, state.categories) {
-        val splitMap = state.splits.filter { split -> unexpectedEvents.any { it.id == split.eventId } }
+        // Matching every split against every event is quadratic and this list grows with history.
+        val unexpectedIds = unexpectedEvents.mapTo(HashSet(unexpectedEvents.size)) { it.id }
+        val splitMap = state.splits.filter { it.eventId in unexpectedIds }
         val categoryMap = state.categories.associateBy { it.id }
         splitMap.groupBy { it.categoryId }.map { (catId, splits) ->
             val catName = catId?.let { categoryMap[it]?.name } ?: "Tanpa kategori"
@@ -614,8 +615,15 @@ private data class CashFlowBucket(
     val net: Long get() = explicitNet ?: (income - expense)
 }
 
+/**
+ * Whether the event moved money in or out of the account.
+ *
+ * `DEBT_OPEN` belongs here: borrowing puts cash into a channel and lending takes it out. Repayments
+ * are already counted, because they are posted as ordinary income and expense events, so leaving
+ * the opening movement out made every debt look like a one-sided loss or gain.
+ */
 private fun ActivityRow.isCashFlowEvent(): Boolean = when (type) {
-    "INCOME", "OPENING_BALANCE", "EXPENSE", "UNEXPECTED_EXPENSE", "AUTOMATION", "TRANSFER" -> cashImpact != 0L
+    "INCOME", "OPENING_BALANCE", "EXPENSE", "UNEXPECTED_EXPENSE", "AUTOMATION", "TRANSFER", "DEBT_OPEN" -> cashImpact != 0L
     else -> false
 }
 

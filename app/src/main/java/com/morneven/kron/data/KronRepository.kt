@@ -3,6 +3,7 @@ package com.morneven.kron.data
 import androidx.room.withTransaction
 import com.morneven.kron.security.SnapshotOperationLock
 import com.morneven.kron.audit.LedgerPostingEngine
+import kotlinx.coroutines.CancellationException
 import java.time.LocalDate
 import java.time.YearMonth
 import java.util.UUID
@@ -10,7 +11,6 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.min
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.runBlocking
 import com.morneven.kron.sync.SyncStateBridge
 import com.morneven.kron.data.AccountSharingMode
 import kotlinx.coroutines.flow.Flow
@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 import org.json.JSONObject
 
 data class ExpenseSplitInput(
@@ -40,6 +41,53 @@ data class CategoryCompositionDraft(
 )
 
 class LedgerInvariantException(message: String) : IllegalStateException(message)
+
+/** A due recurring rule that could not be posted during an automation pass. */
+data class SkippedAutomation(
+    val ruleId: String,
+    val title: String,
+    val dueEpochDay: Long,
+    val reason: String,
+)
+
+/**
+ * Result of one automation pass.
+ *
+ * A rule that cannot run (most often an expense larger than the remaining channel balance)
+ * keeps its `nextEpochDay` so it is retried later, but it must never stop the rules behind it.
+ */
+data class AutomationReport(
+    val posted: Int = 0,
+    val skipped: List<SkippedAutomation> = emptyList(),
+) {
+    operator fun plus(other: AutomationReport) = AutomationReport(posted + other.posted, skipped + other.skipped)
+
+    /** Indonesian summary for the UI, or null when the pass had nothing worth reporting. */
+    fun userMessage(): String? {
+        if (skipped.isEmpty()) return null
+        val first = skipped.first()
+        val head = "Jadwal \"${first.title}\" belum dapat dijalankan: ${first.reason}"
+        return if (skipped.size == 1) {
+            "$head KRON akan mencoba lagi nanti."
+        } else {
+            "$head KRON melewati ${skipped.size} jadwal dan akan mencoba lagi nanti."
+        }
+    }
+}
+
+/** Upper bound on rules processed in a single automation pass, so a bad data set cannot spin. */
+private const val MAX_AUTOMATION_STEPS = 500
+
+/**
+ * Decides whether an automation failure must stop the whole pass.
+ *
+ * A broken ledger invariant means the data set is no longer trustworthy, so it fails closed.
+ * Everything else is a single unrunnable rule and must not block the remaining schedule.
+ */
+internal object AutomationFailurePolicy {
+    fun isFatal(error: Throwable): Boolean =
+        error is CancellationException || error is LedgerInvariantException || error is Error
+}
 
 object ScheduleCalculator {
     fun next(current: LocalDate, cadence: String, anchorMonth: Int, anchorDay: Int, intervalCount: Int = 1): LocalDate {
@@ -114,16 +162,22 @@ class KronRepository private constructor(
     val archivedAccounts = observe(KronDao::observeArchivedAccounts)
     val recoveredTeamAccounts = observe(KronDao::observeRecoveredTeamAccounts)
     val accountBalances = observe(KronDao::observeAccountBalances)
-    val syncState = SyncStateBridge.syncState
+    /**
+     * Seeded on first collection rather than in the constructor.
+     *
+     * Injection happens on the main thread, and blocking it on a database read there is both an ANR
+     * risk and a read issued before anything has confirmed the process may touch the database.
+     * Collectors already treat a null sync state as "not known yet", so suspending costs nothing.
+     */
+    val syncState: Flow<SyncStateEntity?> = SyncStateBridge.syncState.onStart { seedSyncState() }
 
-    init {
-        runBlocking {
-            SyncStateBridge.emit(dao.syncState() ?: SyncStateEntity(
-                datasetId = java.util.UUID.randomUUID().toString(),
-                deviceId = java.util.UUID.randomUUID().toString(),
-                lastSyncedGeneration = -1,
-            ))
-        }
+    private suspend fun seedSyncState() {
+        if (SyncStateBridge.syncState.value != null) return
+        SyncStateBridge.emit(dao.syncState() ?: SyncStateEntity(
+            datasetId = java.util.UUID.randomUUID().toString(),
+            deviceId = java.util.UUID.randomUUID().toString(),
+            lastSyncedGeneration = -1,
+        ))
     }
 
     private val activeAccountFlow: Flow<Long?> = observe(KronDao::observeActiveAccount)
@@ -590,7 +644,10 @@ class KronRepository private constructor(
         require(debt.status == DebtStatus.OPEN) { "Hutang sudah tidak aktif" }
         require(fundingSource in setOf(DebtFundingSource.CASH, DebtFundingSource.EBUDGET, DebtFundingSource.EXTERNAL)) { "Sumber dana hutang tidak valid" }
         require(amount > 0L) { "Nominal pembayaran harus lebih dari nol" }
-        require(!effectiveDate.isBefore(LocalDate.ofEpochDay(debt.interestAnchorEpochDay))) { "Tanggal pembayaran tidak boleh sebelum pembayaran terakhir" }
+        // The anchor now tracks the interest schedule, not the last payment, so the ordering guard
+        // reads the real history instead.
+        val lastEntryEpochDay = dao.lastDebtEntryEpochDay(debt.id) ?: debt.interestAnchorEpochDay
+        require(!effectiveDate.isBefore(LocalDate.ofEpochDay(lastEntryEpochDay))) { "Tanggal pembayaran tidak boleh sebelum pembayaran terakhir" }
         val interestBefore = DebtCalculator.currentInterest(debt, effectiveDate)
         val due = Math.addExact(debt.principalOutstanding, interestBefore)
         val excessAmount = if (amount > due) amount - due else 0L
@@ -649,7 +706,7 @@ class KronRepository private constructor(
         dao.updateDebt(debt.copy(
             principalOutstanding = nextPrincipal,
             interestOutstanding = nextInterest,
-            interestAnchorEpochDay = effectiveDate.toEpochDay(),
+            interestAnchorEpochDay = DebtCalculator.settledAnchorEpochDay(debt, effectiveDate),
             status = if (settled) DebtStatus.SETTLED else DebtStatus.OPEN,
         ).bumpRevision())
         val entryNote = when {
@@ -1326,7 +1383,7 @@ class KronRepository private constructor(
         eventId
     }
 
-    // ponytail: CRUD kategori budget - reuse Category/Allocation/Template, no new table
+    /** Budget category CRUD reuses Category, Allocation and Template. No extra table. */
     suspend fun addBudgetCategoryToPeriod(
         periodId: Long,
         categoryName: String,
@@ -1438,7 +1495,7 @@ class KronRepository private constructor(
         eventId
     }
 
-    // ponytail: periode-isolasi rename - history (periode < current) tetap pakai kategori lama
+    /** Renaming is period isolated: periods before the current one keep the old category. */
     suspend fun renameBudgetCategoryInPeriod(periodId: Long, categoryId: Long, newName: String) = database.withTransaction {
         val trimmed = newName.trim()
         require(trimmed.isNotBlank()) { "Nama kategori wajib diisi" }
@@ -1712,10 +1769,12 @@ class KronRepository private constructor(
         dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = reason, beforeJson = "{\"event\":\"$originalEventId\"}", afterJson = "{\"reversedBy\":\"$eventId\"}"))
         debtPayment?.let { payment ->
             val debt = requireNotNull(dao.debtById(payment.debtId)) { "Hutang pembayaran tidak ditemukan" }
+            // The anchor stays where the payment left it. Reversing the money movement does not
+            // un-elapse time, and moving the anchor forward here would silently drop the interest
+            // that accrued between the payment and the reversal.
             dao.updateDebt(debt.copy(
                 principalOutstanding = Math.addExact(debt.principalOutstanding, payment.principalAmount),
                 interestOutstanding = Math.addExact(debt.interestOutstanding, payment.interestAmount),
-            interestAnchorEpochDay = LocalDate.now().toEpochDay(),
                 status = DebtStatus.OPEN,
             ).bumpRevision())
             dao.insertDebtEntry(DebtEntryEntity(
@@ -1778,7 +1837,7 @@ class KronRepository private constructor(
             dao.updateDebt(debt.copy(
                 principalOutstanding = nextPrincipal,
                 interestOutstanding = nextInterest,
-                interestAnchorEpochDay = LocalDate.now().toEpochDay(),
+                interestAnchorEpochDay = DebtCalculator.settledAnchorEpochDay(debt, LocalDate.now()),
                 status = if (nextPrincipal == 0L && nextInterest == 0L) DebtStatus.SETTLED else DebtStatus.OPEN,
             ).bumpRevision())
             dao.insertDebtEntry(DebtEntryEntity(
@@ -2081,36 +2140,60 @@ class KronRepository private constructor(
         return resumedRuleCount
     }
 
-    suspend fun processDueRules(today: LocalDate = LocalDate.now(), direction: String? = null) {
+    suspend fun processDueRules(today: LocalDate = LocalDate.now(), direction: String? = null): AutomationReport {
         database.withTransaction {
             dao.allRules()
                 .filter { !it.isPaused && (direction == null || it.direction == direction) && it.endEpochDay != null && it.nextEpochDay > it.endEpochDay }
                 .filter { teamAccessGuard.allows(it.accountId, TeamCapability.WRITE) }
                 .forEach { dao.updateRule(it.copy(isPaused = true).bumpRevision()) }
         }
-        repeat(500) {
+        var posted = 0
+        val skipped = mutableListOf<SkippedAutomation>()
+        // A rule that fails keeps its due date so it is retried on a later pass, which means it
+        // would be picked again immediately. Parking it for the rest of this pass is what lets the
+        // rules behind it still run instead of being blocked by one unaffordable schedule.
+        val parked = mutableSetOf<String>()
+        repeat(MAX_AUTOMATION_STEPS) {
             val next = dao.dueRules(today.toEpochDay(), direction)
-                .firstOrNull { teamAccessGuard.allows(it.accountId, TeamCapability.WRITE) } ?: return
-            database.withTransaction {
-                if (next.endEpochDay != null && next.nextEpochDay > next.endEpochDay) {
-                    dao.updateRule(next.copy(isPaused = true).bumpRevision())
-                    return@withTransaction
+                .firstOrNull { teamAccessGuard.allows(it.accountId, TeamCapability.WRITE) && it.id !in parked }
+                ?: return AutomationReport(posted, skipped.toList())
+            val failure = runCatching { database.withTransaction { runDueRule(next) } }.exceptionOrNull()
+            when {
+                failure == null -> posted++
+                AutomationFailurePolicy.isFatal(failure) -> throw failure
+                else -> {
+                    parked += next.id
+                    skipped += SkippedAutomation(
+                        ruleId = next.id,
+                        title = next.title,
+                        dueEpochDay = next.nextEpochDay,
+                        reason = failure.message ?: "Jadwal tidak dapat dijalankan.",
+                    )
                 }
-                if (dao.occurrenceExists(next.id, next.nextEpochDay)) {
-                    dao.updateRule(advanceRule(next).bumpRevision())
-                    return@withTransaction
-                }
-                val dueDate = LocalDate.ofEpochDay(next.nextEpochDay)
-                val eventId = if (next.direction == TransactionDirection.INCOME) {
-                    postIncomeInternal(next.accountId, next.fundingChannel, next.amount, next.categoryId, next.title, "Dibuat otomatis", dueDate, LedgerType.AUTOMATION, "SYSTEM", next.allocationId)
-                } else {
-                    postExpenseInternal(next.accountId, next.fundingChannel, next.amount, listOf(ExpenseSplitInput(next.categoryId, next.allocationId, next.amount)), next.title, "Dibuat otomatis", dueDate, LedgerType.AUTOMATION, "SYSTEM")
-                }
-                dao.insertOccurrence(RecurringOccurrenceEntity(ruleId = next.id, dueEpochDay = next.nextEpochDay, eventId = eventId))
-                dao.updateRule(advanceRule(next).bumpRevision())
-                assertInvariant()
             }
         }
+        return AutomationReport(posted, skipped.toList())
+    }
+
+    /** Runs one due rule inside an open transaction. Throws when the rule cannot be posted. */
+    private suspend fun runDueRule(rule: RecurringRuleEntity) {
+        if (rule.endEpochDay != null && rule.nextEpochDay > rule.endEpochDay) {
+            dao.updateRule(rule.copy(isPaused = true).bumpRevision())
+            return
+        }
+        if (dao.occurrenceExists(rule.id, rule.nextEpochDay)) {
+            dao.updateRule(advanceRule(rule).bumpRevision())
+            return
+        }
+        val dueDate = LocalDate.ofEpochDay(rule.nextEpochDay)
+        val eventId = if (rule.direction == TransactionDirection.INCOME) {
+            postIncomeInternal(rule.accountId, rule.fundingChannel, rule.amount, rule.categoryId, rule.title, "Dibuat otomatis", dueDate, LedgerType.AUTOMATION, "SYSTEM", rule.allocationId)
+        } else {
+            postExpenseInternal(rule.accountId, rule.fundingChannel, rule.amount, listOf(ExpenseSplitInput(rule.categoryId, rule.allocationId, rule.amount)), rule.title, "Dibuat otomatis", dueDate, LedgerType.AUTOMATION, "SYSTEM")
+        }
+        dao.insertOccurrence(RecurringOccurrenceEntity(ruleId = rule.id, dueEpochDay = rule.nextEpochDay, eventId = eventId))
+        dao.updateRule(advanceRule(rule).bumpRevision())
+        assertInvariant()
     }
 
     suspend fun reconcilePortfolios(today: LocalDate = LocalDate.now()) = database.withTransaction {

@@ -328,6 +328,8 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, St
     val activeAllocationIds = activeAllocations.mapTo(mutableSetOf()) { it.id }
     val validBudgetSplits = unexpected || splits.all { it.allocationId in activeAllocationIds && it.categoryId != null }
     val enoughBalance = splitTotal <= accountBalance
+    val channelVault = if (channel == FundingChannel.CASH) state.vaultCash else state.vaultEBudget
+    val bookedUsage = (splitTotal - channelVault).coerceAtLeast(0L)
     FormDialog("Catat pengeluaran", onDismiss, confirmEnabled = account != null && splitTotal > 0 && enoughBalance && splits.all { money(it.amount) > 0 } && validBudgetSplits && intervalCount > 0 && (endDate == null || !endDate!!.isBefore(startDate)), onConfirm = {
         val customNote = splits.fold(note) { acc, split ->
             if (split.customCategoryName.isNotBlank()) "$acc [Kategori: ${split.customCategoryName}]" else acc
@@ -372,7 +374,15 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, St
                 channel = value
             }
         }
-        Text(if (unexpected) "Langsung mengurangi Cash dan tidak mengurangi budget." else "Pilih alokasi budget terlebih dahulu, lalu kategori yang terhubung.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+        Text(
+            if (unexpected) {
+                "Langsung mengurangi saldo ${channelLabel(channel)} dan Main Vault, tanpa memakai alokasi kategori."
+            } else {
+                "Pilih alokasi budget terlebih dahulu, lalu kategori yang terhubung."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.tertiary,
+        )
         Text("SPLIT TRANSAKSI", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
         splits.forEachIndexed { index, split ->
             Column(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -421,6 +431,16 @@ fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, St
         Text("Total ${displayMoney(splitTotal, state.valuesVisible)}", style = MaterialTheme.typography.titleMedium)
         if (splitTotal > accountBalance && splitTotal > 0) {
             Text("Saldo akun tidak mencukupi. Tersedia ${displayMoney(accountBalance, state.valuesVisible)}.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        // An unexpected expense is drawn from the Main Vault, and the account balance check above
+        // cannot tell whether that money is already promised to a budget category.
+        if (unexpected && bookedUsage > 0L && enoughBalance) {
+            Text(
+                "Pengeluaran ini memakai ${displayMoney(bookedUsage, state.valuesVisible)} dana yang sudah dibooking ke budget. " +
+                    "Main Vault ${channelLabel(channel)} tersisa ${displayMoney(channelVault, state.valuesVisible)} dan akan menjadi minus.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
         }
         OutlinedTextField(title, { title = it }, label = { Text("Judul") }, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(note, { note = it }, label = { Text("Catatan") }, modifier = Modifier.fillMaxWidth())

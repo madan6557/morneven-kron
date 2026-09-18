@@ -374,7 +374,13 @@ private fun DebtPaymentDialog(
     var note by rememberSaveable { mutableStateOf("") }
     var dateDay by rememberSaveable { mutableStateOf(LocalDate.now().toEpochDay()) }
     val paymentDate = LocalDate.ofEpochDay(dateDay)
-    val dateValid = !paymentDate.isBefore(LocalDate.ofEpochDay(debt.interestAnchorEpochDay))
+    // The interest anchor tracks the accrual schedule, so the ordering guard reads the recorded
+    // history instead. Both sides of this check must match KronRepository.recordDebtPayment.
+    val lastEntryDay = remember(state.debtEntries, debt.id, debt.interestAnchorEpochDay) {
+        state.debtEntries.filter { it.debtId == debt.id }.maxOfOrNull { it.effectiveEpochDay }
+            ?: debt.interestAnchorEpochDay
+    }
+    val dateValid = !paymentDate.isBefore(LocalDate.ofEpochDay(lastEntryDay))
     val interest = DebtCalculator.currentInterest(debt, paymentDate)
     val maximum = debt.principalOutstanding + interest
     val amountValue = parseMoneyInput(amount)
@@ -386,6 +392,16 @@ private fun DebtPaymentDialog(
         else -> Long.MAX_VALUE
     }
     val channelAvailable = channel == DebtFundingSource.EXTERNAL || debt.role != DebtRole.DEBTOR || amountValue <= channelBalance
+    val channelVault = when (channel) {
+        DebtFundingSource.CASH -> state.vaultCash
+        DebtFundingSource.EBUDGET -> state.vaultEBudget
+        else -> Long.MAX_VALUE
+    }
+    val bookedUsage = if (debt.role == DebtRole.DEBTOR && channel != DebtFundingSource.EXTERNAL) {
+        (amountValue - channelVault).coerceAtLeast(0L)
+    } else {
+        0L
+    }
     val valid = dateValid && amountValue > 0 && channelAvailable && (channel == DebtFundingSource.EXTERNAL || categories.isEmpty() || categoryId != null)
     FormDialog(
         title = if (debt.role == DebtRole.DEBTOR) "Bayar hutang" else "Terima piutang",
@@ -456,6 +472,17 @@ private fun DebtPaymentDialog(
             Text(
                 "Saldo $channel tidak mencukupi (tersedia ${displayMoney(channelBalance, state.valuesVisible)}, butuh ${displayMoney(amountValue, state.valuesVisible)})",
                 color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        // Paying a debt draws from the Main Vault, which may already be fully booked into budget
+        // categories. The balance check above cannot see that, so the shortfall is spelled out here
+        // rather than only showing up as a negative Vault afterwards.
+        if (bookedUsage > 0L) {
+            Text(
+                "Pembayaran ini memakai ${displayMoney(bookedUsage, state.valuesVisible)} dana yang sudah dibooking ke budget. " +
+                    "Main Vault $channel tersisa ${displayMoney(channelVault, state.valuesVisible)}.",
+                color = MaterialTheme.colorScheme.tertiary,
                 style = MaterialTheme.typography.bodySmall,
             )
         }

@@ -101,17 +101,17 @@ class CsvExporter @Inject constructor(
 
             writer.appendLine()
             writer.appendLine("KRON SUMMARY")
-            val income = activities.filter { it.type in setOf("INCOME", "OPENING_BALANCE") && it.reversedByEventId == null }.sumOf { it.cashImpact.coerceAtLeast(0L) }
-            val expense = activities.filter { it.type in setOf("EXPENSE", "AUTOMATION") && it.reversedByEventId == null }.sumOf { (-it.cashImpact).coerceAtLeast(0L) }
-            val unexpected = activities.filter { it.type == "UNEXPECTED_EXPENSE" && it.reversedByEventId == null }.sumOf { (-it.cashImpact).coerceAtLeast(0L) }
+            val totals = CashflowTotals.of(activities)
             val reversalCount = activities.count { it.reversedByEventId != null }
             val totalEvents = activities.size
-            val totalReceipts = receiptsByEvent.size
+            val totalReceipts = activities.sumOf { receiptsByEvent[it.id].orEmpty().size }
             writer.appendLine("metrik,nilai")
             writer.appendLine("total_event,$totalEvents")
-            writer.appendLine("total_pemasukan,$income")
-            writer.appendLine("total_pengeluaran,$expense")
-            writer.appendLine("total_pengeluaran_tak_terduga,$unexpected")
+            writer.appendLine("total_pemasukan,${totals.income}")
+            writer.appendLine("total_pengeluaran,${totals.expense}")
+            writer.appendLine("total_pengeluaran_tak_terduga,${totals.unexpected}")
+            writer.appendLine("total_pengeluaran_keseluruhan,${totals.totalExpense}")
+            writer.appendLine("arus_kas_bersih,${totals.net}")
             writer.appendLine("total_reversal,$reversalCount")
             writer.appendLine("total_lampiran,$totalReceipts")
         } ?: error("Tidak dapat membuka file CSV")

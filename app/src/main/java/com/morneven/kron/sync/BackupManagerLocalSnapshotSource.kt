@@ -21,7 +21,7 @@ class BackupManagerLocalSnapshotSource(
     private val database get() = databaseRuntime.current()
 
     override suspend fun describe(): LocalDatasetSnapshot = withContext(Dispatchers.IO) {
-        // ponytail: whole local read inside the snapshot lock so an account
+        // The whole local read happens inside the snapshot lock so an account
         // switch restore can never swap the database under an open Room connection
         snapshotOperationLock.withLock {
             describeLocked()

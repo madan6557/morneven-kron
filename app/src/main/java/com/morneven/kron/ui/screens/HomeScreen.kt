@@ -43,7 +43,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.morneven.kron.data.FundingChannel
-import com.morneven.kron.data.DebtCalculator
+import com.morneven.kron.data.DebtSummary
 import com.morneven.kron.data.DebtRole
 import com.morneven.kron.data.DebtStatus
 import com.morneven.kron.data.PeriodStatus
@@ -89,15 +89,13 @@ fun HomeScreen(
     val negative = state.allocations.filter { !it.portfolioArchived && it.availableAmount < 0 }
     val underfunded = state.periods.filter { it.portfolioId in activePortfolioIds && it.status == PeriodStatus.UNDERFUNDED }
     val activeRules = state.rules.filterNot { it.isPaused }
-    val activeDebts = state.debts.filter { it.status == DebtStatus.OPEN }
     val today = LocalDate.now()
-    val debtInterest = activeDebts.sumOf { DebtCalculator.currentInterest(it, today) }
-    val debtPayable = activeDebts.filter { it.role == DebtRole.DEBTOR }
-        .sumOf { it.principalOutstanding + DebtCalculator.currentInterest(it, today) }
-    val debtReceivable = activeDebts.filter { it.role == DebtRole.CREDITOR }
-        .sumOf { it.principalOutstanding + DebtCalculator.currentInterest(it, today) }
-    val nearestDebt = activeDebts.filter { it.dueEpochDay != null }.minByOrNull { it.dueEpochDay!! }
-    val overdueDebtCount = activeDebts.count { DebtCalculator.isOverdue(it, today) }
+    val vaultDeficit = state.vaultDeficit
+    val stalledRules = state.stalledRules(today)
+    // Interest accrual walks one step per elapsed period, so recomputing it on every recomposition
+    // is real work. It only changes when the debts change or the day rolls over.
+    val debtSummary = remember(state.debts, today.toEpochDay()) { DebtSummary.of(state.debts, today) }
+    val activeDebts = debtSummary.active
 
     LazyColumn(
         modifier = modifier,
@@ -230,10 +228,11 @@ fun HomeScreen(
                     SectionHeader("Hutang & Piutang", "Kelola", onDebt)
                     HudCard(accent = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.65f)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Metric("Perlu dibayar", displayMoney(debtPayable, visible), Modifier.weight(1f), MaterialTheme.colorScheme.error)
-                            Metric("Akan diterima", displayMoney(debtReceivable, visible), Modifier.weight(1f), KronGreen)
+                            Metric("Perlu dibayar", displayMoney(debtSummary.payable, visible), Modifier.weight(1f), MaterialTheme.colorScheme.error)
+                            Metric("Akan diterima", displayMoney(debtSummary.receivable, visible), Modifier.weight(1f), KronGreen)
                         }
-                        if (debtInterest > 0L) Text("Bunga berjalan: ${displayMoney(debtInterest, visible)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                        if (debtSummary.interest > 0L) Text("Bunga berjalan: ${displayMoney(debtSummary.interest, visible)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                        val nearestDebt = debtSummary.nearest
                         nearestDebt?.dueEpochDay?.let { dueDay ->
                             val due = LocalDate.ofEpochDay(dueDay)
                             Text(
@@ -242,13 +241,13 @@ fun HomeScreen(
                                 color = if (due.isBefore(today)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        if (overdueDebtCount > 0) Text("$overdueDebtCount hutang/piutang melewati tenggat", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        if (debtSummary.overdue > 0) Text("${debtSummary.overdue} hutang/piutang melewati tenggat", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     }
                 }
             }
         }
 
-        if (negative.isNotEmpty() || underfunded.isNotEmpty() || state.unresolvedTotal < 0) {
+        if (negative.isNotEmpty() || underfunded.isNotEmpty() || state.unresolvedTotal < 0 || vaultDeficit < 0 || stalledRules.isNotEmpty()) {
             item {
                 Column {
                     SectionHeader("Pusat perhatian")
@@ -257,6 +256,13 @@ fun HomeScreen(
                             icon = Icons.Outlined.ErrorOutline,
                             title = "${negative.size} kategori budget minus",
                             value = displayMoney(negative.sumOf { it.availableAmount }, visible),
+                            color = MaterialTheme.colorScheme.error,
+                            onClick = onResolve,
+                        )
+                        if (vaultDeficit < 0) AttentionRow(
+                            icon = Icons.Outlined.ErrorOutline,
+                            title = "Main Vault terpakai melebihi sisa",
+                            value = displayMoney(vaultDeficit, visible),
                             color = MaterialTheme.colorScheme.error,
                             onClick = onResolve,
                         )
@@ -273,6 +279,23 @@ fun HomeScreen(
                             value = "Perlu booking",
                             color = KronGold,
                             onClick = onResolve,
+                        )
+                        if (stalledRules.isNotEmpty()) AttentionRow(
+                            icon = Icons.Outlined.CalendarMonth,
+                            title = "${stalledRules.size} jadwal otomatis tertunda",
+                            value = "Belum tercatat",
+                            color = KronGold,
+                            onClick = onAllActivities,
+                        )
+                        if (vaultDeficit < 0) Text(
+                            "Pengeluaran tak terduga memakai dana yang sudah dibooking ke budget. Kurangi alokasi kategori atau tambah pemasukan agar Main Vault kembali positif.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (stalledRules.isNotEmpty()) Text(
+                            "KRON mencoba ulang jadwal yang tertunda setiap hari. Penyebab tersering adalah saldo kanal belum mencukupi saat jadwal jatuh tempo.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
@@ -359,8 +382,13 @@ fun HomeScreen(
             }
         }
 
+        // Debt movements change the account balance just like any other transaction, so leaving
+        // them out made a recorded payment look like it had not been saved.
         val financialActivities = state.activities.filter {
-            it.type in setOf("INCOME", "EXPENSE", "UNEXPECTED_EXPENSE", "TRANSFER", "OPENING_BALANCE", "CHANNEL_TRANSFER")
+            it.type in setOf(
+                "INCOME", "EXPENSE", "UNEXPECTED_EXPENSE", "TRANSFER", "OPENING_BALANCE",
+                "CHANNEL_TRANSFER", "DEBT_OPEN", "DEBT_PAYMENT", "AUTOMATION",
+            )
         }
         if (financialActivities.isNotEmpty()) {
             item { SectionHeader("Aktivitas terbaru", "Lihat semua", onAllActivities) }

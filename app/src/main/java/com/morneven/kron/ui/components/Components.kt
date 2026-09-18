@@ -745,6 +745,13 @@ fun eventTypeLabel(type: String): String = when (type) {
     "RESTORE" -> "Pemulihan"
     "RESTORE_REVERSAL" -> "Pemulihan reversal"
     "CORRECTION" -> "Koreksi jurnal"
+    "DEBT_OPEN" -> "Hutang dibuat"
+    "DEBT_PAYMENT" -> "Pembayaran hutang"
+    "DEBT_ARCHIVE" -> "Hutang diarsipkan"
+    "ATTACH_EVIDENCE" -> "Bukti dilampirkan"
+    "EVIDENCE_KEY_ROTATION" -> "Rotasi kunci bukti"
+    "IMPORT" -> "Impor data"
+    "SYSTEM" -> "Aktivitas sistem"
     else -> type.replace('_', ' ').lowercase().replaceFirstChar { it.titlecase() }
 }
 

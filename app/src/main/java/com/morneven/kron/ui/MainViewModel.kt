@@ -16,6 +16,7 @@ import com.morneven.kron.data.AccountEntity
 import com.morneven.kron.data.ActivityRow
 import com.morneven.kron.data.AllocationBalanceRow
 import com.morneven.kron.data.AllocationDraft
+import com.morneven.kron.data.AutomationReport
 import com.morneven.kron.data.BudgetPeriodEntity
 import com.morneven.kron.data.CashflowRow
 import com.morneven.kron.data.CategoryEntity
@@ -138,6 +139,20 @@ data class KronUiState(
     val bookedCash: Long get() = allocations.filter { !it.portfolioArchived && it.periodStatus != PeriodStatus.CLOSED && it.fundingChannel == FundingChannel.CASH }.sumOf { it.bookedAmount }
     val bookedEBudget: Long get() = allocations.filter { !it.portfolioArchived && it.periodStatus != PeriodStatus.CLOSED && it.fundingChannel == FundingChannel.EBUDGET }.sumOf { it.bookedAmount }
     val unresolvedTotal: Long get() = unallocatedCash + unallocatedEBudget
+
+    /**
+     * How far the Main Vault is overdrawn, as a negative number, or zero when it is not.
+     *
+     * Spending that is not covered by an allocation is taken from the Vault, and nothing stops it
+     * from going past zero: the money exists in the account, it is simply already promised to a
+     * budget. Measured per channel, because a Cash surplus does not make an eBudget shortfall any
+     * less real.
+     */
+    val vaultDeficit: Long get() = minOf(vaultCash, 0L) + minOf(vaultEBudget, 0L)
+
+    /** Schedules whose due date has passed without being posted, which means automation is stuck. */
+    fun stalledRules(today: LocalDate): List<RecurringRuleEntity> =
+        rules.filter { !it.isPaused && it.nextEpochDay < today.toEpochDay() }
 }
 
 private data class LedgerSlice(
@@ -399,22 +414,36 @@ class MainViewModel @Inject constructor(
                     if (enabled) budgetNotifier.sync(allocations.filter { !it.portfolioArchived && it.periodStatus != PeriodStatus.CLOSED })
                 }
         }
-        viewModelScope.launch {
-            runCatching {
-                val firstInstall = repository.isFirstInstall()
-                repository.seedIfNeeded()
-                if (!preferences.onboardingComplete.first() && !firstInstall) {
-                    preferences.completeOnboarding()
-                }
-                repository.processDueRules(direction = TransactionDirection.INCOME)
-                repository.reconcilePortfolios()
-                repository.processDueRules(direction = TransactionDirection.EXPENSE)
-                repository.purgeExpiredReversalReceipts()
-            }.onFailure {
+        viewModelScope.launch { runStartupMaintenance() }
+    }
+
+    /**
+     * Startup housekeeping. Each step is isolated so a step that cannot complete, most often a
+     * scheduled expense larger than the current balance, does not silently cancel the steps behind
+     * it. Only the first real failure is reported, and a skipped schedule is explained instead of
+     * surfacing as a bare balance error on every launch.
+     */
+    private suspend fun runStartupMaintenance() {
+        var report = AutomationReport()
+        var failure: String? = null
+        suspend fun step(block: suspend () -> Unit) {
+            runCatching { block() }.onFailure {
                 if (it is CancellationException) throw it
-                message.value = it.message ?: "Gagal menyiapkan data"
+                if (failure == null) failure = it.message ?: "Gagal menyiapkan data"
             }
         }
+        step {
+            val firstInstall = repository.isFirstInstall()
+            repository.seedIfNeeded()
+            if (!preferences.onboardingComplete.first() && !firstInstall) {
+                preferences.completeOnboarding()
+            }
+        }
+        step { report += repository.processDueRules(direction = TransactionDirection.INCOME) }
+        step { repository.reconcilePortfolios() }
+        step { report += repository.processDueRules(direction = TransactionDirection.EXPENSE) }
+        step { repository.purgeExpiredReversalReceipts() }
+        (failure ?: report.userMessage())?.let { message.value = it }
     }
 
     fun toggleValues() = viewModelScope.launch {

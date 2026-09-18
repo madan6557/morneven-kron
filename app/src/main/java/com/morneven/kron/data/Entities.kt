@@ -761,17 +761,46 @@ data class DebtEntryEntity(
 )
 
 object DebtCalculator {
+    /** Safety stop so a nonsensical anchor or interval cannot spin the accrual walk. */
+    private const val MAX_INTERVALS = 100_000L
+    private const val MAX_OFFSET = 12_000_000L
+
+    private fun step(debt: DebtEntity): Long = debt.interestIntervalMonths.coerceAtLeast(1).toLong()
+
+    private fun unit(debt: DebtEntity): ChronoUnit =
+        if (debt.interestIntervalUnit == InterestInterval.DAYS) ChronoUnit.DAYS else ChronoUnit.MONTHS
+
+    /**
+     * Whole interest periods completed between the stored anchor and [onDate], together with the
+     * boundary date those periods reached.
+     *
+     * Every boundary is measured from the anchor itself rather than from the previous boundary, so
+     * a debt anchored on the 31st keeps charging on the 31st instead of sliding to the 28th after
+     * the first short month. This is the same anchoring rule [ScheduleCalculator] uses for
+     * recurring transactions.
+     */
+    private fun elapsed(debt: DebtEntity, onDate: LocalDate): Pair<Long, LocalDate> {
+        val anchor = LocalDate.ofEpochDay(debt.interestAnchorEpochDay)
+        val step = step(debt)
+        val unit = unit(debt)
+        var intervals = 0L
+        var boundary = anchor
+        while (intervals < MAX_INTERVALS) {
+            val offset = step * (intervals + 1)
+            if (offset > MAX_OFFSET) break
+            val next = anchor.plus(offset, unit)
+            if (next.isAfter(onDate)) break
+            intervals++
+            boundary = next
+        }
+        return intervals to boundary
+    }
+
     fun currentInterest(debt: DebtEntity, onDate: LocalDate = LocalDate.now()): Long {
         if (debt.status != DebtStatus.OPEN || debt.principalOutstanding <= 0L || debt.interestRateBps <= 0) {
             return debt.interestOutstanding
         }
-        var next = LocalDate.ofEpochDay(debt.interestAnchorEpochDay)
-            .plus(debt.interestIntervalMonths.coerceAtLeast(1).toLong(), if (debt.interestIntervalUnit == InterestInterval.DAYS) ChronoUnit.DAYS else ChronoUnit.MONTHS)
-        var intervals = 0L
-        while (!next.isAfter(onDate)) {
-            intervals++
-            next = next.plus(debt.interestIntervalMonths.coerceAtLeast(1).toLong(), if (debt.interestIntervalUnit == InterestInterval.DAYS) ChronoUnit.DAYS else ChronoUnit.MONTHS)
-        }
+        val (intervals, _) = elapsed(debt, onDate)
         if (intervals == 0L) return debt.interestOutstanding
         val accrued = BigInteger.valueOf(debt.principalOutstanding)
             .multiply(BigInteger.valueOf(debt.interestRateBps.toLong()))
@@ -779,6 +808,19 @@ object DebtCalculator {
             .divide(BigInteger.valueOf(10_000L))
         require(accrued <= BigInteger.valueOf(Long.MAX_VALUE)) { "Bunga hutang melebihi batas nilai" }
         return Math.addExact(debt.interestOutstanding, accrued.toLong())
+    }
+
+    /**
+     * The anchor to store once interest has been settled up to [onDate].
+     *
+     * Interest is charged at anchor plus whole intervals, so the anchor may only advance to a
+     * boundary that has actually been reached. Moving it to the payment date instead would restart
+     * the schedule on every payment: the part of the period already elapsed would be erased, and a
+     * repeated token payment could defer interest indefinitely.
+     */
+    fun settledAnchorEpochDay(debt: DebtEntity, onDate: LocalDate): Long {
+        if (debt.interestRateBps <= 0) return debt.interestAnchorEpochDay
+        return elapsed(debt, onDate).second.toEpochDay()
     }
 
     fun isOverdue(debt: DebtEntity, onDate: LocalDate = LocalDate.now()): Boolean =

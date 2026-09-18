@@ -24,15 +24,22 @@ class AutomationWorker(
         val databaseRuntime = DatabaseRuntime(applicationContext, SnapshotOperationLock())
         val postingEngine = LedgerPostingEngine(applicationContext, databaseRuntime, EvidenceSigningKeyManager())
         SnapshotOperationLock().withLock {
-            KronRepository(databaseRuntime, postingEngine, TeamAccessGuard(databaseRuntime)).apply {
+            KronRepository(databaseRuntime, postingEngine, TeamAccessGuard(databaseRuntime)).run {
                 seedIfNeeded()
-                processDueRules(direction = TransactionDirection.INCOME)
+                var report = processDueRules(direction = TransactionDirection.INCOME)
                 reconcilePortfolios()
-                processDueRules(direction = TransactionDirection.EXPENSE)
+                report += processDueRules(direction = TransactionDirection.EXPENSE)
+                report
             }
         }
     }.fold(
-        onSuccess = { Result.success() },
+        onSuccess = { report ->
+            // A schedule that cannot run keeps its due date and is retried on the next pass, so the
+            // worker itself has succeeded. Telling the user is what turns a silent stall into
+            // something they can act on.
+            AutomationNotifier(applicationContext).notifySkipped(report.skipped)
+            Result.success()
+        },
         onFailure = {
             when (it) {
                 is CancellationException -> throw it
