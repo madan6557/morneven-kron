@@ -1256,6 +1256,10 @@ private fun BudgetBarChart(data: List<PeriodChartData>, modifier: Modifier) {
 fun ResolveDialog(state: KronUiState, onDismiss: () -> Unit, onAllocation: (Long, Long, Long, String) -> Unit, onVault: (Long, Long, String) -> Unit, onRollover: (Long, Long, String) -> Unit, onUnallocated: (Long, Long, String) -> Unit) {
     val targets = state.allocations.filter { it.availableAmount < 0 }
     val hasUnallocated = state.unallocatedCash < 0 || state.unallocatedEBudget < 0
+    // An overdrawn Vault is not a minus category, so nothing here can resolve it. Saying "semua
+    // budget sehat" while the Vault is negative would contradict the warning that sent the user
+    // here, so the state is named and the actual remedy is spelled out instead.
+    val vaultDeficit = state.vaultDeficit
     var mode by rememberSaveable { mutableStateOf(if (targets.isNotEmpty()) "MINUS" else "UNALLOCATED") }
     var targetId by rememberSaveable { mutableStateOf(targets.firstOrNull()?.id) }
     var sourceId by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -1292,8 +1296,30 @@ fun ResolveDialog(state: KronUiState, onDismiss: () -> Unit, onAllocation: (Long
                 FilterChip(selected = mode == "UNALLOCATED", onClick = { mode = "UNALLOCATED" }, label = { Text("Belum dialokasikan") })
             }
         }
+        if (vaultDeficit < 0) {
+            HudCard(accent = MaterialTheme.colorScheme.error.copy(alpha = 0.6f)) {
+                Text(
+                    "Main Vault minus ${displayMoney(vaultDeficit, state.valuesVisible)}",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Text(
+                    "Pengeluaran tak terduga memakai dana yang sudah dibooking ke kategori budget. " +
+                        "Kurangi alokasi kategori lewat Koreksi pada halaman Budget agar dana kembali ke Main Vault, " +
+                        "atau catat pemasukan baru.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         if (targets.isEmpty() && !hasUnallocated) {
-            Text("Tidak ada kategori minus. Semua budget sehat.")
+            Text(
+                if (vaultDeficit < 0) {
+                    "Tidak ada kategori minus, tetapi Main Vault masih perlu dipulihkan."
+                } else {
+                    "Tidak ada kategori minus. Semua budget sehat."
+                },
+            )
         } else if (mode == "MINUS") {
             ChoiceField("Kategori minus", targetId, targets, { it.id }, { "${it.categoryName} · ${channelLabel(it.fundingChannel)} · ${displayMoney(it.availableAmount, state.valuesVisible)}" }) {
                 targetId = it

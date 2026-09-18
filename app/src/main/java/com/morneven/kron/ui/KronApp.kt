@@ -427,6 +427,8 @@ private fun MainScaffold(
     var dialogReceiptUri by remember { mutableStateOf<Uri?>(null) }
     var dialogCameraFile by remember { mutableStateOf<java.io.File?>(null) }
     val manualRestoreReady by viewModel.isManualRestoreReady.collectAsState()
+    val ledgerIntegrity by viewModel.ledgerIntegrity.collectAsState()
+    val ledgerIntegrityRunning by viewModel.ledgerIntegrityRunning.collectAsState()
     val teamConflictAccount by viewModel.teamConflictAccount.collectAsState()
     val teamConflictPreview by viewModel.teamConflictPreview.collectAsState()
     val teamConflictError by viewModel.teamConflictError.collectAsState()
@@ -1198,6 +1200,12 @@ private fun MainScaffold(
                     { navController.navigate("debts") },
                     { navController.navigate("activity") },
                     { ruleId -> criticalAction = CriticalAction("Hentikan jadwal otomatis", "Occurrence berikutnya tidak akan dibuat. Riwayat lama tetap tersimpan.") { viewModel.pauseRecurringRule(ruleId, it) }; criticalReason = "" },
+                    onSchedules = {
+                        navController.navigate("settings") {
+                            popUpTo("home")
+                            launchSingleTop = true
+                        }
+                    },
                     readOnly = teamReadOnly,
                     modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
                 )
@@ -1536,6 +1544,9 @@ private fun MainScaffold(
                     },
                     driveSyncConnected = cloudBackupState.status != CloudSyncStatus.UNAVAILABLE &&
                         cloudBackupState.status != CloudSyncStatus.NOT_CONNECTED,
+                    ledgerIntegrity = ledgerIntegrity,
+                    ledgerIntegrityRunning = ledgerIntegrityRunning,
+                    onRunLedgerIntegrityCheck = viewModel::runLedgerIntegrityCheck,
                 )
             }
         }

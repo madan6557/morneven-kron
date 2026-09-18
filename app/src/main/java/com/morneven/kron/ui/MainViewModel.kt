@@ -27,6 +27,7 @@ import com.morneven.kron.data.AuditSnapshotEntity
 import com.morneven.kron.data.EventChannelRow
 import com.morneven.kron.data.FundingChannel
 import com.morneven.kron.data.KronRepository
+import com.morneven.kron.data.LedgerIntegrityReport
 import com.morneven.kron.data.PeriodStatus
 import com.morneven.kron.data.PortfolioEntity
 import com.morneven.kron.data.RecurringRuleEntity
@@ -242,6 +243,10 @@ class MainViewModel @Inject constructor(
     private val manualRestoreReady = MutableStateFlow(false)
     private val evidenceHealthState = MutableStateFlow<EvidenceHealth?>(null)
     val evidenceHealth: StateFlow<EvidenceHealth?> = evidenceHealthState
+    private val ledgerIntegrityState = MutableStateFlow<LedgerIntegrityReport?>(null)
+    val ledgerIntegrity: StateFlow<LedgerIntegrityReport?> = ledgerIntegrityState
+    private val ledgerIntegrityRunningState = MutableStateFlow(false)
+    val ledgerIntegrityRunning: StateFlow<Boolean> = ledgerIntegrityRunningState
     private val evidenceVerificationState = MutableStateFlow<EvidenceVerificationResult?>(null)
     val evidenceVerification: StateFlow<EvidenceVerificationResult?> = evidenceVerificationState
     private val auditDetailsState = MutableStateFlow<List<AuditSnapshotEntity>>(emptyList())
@@ -536,6 +541,20 @@ class MainViewModel @Inject constructor(
 
     fun refreshEvidenceHealth() = viewModelScope.launch {
         evidenceHealthState.value = evidencePackageManager.health()
+    }
+
+    fun runLedgerIntegrityCheck() = viewModelScope.launch {
+        if (ledgerIntegrityRunningState.value) return@launch
+        ledgerIntegrityRunningState.value = true
+        try {
+            ledgerIntegrityState.value = repository.inspectLedgerIntegrity()
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Exception) {
+            message.value = error.message ?: "Pemeriksaan integritas tidak dapat diselesaikan"
+        } finally {
+            ledgerIntegrityRunningState.value = false
+        }
     }
 
     fun exportEvidencePackage(uri: Uri, startDay: Long, endDay: Long, passphrase: CharArray) =

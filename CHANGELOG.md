@@ -21,6 +21,8 @@
 - Perbaikan revisi template kategori budget: penambahan dan pemulihan kategori budget tidak menaikkan revisi template, sehingga perubahan dapat kalah oleh salinan lama saat resolusi konflik sinkronisasi. Seluruh pembaruan template kini memakai satu helper yang menaikkan revisi.
 - Filter audit hutang: aktivitas hutang kini termasuk dalam filter Uang dan memiliki filter Hutang tersendiri pada halaman Transaksi & Audit.
 - Penanda jadwal tertunda pada Pengaturan: jadwal aktif yang sudah lewat jatuh tempo ditandai TERTUNDA beserta penjelasan, bukan hanya menampilkan tanggal yang sudah lewat.
+- Pemeriksaan Integritas keuangan pada Pengaturan: tombol baru menjalankan seluruh invariant finansial KRON secara read only dan melaporkan setiap kondisi satu per satu, yaitu keseimbangan general ledger, jumlah akun aktif, kesesuaian kas dengan dana secara total, per kanal, per akun, dan per akun per kanal, keseimbangan setiap event budget, serta status segel jurnal. Sebelumnya invariant hanya dapat menolak transaksi tanpa menjelaskan hubungan mana yang rusak dan seberapa besar selisihnya. Pemeriksaan ini melengkapi Pusat Bukti yang memeriksa rantai hash dan lampiran.
+- Resolving Center mengenali Main Vault minus: sebelumnya layar menyatakan "Semua budget sehat" meskipun Main Vault sedang minus. Kondisi tersebut kini dijelaskan beserta cara memulihkannya.
 - Bump versionCode 102 -> 103 dan versionName 1.7.10 -> 1.7.11.
 
 ## 1.7.10 - 2026-09-17

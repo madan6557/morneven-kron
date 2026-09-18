@@ -78,6 +78,7 @@ fun HomeScreen(
     onDebt: () -> Unit = {},
     onAllActivities: () -> Unit,
     onPauseRule: (String) -> Unit,
+    onSchedules: () -> Unit = {},
     readOnly: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
@@ -285,7 +286,7 @@ fun HomeScreen(
                             title = "${stalledRules.size} jadwal otomatis tertunda",
                             value = "Belum tercatat",
                             color = KronGold,
-                            onClick = onAllActivities,
+                            onClick = onSchedules,
                         )
                         if (vaultDeficit < 0) Text(
                             "Pengeluaran tak terduga memakai dana yang sudah dibooking ke budget. Kurangi alokasi kategori atau tambah pemasukan agar Main Vault kembali positif.",

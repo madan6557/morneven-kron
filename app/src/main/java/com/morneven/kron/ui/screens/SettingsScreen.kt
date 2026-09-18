@@ -65,6 +65,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Payments
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -90,6 +92,8 @@ import com.morneven.kron.widget.KronWidgetManager
 import com.morneven.kron.data.AccountEntity
 import com.morneven.kron.data.AccountBalanceRow
 import com.morneven.kron.data.AccountSharingMode
+import com.morneven.kron.data.LedgerCheck
+import com.morneven.kron.data.LedgerIntegrityReport
 import com.morneven.kron.data.RecurringRuleEntity
 import com.morneven.kron.data.TeamRole
 import com.morneven.kron.ui.KronUiState
@@ -97,6 +101,7 @@ import com.morneven.kron.ui.components.ChannelBadge
 import com.morneven.kron.ui.components.HudCard
 import com.morneven.kron.ui.components.SectionHeader
 import com.morneven.kron.ui.components.displayMoney
+import com.morneven.kron.ui.theme.KronButtonShape
 import com.morneven.kron.ui.theme.KronGreen
 import java.time.Instant
 import java.time.LocalDate
@@ -190,6 +195,9 @@ fun SettingsScreen(
     onViewSentCapsules: (() -> Unit)? = null,
     onViewReceivedCapsules: (() -> Unit)? = null,
     driveSyncConnected: Boolean = false,
+    ledgerIntegrity: LedgerIntegrityReport? = null,
+    ledgerIntegrityRunning: Boolean = false,
+    onRunLedgerIntegrityCheck: (() -> Unit)? = null,
 ) {
     var showArchive by rememberSaveable { mutableStateOf(false) }
     var showGlossary by rememberSaveable { mutableStateOf(false) }
@@ -549,6 +557,15 @@ fun SettingsScreen(
         }
 
         item {
+            SectionHeader("Integritas keuangan")
+            LedgerIntegrityCard(
+                report = ledgerIntegrity,
+                running = ledgerIntegrityRunning,
+                valuesVisible = state.valuesVisible,
+                onRun = onRunLedgerIntegrityCheck,
+            )
+        }
+        item {
             SectionHeader("Tentang")
             HudCard {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -817,6 +834,131 @@ fun SettingsScreen(
         )
     }
 }
+
+/**
+ * Runs the ledger self check and reports every condition, not just the first failure.
+ *
+ * KRON already refuses a write that would break an invariant, but a refusal cannot tell the user
+ * which relationship broke or by how much. This turns the same rules into something readable.
+ */
+@Composable
+private fun LedgerIntegrityCard(
+    report: LedgerIntegrityReport?,
+    running: Boolean,
+    valuesVisible: Boolean,
+    onRun: (() -> Unit)?,
+) {
+    var showAll by rememberSaveable { mutableStateOf(false) }
+    val accent = when {
+        report == null -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.45f)
+        report.healthy -> KronGreen.copy(alpha = 0.55f)
+        else -> MaterialTheme.colorScheme.error.copy(alpha = 0.65f)
+    }
+    HudCard(accent = accent) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Icon(
+                if (report?.healthy == false) Icons.Outlined.ErrorOutline else Icons.Outlined.VerifiedUser,
+                contentDescription = null,
+                tint = if (report?.healthy == false) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary,
+            )
+            Column(Modifier.weight(1f)) {
+                Text("Periksa jurnal dan saldo", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    when {
+                        report == null -> "Cocokkan saldo nyata dengan dana yang tercatat pada seluruh akun dan kanal."
+                        report.healthy -> "Seluruh ${report.checks.size} pemeriksaan lulus."
+                        else -> "${report.failed.size} dari ${report.checks.size} pemeriksaan tidak lulus."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Text(
+            "Melengkapi Pusat Bukti: di sana rantai hash dan lampiran yang diperiksa, di sini kesesuaian saldo dengan alokasi dana.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        if (report != null) {
+            Text(
+                "Diperiksa ${Instant.ofEpochMilli(report.checkedAtEpochMillis).atZone(ZoneId.systemDefault()).format(integrityTimeFormat)} · ${report.eventCount} event",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            val shown = if (showAll) report.checks else report.failed.ifEmpty { report.checks.take(3) }
+            shown.forEach { check -> LedgerCheckRow(check, valuesVisible) }
+            if (report.checks.size > shown.size || showAll) {
+                TextButton(onClick = { showAll = !showAll }) {
+                    Text(if (showAll) "Sembunyikan rincian" else "Lihat seluruh ${report.checks.size} pemeriksaan")
+                }
+            }
+            if (!report.healthy) {
+                Text(
+                    "Buat backup terenkripsi sebelum melakukan perubahan lain, lalu laporkan hasil ini. " +
+                        "Jurnal KRON bersifat append only sehingga riwayat tetap utuh.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+        }
+        if (onRun != null) {
+            Button(
+                onClick = onRun,
+                enabled = !running,
+                shape = KronButtonShape,
+                modifier = Modifier.padding(top = 8.dp),
+            ) {
+                Text(
+                    when {
+                        running -> "Memeriksa..."
+                        report == null -> "Periksa sekarang"
+                        else -> "Periksa ulang"
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LedgerCheckRow(check: LedgerCheck, valuesVisible: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(
+            if (check.passed) Icons.Outlined.CheckCircle else Icons.Outlined.ErrorOutline,
+            contentDescription = if (check.passed) "Lulus" else "Tidak lulus",
+            tint = if (check.passed) KronGreen else MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(16.dp),
+        )
+        Column(Modifier.weight(1f)) {
+            Text(check.label, style = MaterialTheme.typography.bodyMedium)
+            // The comparison is only shown when it failed. On a healthy ledger the two sides are
+            // equal by definition and repeating them for every account is just noise.
+            if (!check.passed && check.left != null && check.right != null) {
+                Text(
+                    "${check.leftLabel} ${displayMoney(check.left, valuesVisible)} · ${check.rightLabel} ${displayMoney(check.right, valuesVisible)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            check.note?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (check.passed) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
+}
+
+private val integrityTimeFormat = DateTimeFormatter.ofPattern("d MMM yyyy HH:mm", Locale.forLanguageTag("id-ID"))
 
 @Composable
 private fun RecurringRuleCard(

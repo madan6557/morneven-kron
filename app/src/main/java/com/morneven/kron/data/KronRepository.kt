@@ -179,7 +179,16 @@ class KronRepository private constructor(
 
     private suspend fun seedSyncState() {
         if (SyncStateBridge.syncState.value != null) return
-        SyncStateBridge.emit(dao.syncState() ?: SyncStateEntity(
+        // A failed read leaves the bridge empty rather than publishing a freshly generated dataset
+        // identity, which collectors already treat as "not known yet". The next collection retries.
+        val stored = try {
+            dao.syncState()
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (_: Exception) {
+            return
+        }
+        SyncStateBridge.emit(stored ?: SyncStateEntity(
             datasetId = java.util.UUID.randomUUID().toString(),
             deviceId = java.util.UUID.randomUUID().toString(),
             lastSyncedGeneration = -1,
@@ -2331,6 +2340,52 @@ class KronRepository private constructor(
         dao.updatePeriod(period.copy(status = if (hasNegative) PeriodStatus.RESOLUTION_REQUIRED else PeriodStatus.ACTIVE).bumpRevision())
     }
 
+    /**
+     * Read only self check over the same relationships [assertInvariant] enforces on every write.
+     *
+     * Enforcement can only refuse a transaction. When something is already wrong, the user needs to
+     * see which relationship broke and by how much, so this collects every result instead of
+     * stopping at the first failure. It never writes and never seals, so it is safe to run at any
+     * time, including while the ledger is in a state that would make a write fail.
+     */
+    suspend fun inspectLedgerIntegrity(): LedgerIntegrityReport = database.withTransaction {
+        val channels = listOf(FundingChannel.CASH, FundingChannel.EBUDGET)
+        LedgerIntegrityInput(
+            unbalancedLedgerEventCount = dao.unbalancedLedgerEvents().size,
+            unbalancedBudgetEventId = dao.firstUnbalancedBudgetEventId(),
+            accountCount = dao.accountCount(),
+            activeAccountCount = dao.activeAccountCount(),
+            totalCash = dao.cashTotal(),
+            totalAvailable = dao.budgetAvailableTotal(),
+            channels = channels.map { channel ->
+                ChannelIntegrityRow(channel, dao.cashTotal(channel), dao.budgetAvailableTotal(channel))
+            },
+            accounts = dao.allAccounts().map { account ->
+                AccountIntegrityRow(
+                    name = account.name,
+                    cash = dao.accountBalance(account.id),
+                    available = dao.budgetAvailableTotal(account.id),
+                    channels = channels.map { channel ->
+                        ChannelIntegrityRow(
+                            channel,
+                            dao.accountBalance(account.id, channel),
+                            dao.budgetAvailableTotal(account.id, channel),
+                        )
+                    },
+                )
+            },
+            eventCount = dao.eventCount(),
+            unsealedEventCount = dao.unsealedEventCount(),
+        ).toReport(System.currentTimeMillis())
+    }
+
+    /**
+     * Enforcement path for the financial invariants. Fails closed on the first broken relationship.
+     *
+     * [inspectLedgerIntegrity] reports the same relationships without throwing. Keep the two in
+     * step: a condition added here should be visible there, or the self check will call a broken
+     * ledger healthy.
+     */
     private suspend fun assertInvariant() {
         ledgerPostingEngine.finalizeUnsealedEvents()
         if (dao.unbalancedLedgerEvents().isNotEmpty()) {

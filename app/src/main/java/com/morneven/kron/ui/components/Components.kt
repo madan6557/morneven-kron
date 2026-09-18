@@ -66,6 +66,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.morneven.kron.data.FundingChannel
@@ -876,8 +877,14 @@ fun EmptyState(icon: ImageVector, title: String, description: String, modifier: 
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(title, style = MaterialTheme.typography.titleMedium)
-        Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(title, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+        // Without this the block is centred but its wrapped lines are not, which reads as ragged.
+        Text(
+            description,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
