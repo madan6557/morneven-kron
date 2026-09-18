@@ -1,5 +1,13 @@
 # KRON Changelog
 
+## 1.7.11 - 2026-09-18
+
+- Penyatuan kartu alokasi kategori budget terpisah kanal (linked by split): kategori yang memiliki alokasi split Cash dan eBudget kini disatukan menjadi satu kartu utuh per kategori dengan badge kanal terpadu, rincian sisa/rencana kanal, dan satu tombol Koreksi.
+- Koreksi split sinkron dan presisi: slider koreksi split persentase Cash dan eBudget beroperasi secara terhubung dan real-time. Perubahan slider otomatis menyeimbangkan kedua kanal dengan total alokasi yang konsisten dan akurat.
+- Pencegahan penggandaan total alokasi dan anomali booking: perbaikan perhitungan delta alokasi budget berbasis dana booking riil (bukan plannedAmount), mencegah lonjakan nilai booking atau alokasi saat menolkan salah satu kanal (misalnya 50:50 menjadi 100% eBudget).
+- Penyembunyian kanal 0 dana pada periode aktif: kanal dengan 0 alokasi, 0 booking, dan 0 pengeluaran otomatis disembunyikan dari kartu periode aktif dan daftar rincian kategori agar tampilan tetap bersih dan fokus pada alokasi yang aktif.
+- Bump versionCode 102 -> 103 dan versionName 1.7.10 -> 1.7.11.
+
 ## 1.7.10 - 2026-09-17
 
 - Pembayaran hutang piutang melebihi tagihan dengan pencatatan bonus terpisah: pembayaran hutang atau piutang kini dapat melebihi sisa pokok dan bunga (misalnya saat memberi atau menerima bonus terimakasih). Pokok hutang terlunasi penuh dan kelebihan otomatis dicatat sebagai transaksi terpisah di buku besar (Pengeluaran untuk hutang, Pemasukan untuk piutang).

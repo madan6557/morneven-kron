@@ -246,10 +246,9 @@ private fun ActiveBudgetCard(
             }
             Text(displayMoney(available, visible), color = signedColor(available), style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, maxLines = 1, softWrap = false)
         }
-        Spacer(Modifier.height(12.dp))
         BudgetProgress(booked, available)
         Spacer(Modifier.height(14.dp))
-        val visibleRows = rows.filter { it.isActive }
+        val visibleRows = rows.filter { it.isActive && !(it.periodStatus != PeriodStatus.DRAFT && it.bookedAmount == 0L && it.availableAmount == 0L && it.spentAmount == 0L) }
         visibleRows.forEach { row ->
             Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f).padding(end = 8.dp)) {

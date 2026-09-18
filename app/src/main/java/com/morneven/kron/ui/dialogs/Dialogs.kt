@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
@@ -583,7 +584,14 @@ fun BudgetDetailDialog(
     onRestoreCategory: ((Long, Long, Int, String) -> Unit)? = null,
 ) {
     val rows = state.allocations.filter { it.periodId == periodId }
-    val visibleRows = rows.filter { it.isActive }
+    val visibleRows = rows.filter { it.isActive && !(it.periodStatus != PeriodStatus.DRAFT && it.bookedAmount == 0L && it.availableAmount == 0L && it.spentAmount == 0L) }
+    val visibleCategoryIds = remember(visibleRows) { visibleRows.map { it.categoryId }.toSet() }
+    val activeCategoryAllocations = remember(rows, visibleCategoryIds) {
+        rows.filter { it.categoryId in visibleCategoryIds }
+    }
+    val categoryGroups = remember(activeCategoryAllocations) {
+        activeCategoryAllocations.groupBy { it.categoryId }.values.toList()
+    }
     val archivedExpenseCategories = state.archivedCategories.filter { it.direction == TransactionDirection.EXPENSE }
     var showArchivedSection by rememberSaveable { mutableStateOf(false) }
     var restoreCategoryId by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -682,27 +690,54 @@ fun BudgetDetailDialog(
                         }
                     }
                 }
-                if (visibleRows.isEmpty() && !showAddCategory) {
+                if (categoryGroups.isEmpty() && !showAddCategory) {
                     HudCard { Text("Belum ada kategori. Tambahkan kategori baru atau pulihkan.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
-                visibleRows.forEach { row ->
+                categoryGroups.forEach { catRows ->
+                    val firstRow = catRows.first()
+                    val categoryId = firstRow.categoryId
+                    val categoryName = firstRow.categoryName
+                    val cAlloc = catRows.firstOrNull { it.fundingChannel == FundingChannel.CASH }
+                    val ebAlloc = catRows.firstOrNull { it.fundingChannel == FundingChannel.EBUDGET }
+                    val isPeriodActiveOrClosed = firstRow.periodStatus != PeriodStatus.DRAFT
+                    fun allocEffectivePlanned(alloc: AllocationBalanceRow?): Long {
+                        if (alloc == null) return 0L
+                        return if (isPeriodActiveOrClosed && alloc.bookedAmount == 0L && alloc.availableAmount == 0L && alloc.spentAmount == 0L) 0L
+                        else alloc.plannedAmount
+                    }
+                    val totalPlanned = catRows.sumOf { allocEffectivePlanned(it) }
+                    val totalSpent = catRows.sumOf { it.spentAmount }
+                    val totalAvailable = catRows.sumOf { it.availableAmount }
+                    val hasCash = cAlloc != null && (allocEffectivePlanned(cAlloc) > 0L || cAlloc.availableAmount > 0L || cAlloc.spentAmount > 0L)
+                    val hasEBudget = ebAlloc != null && (allocEffectivePlanned(ebAlloc) > 0L || ebAlloc.availableAmount > 0L || ebAlloc.spentAmount > 0L)
+                    val isSplit = hasCash && hasEBudget
+
                     HudCard {
                         Column(Modifier.fillMaxWidth()) {
-                            ChannelBadge(row.fundingChannel)
-                            Text(row.categoryName, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                if (hasCash) ChannelBadge(FundingChannel.CASH)
+                                if (hasEBudget) ChannelBadge(FundingChannel.EBUDGET)
+                                if (!hasCash && !hasEBudget) ChannelBadge(firstRow.fundingChannel)
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text(categoryName, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             Spacer(Modifier.height(8.dp))
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Rencana", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(budgetMoney(row.plannedAmount), style = MaterialTheme.typography.bodyMedium)
+                                Text(budgetMoney(totalPlanned), style = MaterialTheme.typography.bodyMedium)
                             }
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Terpakai", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(budgetMoney(row.spentAmount), style = MaterialTheme.typography.bodyMedium)
+                                Text(budgetMoney(totalSpent), style = MaterialTheme.typography.bodyMedium)
                             }
                             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f))
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 Text("Sisa", style = MaterialTheme.typography.bodyMedium)
-                                val remaining = if (row.periodStatus == PeriodStatus.CLOSED) row.plannedAmount - row.spentAmount else row.availableAmount
+                                val remaining = if (firstRow.periodStatus == PeriodStatus.CLOSED) totalPlanned - totalSpent else totalAvailable
                                 Text(
                                     budgetMoney(remaining),
                                     style = MaterialTheme.typography.titleMedium,
@@ -712,71 +747,91 @@ fun BudgetDetailDialog(
                                 )
                                 if (!readOnly) {
                                     TextButton(onClick = {
-                                        if (correctionId == row.id) {
+                                        if (correctionId == categoryId) {
                                             correctionId = null
                                             splitTotalAmount = ""
                                         } else {
-                                            correctionId = row.id
-                                            val catRows = visibleRows.filter { it.categoryId == row.categoryId }
-                                            val cAlloc = catRows.firstOrNull { it.fundingChannel == FundingChannel.CASH }
-                                            val ebAlloc = catRows.firstOrNull { it.fundingChannel == FundingChannel.EBUDGET }
-                                            val curCash = cAlloc?.plannedAmount ?: 0L
-                                            val curEBudget = ebAlloc?.plannedAmount ?: 0L
+                                            correctionId = categoryId
+                                            val curCash = allocEffectivePlanned(cAlloc)
+                                            val curEBudget = allocEffectivePlanned(ebAlloc)
                                             val curTotal = curCash + curEBudget
-                                            splitTotalAmount = if (curTotal > 0L) curTotal.toString() else if (row.plannedAmount > 0L) row.plannedAmount.toString() else ""
+                                            splitTotalAmount = if (curTotal > 0L) curTotal.toString() else if (totalPlanned > 0L) totalPlanned.toString() else ""
                                             splitCashPct = if (curTotal > 0L) {
                                                 ((curCash * 100) / curTotal).toInt()
-                                            } else if (row.fundingChannel == FundingChannel.CASH) {
+                                            } else if (hasCash && !hasEBudget) {
                                                 100
-                                            } else if (row.fundingChannel == FundingChannel.EBUDGET) {
+                                            } else if (!hasCash && hasEBudget) {
                                                 0
                                             } else {
                                                 50
                                             }
-                                            splitReason = "Koreksi budget ${row.categoryName}"
+                                            splitReason = "Koreksi budget $categoryName"
                                             renameCategoryId = null
                                             deleteCategoryId = null
                                         }
                                     }) { Text("Koreksi") }
                                 }
                             }
+                            if (isSplit) {
+                                Spacer(Modifier.height(4.dp))
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                ) {
+                                    Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        val cRem = if (firstRow.periodStatus == PeriodStatus.CLOSED) cAlloc.plannedAmount - cAlloc.spentAmount else cAlloc.availableAmount
+                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text("Cash", style = MaterialTheme.typography.labelSmall, color = KronGold, fontWeight = FontWeight.SemiBold)
+                                            Text("Rencana: ${budgetMoney(cAlloc.plannedAmount)} • Sisa: ${budgetMoney(cRem)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                        val ebRem = if (firstRow.periodStatus == PeriodStatus.CLOSED) ebAlloc.plannedAmount - ebAlloc.spentAmount else ebAlloc.availableAmount
+                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text("eBudget", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary, fontWeight = FontWeight.SemiBold)
+                                            Text("Rencana: ${budgetMoney(ebAlloc.plannedAmount)} • Sisa: ${budgetMoney(ebRem)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    }
+                                }
+                            }
                             if (!readOnly && (onRenameCategory != null || onDeleteCategory != null)) {
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    if (onRenameCategory != null) TextButton(onClick = { renameCategoryId = row.categoryId; renameValue = row.categoryName; deleteCategoryId = null; correctionId = null }) { Text("Ganti nama") }
-                                    if (onDeleteCategory != null) TextButton(onClick = { deleteCategoryId = row.categoryId; deleteNote = "Arsipkan kategori ${row.categoryName}"; renameCategoryId = null; correctionId = null }) { Text("Arsipkan", color = MaterialTheme.colorScheme.error) }
+                                    if (onRenameCategory != null) TextButton(onClick = { renameCategoryId = categoryId; renameValue = categoryName; deleteCategoryId = null; correctionId = null }) { Text("Ganti nama") }
+                                    if (onDeleteCategory != null) TextButton(onClick = { deleteCategoryId = categoryId; deleteNote = "Arsipkan kategori $categoryName"; renameCategoryId = null; correctionId = null }) { Text("Arsipkan", color = MaterialTheme.colorScheme.error) }
                                 }
                             }
                         }
-                        if (row.id == correctionId) {
+                        if (categoryId == correctionId) {
                             Spacer(Modifier.height(10.dp))
                             HorizontalDivider()
                             Spacer(Modifier.height(10.dp))
 
-                            val catRows = remember(visibleRows, row.categoryId) { visibleRows.filter { it.categoryId == row.categoryId } }
-                            val cashAlloc = catRows.firstOrNull { it.fundingChannel == FundingChannel.CASH }
-                            val eBudgetAlloc = catRows.firstOrNull { it.fundingChannel == FundingChannel.EBUDGET }
-                            val oldCashPlanned = cashAlloc?.plannedAmount ?: 0L
-                            val oldEBudgetPlanned = eBudgetAlloc?.plannedAmount ?: 0L
+                            val oldCashPlanned = allocEffectivePlanned(cAlloc)
+                            val oldEBudgetPlanned = allocEffectivePlanned(ebAlloc)
                             val oldTotalPlanned = oldCashPlanned + oldEBudgetPlanned
-                            val cashSpent = cashAlloc?.spentAmount ?: 0L
-                            val eBudgetSpent = eBudgetAlloc?.spentAmount ?: 0L
+                            val cashSpent = cAlloc?.spentAmount ?: 0L
+                            val eBudgetSpent = ebAlloc?.spentAmount ?: 0L
 
                             val targetTotal = money(splitTotalAmount)
                             val targetCash = targetTotal * splitCashPct / 100
                             val targetEBudget = targetTotal - targetCash
 
-                            val deltaCash = targetCash - oldCashPlanned
-                            val deltaEBudget = targetEBudget - oldEBudgetPlanned
+                            val currentCashAvailable = cAlloc?.availableAmount ?: 0L
+                            val currentEBudgetAvailable = ebAlloc?.availableAmount ?: 0L
+                            val currentCashBooked = currentCashAvailable + cashSpent
+                            val currentEBudgetBooked = currentEBudgetAvailable + eBudgetSpent
+
+                            val deltaCash = targetCash - currentCashBooked
+                            val deltaEBudget = targetEBudget - currentEBudgetBooked
 
                             val exceedsCashSpent = targetCash >= cashSpent
                             val exceedsEBudgetSpent = targetEBudget >= eBudgetSpent
                             val enoughVaultCash = deltaCash <= 0 || deltaCash <= state.vaultCash
                             val enoughVaultEBudget = deltaEBudget <= 0 || deltaEBudget <= state.vaultEBudget
-                            val hasChanges = (deltaCash != 0L || deltaEBudget != 0L) && splitTotalAmount.isNotBlank()
+                            val hasChanges = (targetCash != oldCashPlanned || targetEBudget != oldEBudgetPlanned || deltaCash != 0L || deltaEBudget != 0L) && splitTotalAmount.isNotBlank()
                             val splitCorrectionValid = exceedsCashSpent && exceedsEBudgetSpent && enoughVaultCash && enoughVaultEBudget && hasChanges && splitReason.isNotBlank()
 
                             Text(
-                                "Koreksi Budget & Split • ${row.categoryName}",
+                                "Koreksi Budget & Split • $categoryName",
                                 style = MaterialTheme.typography.titleSmall,
                                 color = MaterialTheme.colorScheme.tertiary,
                                 fontWeight = FontWeight.Bold,
@@ -892,7 +947,7 @@ fun BudgetDetailDialog(
                                     onClick = {
                                         correctionId = null
                                         splitTotalAmount = ""
-                                        splitReason = "Koreksi budget ${row.categoryName}"
+                                        splitReason = "Koreksi budget $categoryName"
                                     },
                                     modifier = Modifier.weight(1f),
                                 ) {
@@ -902,13 +957,15 @@ fun BudgetDetailDialog(
                                     onClick = {
                                         keypadHost.dismiss()
                                         if (onCorrectSplit != null) {
-                                            onCorrectSplit(row.categoryId, targetTotal, splitCashPct, splitReason.trim())
-                                        } else {
-                                            onCorrect(row.id, targetTotal, splitReason.trim())
+                                            onCorrectSplit(categoryId, targetTotal, splitCashPct, splitReason.trim())
+                                        } else if (cAlloc != null) {
+                                            onCorrect(cAlloc.id, targetTotal, splitReason.trim())
+                                        } else if (ebAlloc != null) {
+                                            onCorrect(ebAlloc.id, targetTotal, splitReason.trim())
                                         }
                                         correctionId = null
                                         splitTotalAmount = ""
-                                        splitReason = "Koreksi budget ${row.categoryName}"
+                                        splitReason = "Koreksi budget $categoryName"
                                     },
                                     enabled = splitCorrectionValid,
                                     modifier = Modifier.weight(1f),
@@ -917,32 +974,32 @@ fun BudgetDetailDialog(
                                 }
                             }
                         }
-                        if (!readOnly && renameCategoryId == row.categoryId && onRenameCategory != null) {
+                        if (!readOnly && renameCategoryId == categoryId && onRenameCategory != null) {
                             Spacer(Modifier.height(10.dp))
                             HorizontalDivider()
                             Spacer(Modifier.height(10.dp))
-                            Text("Ganti nama ${row.categoryName}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.tertiary)
+                            Text("Ganti nama $categoryName", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.tertiary)
                             OutlinedTextField(renameValue, { renameValue = it }, label = { Text("Nama baru") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                             Text("Nama baru hanya berlaku mulai periode ini dan selanjutnya. Riwayat sebelumnya tetap memakai nama lama.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 TextButton(onClick = { renameCategoryId = null; renameValue = "" }) { Text("Batal") }
                                 Button(
-                                    onClick = { onRenameCategory(row.categoryId, renameValue.trim()); renameCategoryId = null; renameValue = "" },
-                                    enabled = renameValue.trim().isNotBlank() && !renameValue.trim().equals(row.categoryName, ignoreCase = true),
+                                    onClick = { onRenameCategory(categoryId, renameValue.trim()); renameCategoryId = null; renameValue = "" },
+                                    enabled = renameValue.trim().isNotBlank() && !renameValue.trim().equals(categoryName, ignoreCase = true),
                                 ) { Text("Simpan nama") }
                             }
                         }
-                        if (!readOnly && deleteCategoryId == row.categoryId && onDeleteCategory != null) {
+                        if (!readOnly && deleteCategoryId == categoryId && onDeleteCategory != null) {
                             Spacer(Modifier.height(10.dp))
                             HorizontalDivider()
                             Spacer(Modifier.height(10.dp))
-                            Text("Arsipkan ${row.categoryName}?", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
+                            Text("Arsipkan $categoryName?", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
                             Text("Sisa akan dikembalikan ke Main Vault. Kategori yang diarsipkan dapat dipulihkan kembali kapan saja.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             OutlinedTextField(deleteNote, { deleteNote = it }, label = { Text("Alasan arsip") }, modifier = Modifier.fillMaxWidth())
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 TextButton(onClick = { deleteCategoryId = null; deleteNote = "Arsipkan kategori" }) { Text("Batal") }
                                 Button(
-                                    onClick = { onDeleteCategory(row.categoryId, deleteNote.trim()); deleteCategoryId = null; deleteNote = "Arsipkan kategori" },
+                                    onClick = { onDeleteCategory(categoryId, deleteNote.trim()); deleteCategoryId = null; deleteNote = "Arsipkan kategori" },
                                     enabled = deleteNote.trim().isNotBlank(),
                                 ) { Text("Arsipkan kategori") }
                             }
@@ -1083,11 +1140,14 @@ fun BudgetHistoryDialog(
         }
         periods.forEach { period ->
             val rows = periodAllocations.filter { it.periodId == period.id }
-            val totalPlanned = rows.sumOf { it.plannedAmount }
+            val isClosed = period.status == PeriodStatus.CLOSED
+            fun effPlanned(r: AllocationBalanceRow): Long =
+                if (r.periodStatus != PeriodStatus.DRAFT && r.bookedAmount == 0L && r.availableAmount == 0L && r.spentAmount == 0L) 0L else r.plannedAmount
+            val totalPlanned = rows.sumOf { effPlanned(it) }
             val totalSpent = rows.sumOf { it.spentAmount }
-            val totalRemaining = rows.sumOf { if (it.periodStatus == PeriodStatus.CLOSED) it.plannedAmount - it.spentAmount else it.availableAmount }
-            val cashRemaining = rows.filter { it.fundingChannel == FundingChannel.CASH }.sumOf { if (it.periodStatus == PeriodStatus.CLOSED) it.plannedAmount - it.spentAmount else it.availableAmount }
-            val eBudgetRemaining = rows.filter { it.fundingChannel == FundingChannel.EBUDGET }.sumOf { if (it.periodStatus == PeriodStatus.CLOSED) it.plannedAmount - it.spentAmount else it.availableAmount }
+            val totalRemaining = rows.sumOf { if (isClosed) effPlanned(it) - it.spentAmount else it.availableAmount }
+            val cashRemaining = rows.filter { it.fundingChannel == FundingChannel.CASH }.sumOf { if (isClosed) effPlanned(it) - it.spentAmount else it.availableAmount }
+            val eBudgetRemaining = rows.filter { it.fundingChannel == FundingChannel.EBUDGET }.sumOf { if (isClosed) effPlanned(it) - it.spentAmount else it.availableAmount }
             HudCard(accent = if (totalRemaining < 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {

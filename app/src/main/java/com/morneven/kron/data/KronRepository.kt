@@ -1158,20 +1158,25 @@ class KronRepository private constructor(
         val allocation = requireNotNull(dao.allocationById(allocationId))
         val activeId = activeAccountId()
         require(requireNotNull(dao.portfolioForAllocation(allocationId)).accountId == activeId) { "Kategori budget bukan milik akun aktif" }
+        val period = requireNotNull(dao.periodById(allocation.periodId))
+        require(period.status != PeriodStatus.CLOSED) { "Periode sudah tertutup" }
         val oldPlanned = allocation.plannedAmount
-        val delta = newPlannedAmount - oldPlanned
-        require(delta != 0L) { "Tidak ada perubahan nominal" }
-        val spent = oldPlanned - dao.allocationAvailable(allocationId)
+        val currentAvailable = dao.allocationAvailable(allocationId)
+        val spent = dao.allocationSpent(allocationId)
         require(newPlannedAmount >= spent) { "Budget baru lebih kecil dari pengeluaran yang sudah tercatat" }
+        val currentBooked = currentAvailable + spent
+        val delta = if (period.status == PeriodStatus.DRAFT && currentBooked == 0L) 0L else newPlannedAmount - currentBooked
+        require(newPlannedAmount != oldPlanned || delta != 0L) { "Tidak ada perubahan nominal" }
         if (delta > 0) require(dao.vaultBalance(allocation.fundingChannel, activeId) >= delta) { "Main Vault tidak mencukupi untuk menambah budget" }
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(eventId, LedgerType.REALLOCATION, "Koreksi budget", note, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
-        dao.insertBudgetLines(listOf(
-            BudgetJournalLineEntity(eventId = eventId, allocationId = allocationId, fundingChannel = allocation.fundingChannel, amount = delta, accountId = activeId),
-            BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = allocation.fundingChannel, amount = -delta, accountId = activeId),
-        ))
+        if (delta != 0L) {
+            dao.insertBudgetLines(listOf(
+                BudgetJournalLineEntity(eventId = eventId, allocationId = allocationId, fundingChannel = allocation.fundingChannel, amount = delta, accountId = activeId),
+                BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = allocation.fundingChannel, amount = -delta, accountId = activeId),
+            ))
+        }
         dao.updateAllocation(allocation.copy(plannedAmount = newPlannedAmount).bumpRevision())
-        val period = requireNotNull(dao.periodById(allocation.periodId))
         val template = dao.templatesForPortfolio(period.portfolioId).firstOrNull { it.categoryId == allocation.categoryId }
         if (template != null) {
             val oldCash = template.plannedAmount * template.cashPercentage / 100
@@ -1220,15 +1225,23 @@ class KronRepository private constructor(
         val newCash = newTotalAmount * newCashPercentage / 100
         val newEBudget = newTotalAmount - newCash
 
-        val cashSpent = if (cashAlloc != null) oldCash - dao.allocationAvailable(cashAlloc.id) else 0L
-        val eBudgetSpent = if (eBudgetAlloc != null) oldEBudget - dao.allocationAvailable(eBudgetAlloc.id) else 0L
+        val cashSpent = if (cashAlloc != null) dao.allocationSpent(cashAlloc.id) else 0L
+        val eBudgetSpent = if (eBudgetAlloc != null) dao.allocationSpent(eBudgetAlloc.id) else 0L
 
         require(newCash >= cashSpent) { "Budget Cash baru lebih kecil dari pengeluaran yang sudah tercatat" }
         require(newEBudget >= eBudgetSpent) { "Budget eBudget baru lebih kecil dari pengeluaran yang sudah tercatat" }
 
-        val deltaCash = newCash - oldCash
-        val deltaEBudget = newEBudget - oldEBudget
-        require(deltaCash != 0L || deltaEBudget != 0L) { "Tidak ada perubahan nominal atau komposisi split" }
+        val currentCashAvailable = if (cashAlloc != null) dao.allocationAvailable(cashAlloc.id) else 0L
+        val currentEBudgetAvailable = if (eBudgetAlloc != null) dao.allocationAvailable(eBudgetAlloc.id) else 0L
+        val currentCashBooked = currentCashAvailable + cashSpent
+        val currentEBudgetBooked = currentEBudgetAvailable + eBudgetSpent
+
+        val deltaCash = if (period.status == PeriodStatus.DRAFT && currentCashBooked == 0L) 0L else newCash - currentCashBooked
+        val deltaEBudget = if (period.status == PeriodStatus.DRAFT && currentEBudgetBooked == 0L) 0L else newEBudget - currentEBudgetBooked
+
+        val hasPlannedChange = newCash != oldCash || newEBudget != oldEBudget
+        val hasFundingChange = deltaCash != 0L || deltaEBudget != 0L
+        require(hasPlannedChange || hasFundingChange) { "Tidak ada perubahan nominal atau komposisi split" }
 
         if (deltaCash > 0) require(dao.vaultBalance(FundingChannel.CASH, activeId) >= deltaCash) { "Main Vault Cash tidak mencukupi" }
         if (deltaEBudget > 0) require(dao.vaultBalance(FundingChannel.EBUDGET, activeId) >= deltaEBudget) { "Main Vault eBudget tidak mencukupi" }
@@ -1248,26 +1261,30 @@ class KronRepository private constructor(
 
         val budgetLines = mutableListOf<BudgetJournalLineEntity>()
 
-        if (deltaCash != 0L) {
+        if (deltaCash != 0L || newCash != oldCash) {
             val targetCashId = if (cashAlloc != null) {
                 dao.updateAllocation(cashAlloc.copy(plannedAmount = newCash).bumpRevision())
                 cashAlloc.id
             } else {
                 dao.insertAllocation(AllocationEntity(periodId = periodId, categoryId = categoryId, fundingChannel = FundingChannel.CASH, plannedAmount = newCash))
             }
-            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = targetCashId, fundingChannel = FundingChannel.CASH, amount = deltaCash, accountId = activeId))
-            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.CASH, amount = -deltaCash, accountId = activeId))
+            if (deltaCash != 0L) {
+                budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = targetCashId, fundingChannel = FundingChannel.CASH, amount = deltaCash, accountId = activeId))
+                budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.CASH, amount = -deltaCash, accountId = activeId))
+            }
         }
 
-        if (deltaEBudget != 0L) {
+        if (deltaEBudget != 0L || newEBudget != oldEBudget) {
             val targetEBudgetId = if (eBudgetAlloc != null) {
                 dao.updateAllocation(eBudgetAlloc.copy(plannedAmount = newEBudget).bumpRevision())
                 eBudgetAlloc.id
             } else {
                 dao.insertAllocation(AllocationEntity(periodId = periodId, categoryId = categoryId, fundingChannel = FundingChannel.EBUDGET, plannedAmount = newEBudget))
             }
-            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = targetEBudgetId, fundingChannel = FundingChannel.EBUDGET, amount = deltaEBudget, accountId = activeId))
-            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.EBUDGET, amount = -deltaEBudget, accountId = activeId))
+            if (deltaEBudget != 0L) {
+                budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = targetEBudgetId, fundingChannel = FundingChannel.EBUDGET, amount = deltaEBudget, accountId = activeId))
+                budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.EBUDGET, amount = -deltaEBudget, accountId = activeId))
+            }
         }
 
         if (budgetLines.isNotEmpty()) {

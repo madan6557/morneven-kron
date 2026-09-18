@@ -1,4 +1,4 @@
-﻿package com.morneven.kron.data
+package com.morneven.kron.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -86,5 +86,154 @@ class BudgetSplitCalculationTest {
 
         assertTrue("Cash delta 150k is within vault cash 200k", cashVaultOk)
         assertFalse("eBudget delta 80k exceeds vault eBudget 50k", eBudgetVaultOk)
+    }
+
+    @Test
+    fun tokenListrik_53kCorrectionFrom5050ToZeroCash() {
+        // Initial state: 53k at 50:50
+        val total = 53_000L
+        val (initialCash, initialEBudget) = calculateSplit(total, 50)
+        assertEquals(26_500L, initialCash)
+        assertEquals(26_500L, initialEBudget)
+
+        // User corrects to 100% eBudget (0% Cash)
+        val (targetCash, targetEBudget) = calculateSplit(total, 0)
+        assertEquals(0L, targetCash)
+        assertEquals(53_000L, targetEBudget)
+
+        // Delta calculation against current booked amounts
+        val currentCashBooked = initialCash
+        val currentEBudgetBooked = initialEBudget
+
+        val deltaCash = targetCash - currentCashBooked
+        val deltaEBudget = targetEBudget - currentEBudgetBooked
+
+        assertEquals(-26_500L, deltaCash) // Cash returns 26.500 to Vault
+        assertEquals(26_500L, deltaEBudget) // eBudget takes 26.500 from Vault
+        assertEquals(53_000L, targetCash + targetEBudget) // Total remains exactly 53.000
+    }
+
+    @Test
+    fun unbookedCashCorrection_avoidsDeficitOrDoubleCounting() {
+        // Scenario where Cash was already de-booked (available = 0, spent = 0, planned = 26.500)
+        // while eBudget is booked at 53.000
+        val targetTotal = 53_000L
+        val (targetCash, targetEBudget) = calculateSplit(targetTotal, 0)
+        assertEquals(0L, targetCash)
+        assertEquals(53_000L, targetEBudget)
+
+        val currentCashAvailable = 0L
+        val currentCashSpent = 0L
+        val currentCashBooked = currentCashAvailable + currentCashSpent
+
+        val currentEBudgetAvailable = 53_000L
+        val currentEBudgetSpent = 0L
+        val currentEBudgetBooked = currentEBudgetAvailable + currentEBudgetSpent
+
+        // Delta must be against current booked, NOT against old planned
+        val deltaCash = targetCash - currentCashBooked
+        val deltaEBudget = targetEBudget - currentEBudgetBooked
+
+        assertEquals(0L, deltaCash) // No funds to return, avoids negative cash deficit
+        assertEquals(0L, deltaEBudget) // Already fully funded at 53k, no extra vault needed
+    }
+
+    @Test
+    fun zeroChannelFilter_hidesEmptyChannelsInActivePeriod() {
+        // Active period: channel with 0 booked, 0 available, 0 spent should be hidden
+        val emptyActiveRow = AllocationBalanceRow(
+            id = 1L,
+            periodId = 10L,
+            portfolioId = 100L,
+            portfolioName = "Pribadi",
+            portfolioArchived = false,
+            categoryId = 200L,
+            categoryName = "Token Listrik",
+            color = 0xFF0000L,
+            categoryArchived = false,
+            fundingChannel = "CASH",
+            plannedAmount = 26_500L,
+            bookedAmount = 0L,
+            availableAmount = 0L,
+            spentAmount = 0L,
+            periodStatus = "ACTIVE",
+            startEpochDay = 20000L,
+            endEpochDay = 20030L,
+        )
+
+        val isVisibleInActivePeriod = emptyActiveRow.isActive && !(
+            emptyActiveRow.periodStatus != "DRAFT" &&
+                emptyActiveRow.bookedAmount == 0L &&
+                emptyActiveRow.availableAmount == 0L &&
+                emptyActiveRow.spentAmount == 0L
+        )
+        assertFalse("0-fund channel in ACTIVE period must be hidden", isVisibleInActivePeriod)
+
+        // DRAFT period: planned channels should remain visible so user sees what is planned
+        val draftRow = emptyActiveRow.copy(periodStatus = "DRAFT")
+        val isVisibleInDraft = draftRow.isActive && !(
+            draftRow.periodStatus != "DRAFT" &&
+                draftRow.bookedAmount == 0L &&
+                draftRow.availableAmount == 0L &&
+                draftRow.spentAmount == 0L
+        )
+        assertTrue("Planned channel in DRAFT period must stay visible", isVisibleInDraft)
+    }
+
+    @Test
+    fun effectivePlannedCalculation_preventsInflatedCategoryTotal() {
+        // Cash has planned 26.500 from old bug, but 0 booked/available/spent
+        val cashRow = AllocationBalanceRow(
+            id = 1L,
+            periodId = 10L,
+            portfolioId = 100L,
+            portfolioName = "Pribadi",
+            portfolioArchived = false,
+            categoryId = 200L,
+            categoryName = "Token Listrik",
+            color = 0xFF0000L,
+            categoryArchived = false,
+            fundingChannel = "CASH",
+            plannedAmount = 26_500L,
+            bookedAmount = 0L,
+            availableAmount = 0L,
+            spentAmount = 0L,
+            periodStatus = "ACTIVE",
+            startEpochDay = 20000L,
+            endEpochDay = 20030L,
+        )
+        // eBudget has planned 79.500, booked 53.000, available 53.000
+        val ebRow = AllocationBalanceRow(
+            id = 2L,
+            periodId = 10L,
+            portfolioId = 100L,
+            portfolioName = "Pribadi",
+            portfolioArchived = false,
+            categoryId = 200L,
+            categoryName = "Token Listrik",
+            color = 0xFF0000L,
+            categoryArchived = false,
+            fundingChannel = "EBUDGET",
+            plannedAmount = 53_000L,
+            bookedAmount = 53_000L,
+            availableAmount = 53_000L,
+            spentAmount = 0L,
+            periodStatus = "ACTIVE",
+            startEpochDay = 20000L,
+            endEpochDay = 20030L,
+        )
+
+        fun allocEffectivePlanned(row: AllocationBalanceRow): Long {
+            return if (row.periodStatus != "DRAFT" && row.bookedAmount == 0L && row.availableAmount == 0L && row.spentAmount == 0L) 0L
+            else row.plannedAmount
+        }
+
+        val effCash = allocEffectivePlanned(cashRow)
+        val effEb = allocEffectivePlanned(ebRow)
+        val totalEffective = effCash + effEb
+
+        assertEquals("Cash with 0 funds should have 0 effective planned", 0L, effCash)
+        assertEquals("eBudget should have 53.000 effective planned", 53_000L, effEb)
+        assertEquals("Total category planned should be 53.000, not 79.500 or 106.000", 53_000L, totalEffective)
     }
 }
