@@ -619,6 +619,19 @@ data class RecurringRuleEntity(
     val lastWriterId: String? = null,
 )
 
+/** A schedule that has run out of occurrences or passed its end date. */
+fun RecurringRuleEntity.isFinished(): Boolean =
+    remainingOccurrences == 0 || (endEpochDay != null && nextEpochDay > endEpochDay)
+
+/**
+ * A schedule whose due date has passed without being posted, which means automation is stuck on it.
+ *
+ * Shared so the home attention centre and the settings schedule card cannot disagree about whether
+ * a given rule is late or simply finished.
+ */
+fun RecurringRuleEntity.isStalled(todayEpochDay: Long): Boolean =
+    !isPaused && !isFinished() && nextEpochDay < todayEpochDay
+
 @Entity(
     tableName = "team_workspaces",
     foreignKeys = [ForeignKey(

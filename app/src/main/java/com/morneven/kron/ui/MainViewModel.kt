@@ -31,6 +31,7 @@ import com.morneven.kron.data.LedgerIntegrityReport
 import com.morneven.kron.data.PeriodStatus
 import com.morneven.kron.data.PortfolioEntity
 import com.morneven.kron.data.RecurringRuleEntity
+import com.morneven.kron.data.isStalled
 import com.morneven.kron.data.ReceiptEntity
 import com.morneven.kron.data.ScheduleCalculator
 import com.morneven.kron.data.SyncStateEntity
@@ -153,7 +154,7 @@ data class KronUiState(
 
     /** Schedules whose due date has passed without being posted, which means automation is stuck. */
     fun stalledRules(today: LocalDate): List<RecurringRuleEntity> =
-        rules.filter { !it.isPaused && it.nextEpochDay < today.toEpochDay() }
+        rules.filter { it.isStalled(today.toEpochDay()) }
 }
 
 private data class LedgerSlice(

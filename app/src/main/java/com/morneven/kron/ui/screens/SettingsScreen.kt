@@ -92,6 +92,8 @@ import com.morneven.kron.widget.KronWidgetManager
 import com.morneven.kron.data.AccountEntity
 import com.morneven.kron.data.AccountBalanceRow
 import com.morneven.kron.data.AccountSharingMode
+import com.morneven.kron.data.isFinished
+import com.morneven.kron.data.isStalled
 import com.morneven.kron.data.LedgerCheck
 import com.morneven.kron.data.LedgerIntegrityReport
 import com.morneven.kron.data.RecurringRuleEntity
@@ -967,11 +969,11 @@ private fun RecurringRuleCard(
     onPause: ((String) -> Unit)?,
     onResume: ((String, Boolean) -> Unit)?,
 ) {
-    val finished = rule.remainingOccurrences == 0 ||
-        (rule.endEpochDay != null && rule.nextEpochDay > rule.endEpochDay)
+    val finished = rule.isFinished()
     // An active rule whose due date has passed was not posted. Showing only "Occurrence berikutnya"
-    // with a date in the past left the user to work that out for themselves.
-    val overdue = !finished && !rule.isPaused && rule.nextEpochDay < LocalDate.now().toEpochDay()
+    // with a date in the past left the user to work that out for themselves. The predicate is
+    // shared with the home attention centre so the two screens cannot disagree.
+    val overdue = rule.isStalled(LocalDate.now().toEpochDay())
     val status = when {
         finished -> "SELESAI"
         rule.pausedByArchive -> "DIJEDA OLEH ARSIP BUDGET"
