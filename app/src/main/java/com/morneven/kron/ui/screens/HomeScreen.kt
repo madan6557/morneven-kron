@@ -79,6 +79,7 @@ fun HomeScreen(
     onAllActivities: () -> Unit,
     onPauseRule: (String) -> Unit,
     onSchedules: () -> Unit = {},
+    onBudget: () -> Unit = {},
     readOnly: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
@@ -218,6 +219,28 @@ fun HomeScreen(
                         QuickAction(Icons.Outlined.SwapHoriz, "Transfer", KronBlue, onTransfer, Modifier.weight(1f))
                         QuickAction(Icons.Outlined.RequestQuote, "Hutang", MaterialTheme.colorScheme.tertiary, onDebt, Modifier.weight(1f))
                         QuickAction(Icons.Outlined.ArrowOutward, "Resolusi", KronGold, onResolve, Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+
+        // Only until the ledger has anything in it. KRON routes money through the Main Vault before
+        // it can be budgeted, which is not obvious from an all-zero screen, and the quick actions
+        // alone do not say which one to press first.
+        if (!readOnly && state.activities.isEmpty()) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SectionHeader("Langkah awal")
+                    HudCard(accent = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.55f)) {
+                        Text(
+                            "Dana masuk ke Main Vault dulu, lalu dibagi menjadi kategori budget.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        StartStep(1, "Catat pemasukan", "Saldo akun dan Main Vault bertambah.", onIncome)
+                        StartStep(2, "Buat portfolio RAB", "Booking isi Vault ke kategori bulanan atau tahunan.", onBudget)
+                        StartStep(3, "Catat pengeluaran", "Ambil dari kategori budget, atau tandai tak terduga.", onExpense)
                     }
                 }
             }
@@ -437,6 +460,34 @@ private fun QuickAction(icon: ImageVector, label: String, color: Color, onClick:
             Box(contentAlignment = Alignment.Center) { Icon(icon, contentDescription = label, tint = color, modifier = Modifier.size(22.dp)) }
         }
         Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false)
+    }
+}
+
+@Composable
+private fun StartStep(number: Int, title: String, description: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            modifier = Modifier.size(26.dp),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.14f),
+            border = androidx.compose.foundation.BorderStroke(0.8.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.4f)),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    number.toString(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+            }
+        }
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 

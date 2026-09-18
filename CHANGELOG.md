@@ -23,6 +23,10 @@
 - Penanda jadwal tertunda pada Pengaturan: jadwal aktif yang sudah lewat jatuh tempo ditandai TERTUNDA beserta penjelasan, bukan hanya menampilkan tanggal yang sudah lewat.
 - Pemeriksaan Integritas keuangan pada Pengaturan: tombol baru menjalankan seluruh invariant finansial KRON secara read only dan melaporkan setiap kondisi satu per satu, yaitu keseimbangan general ledger, jumlah akun aktif, kesesuaian kas dengan dana secara total, per kanal, per akun, dan per akun per kanal, keseimbangan setiap event budget, serta status segel jurnal. Sebelumnya invariant hanya dapat menolak transaksi tanpa menjelaskan hubungan mana yang rusak dan seberapa besar selisihnya. Pemeriksaan ini melengkapi Pusat Bukti yang memeriksa rantai hash dan lampiran.
 - Resolving Center mengenali Main Vault minus: sebelumnya layar menyatakan "Semua budget sehat" meskipun Main Vault sedang minus. Kondisi tersebut kini dijelaskan beserta cara memulihkannya.
+- Perbaikan pesan palsu saat membuka aplikasi: setiap cold start menampilkan "Pembaruan terenkripsi berhasil diterapkan" walaupun tidak ada snapshot tersinkron yang menunggu, termasuk pada instalasi baru yang belum pernah sync. Pesan kini hanya muncul ketika aktivasi benar benar terjadi.
+- Perapian kartu akun pada Pengaturan: kartu akun tunggal tidak lagi menyisakan area kosong besar, menampilkan Total saldo, dan memasangkan badge kanal dengan nominalnya pada satu baris.
+- Panduan Langkah awal pada Beranda: pengguna baru mendapat tiga langkah berurutan (catat pemasukan, buat portfolio RAB, catat pengeluaran) yang menjelaskan alur Main Vault. Kartu ini hilang sendiri setelah ada aktivitas pertama.
+- Perapian teks pemeriksaan integritas: label akun tidak lagi terbaca "Akun Akun Utama", dan tautan rincian memakai warna tersier agar tidak terbaca sebagai peringatan pada hasil yang lulus.
 - Bump versionCode 102 -> 103 dan versionName 1.7.10 -> 1.7.11.
 
 ## 1.7.10 - 2026-09-17

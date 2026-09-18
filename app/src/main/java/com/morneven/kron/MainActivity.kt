@@ -265,12 +265,20 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    private suspend fun applyStagedSnapshot(): Result<Unit> {
+    /**
+     * Activates a staged snapshot when one is waiting.
+     *
+     * Returns true when a candidate was actually applied and false when there was nothing pending.
+     * Callers need that distinction: a no-op used to be indistinguishable from a real activation,
+     * so every cold start reported "Pembaruan terenkripsi berhasil diterapkan" even on an install
+     * that had never synced.
+     */
+    private suspend fun applyStagedSnapshot(): Result<Boolean> {
         return stagedActivationMutex.withLock {
             // A foreground observer and an interactive resolver can see the
             // same candidate. Once the first activation consumes it, the
             // second caller is a harmless no-op instead of a false failure.
-            if (!databaseRuntime.hasPendingSyncActivation()) return@withLock Result.success(Unit)
+            if (!databaseRuntime.hasPendingSyncActivation()) return@withLock Result.success(false)
             DriveSyncScheduler.cancel(this)
             TeamSyncScheduler.cancelScheduledWork(this)
             androidx.work.WorkManager.getInstance(this).cancelUniqueWork(AutomationWorker.UNIQUE_WORK_NAME)
@@ -281,7 +289,7 @@ class MainActivity : FragmentActivity() {
                 (application as KronApplication).startDataServices()
                 DataRefreshBridge.emit()
             }
-            result
+            result.map { true }
         }
     }
 

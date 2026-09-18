@@ -111,10 +111,12 @@ fun LedgerIntegrityInput.toReport(checkedAtEpochMillis: Long): LedgerIntegrityRe
                 ),
             )
         }
+        // No "Akun" prefix: the seeded account is called "Akun Utama", which read as
+        // "Akun Akun Utama seimbang" for most users.
         accounts.forEach { account ->
             add(
                 LedgerCheck(
-                    label = "Akun ${account.name} seimbang",
+                    label = "${account.name} seimbang",
                     passed = account.cash == account.available,
                     leftLabel = "Kas",
                     left = account.cash,
@@ -125,7 +127,7 @@ fun LedgerIntegrityInput.toReport(checkedAtEpochMillis: Long): LedgerIntegrityRe
             account.channels.forEach { channel ->
                 add(
                     LedgerCheck(
-                        label = "Akun ${account.name} kanal ${channelLabel(channel.fundingChannel)} seimbang",
+                        label = "${account.name} · ${channelLabel(channel.fundingChannel)} seimbang",
                         passed = channel.cash == channel.available,
                         leftLabel = "Kas",
                         left = channel.cash,

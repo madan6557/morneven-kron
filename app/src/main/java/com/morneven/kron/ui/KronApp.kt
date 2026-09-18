@@ -239,7 +239,7 @@ fun KronApp(
     capsuleDriveScopeProbe: CapsuleDriveScopeProbe?,
     initialActionDialog: ActionDialog? = null,
     onConsumeInitialAction: () -> Unit = {},
-    onApplyStagedSnapshot: suspend () -> Result<Unit>,
+    onApplyStagedSnapshot: suspend () -> Result<Boolean>,
 ) {
     val state by viewModel.uiState.collectAsState()
     KronTheme(state.theme) {
@@ -395,7 +395,7 @@ private fun MainScaffold(
     capsuleDriveScopeProbe: CapsuleDriveScopeProbe?,
     initialActionDialog: ActionDialog? = null,
     onConsumeInitialAction: () -> Unit = {},
-    onApplyStagedSnapshot: suspend () -> Result<Unit>,
+    onApplyStagedSnapshot: suspend () -> Result<Boolean>,
 ) {
     val navController = rememberNavController()
     val backStack by navController.currentBackStackEntryAsState()
@@ -537,14 +537,20 @@ private fun MainScaffold(
         if (conflictResolutionBusy) conflictResolutionPhase = "Menerapkan pembaruan terenkripsi..."
         scope.launch {
             try {
-                val error = onApplyStagedSnapshot().exceptionOrNull()
+                val outcome = onApplyStagedSnapshot()
+                val error = outcome.exceptionOrNull()
                 if (error == null) {
                     cloudConflict = null
                     cloudConflictPreview = null
                     cloudConflictPreviewError = null
                     viewModel.dismissTeamConflict()
                     viewModel.refreshForCurrentDate()
-                    viewModel.showMessage("Pembaruan terenkripsi berhasil diterapkan")
+                    // Only announce an activation that actually happened. A cold start with nothing
+                    // staged reaches here too, and claiming an encrypted update was applied when
+                    // none was is exactly the kind of message this app cannot afford to get wrong.
+                    if (outcome.getOrDefault(false)) {
+                        viewModel.showMessage("Pembaruan terenkripsi berhasil diterapkan")
+                    }
                 } else {
                     viewModel.showMessage(error.message ?: "Pembaruan tersinkron tidak dapat diterapkan")
                 }
@@ -1202,6 +1208,12 @@ private fun MainScaffold(
                     { ruleId -> criticalAction = CriticalAction("Hentikan jadwal otomatis", "Occurrence berikutnya tidak akan dibuat. Riwayat lama tetap tersimpan.") { viewModel.pauseRecurringRule(ruleId, it) }; criticalReason = "" },
                     onSchedules = {
                         navController.navigate("settings") {
+                            popUpTo("home")
+                            launchSingleTop = true
+                        }
+                    },
+                    onBudget = {
+                        navController.navigate("budget") {
                             popUpTo("home")
                             launchSingleTop = true
                         }

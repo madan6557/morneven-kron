@@ -92,6 +92,7 @@ import com.morneven.kron.widget.KronWidgetManager
 import com.morneven.kron.data.AccountEntity
 import com.morneven.kron.data.AccountBalanceRow
 import com.morneven.kron.data.AccountSharingMode
+import com.morneven.kron.data.FundingChannel
 import com.morneven.kron.data.isFinished
 import com.morneven.kron.data.isStalled
 import com.morneven.kron.data.LedgerCheck
@@ -892,7 +893,12 @@ private fun LedgerIntegrityCard(
             val shown = if (showAll) report.checks else report.failed.ifEmpty { report.checks.take(3) }
             shown.forEach { check -> LedgerCheckRow(check, valuesVisible) }
             if (report.checks.size > shown.size || showAll) {
-                TextButton(onClick = { showAll = !showAll }) {
+                // Tertiary rather than the default primary: primary is the app's oxblood red, which
+                // on a passing check list reads as a warning.
+                TextButton(
+                    onClick = { showAll = !showAll },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.tertiary),
+                ) {
                     Text(if (showAll) "Sembunyikan rincian" else "Lihat seluruh ${report.checks.size} pemeriksaan")
                 }
             }
@@ -1063,7 +1069,12 @@ private fun AccountCarousel(
             val workspace = state.teamWorkspace?.takeIf { it.accountId == account.id }
             val readOnly = entity?.sharingMode == AccountSharingMode.TEAM && workspace?.localRole == TeamRole.VIEWER
             HudCard(
-                modifier = Modifier.fillParentMaxWidth().heightIn(min = 230.dp),
+                // A uniform height keeps the carousel from jumping while swiping between accounts.
+                // With a single account there is nothing to swipe to, and the floor only produced
+                // a large empty area under the balances.
+                modifier = Modifier.fillParentMaxWidth().then(
+                    if (accounts.size > 1) Modifier.heightIn(min = 230.dp) else Modifier,
+                ),
                 accent = if (account.isActive) KronGreen.copy(alpha = 0.62f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
             ) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1092,9 +1103,20 @@ private fun AccountCarousel(
                         Icon(Icons.Outlined.Archive, contentDescription = "Hapus akun ${account.name} dari daftar aktif")
                     }
                 }
-                AccountChannelBalance("CASH", account.cashBalance, state.valuesVisible)
+                Spacer(Modifier.height(10.dp))
+                Text("TOTAL SALDO", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+                Text(
+                    displayMoney(account.totalBalance, state.valuesVisible),
+                    style = MaterialTheme.typography.headlineSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(10.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
                 Spacer(Modifier.height(8.dp))
-                AccountChannelBalance("EBUDGET", account.eBudgetBalance, state.valuesVisible)
+                AccountChannelBalance(FundingChannel.CASH, account.cashBalance, state.valuesVisible)
+                Spacer(Modifier.height(6.dp))
+                AccountChannelBalance(FundingChannel.EBUDGET, account.eBudgetBalance, state.valuesVisible)
                 if (!account.isActive && entity?.sharingMode == AccountSharingMode.TEAM) {
                     Text(
                         "Kembalikan Team menjadi Privat sebelum menghapus akun.",
@@ -1136,13 +1158,21 @@ private fun AccountCarousel(
 
 @Composable
 private fun AccountChannelBalance(channel: String, value: Long, valuesVisible: Boolean) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+    // Paired on one line rather than stacked. Two stacked badge-over-amount blocks filled four
+    // lines while leaving most of the card's width unused, which is what made the card look empty.
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         ChannelBadge(channel)
         Text(
             displayMoney(value, valuesVisible),
-            style = MaterialTheme.typography.titleLarge,
-            maxLines = 2,
+            style = MaterialTheme.typography.titleMedium,
+            maxLines = 1,
+            softWrap = false,
             overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 12.dp),
         )
     }
 }
