@@ -14,7 +14,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class TeamWorkspaceStateTest {
     @Test
-    fun teamChangesDoNotAdvancePrivateDriveGeneration() = runBlocking {
+    fun teamChangesDoNotAdvancePrivateDriveGeneration() = runBlocking<Unit> {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = "team-private-generation.db"
         context.deleteDatabase(name)
@@ -36,7 +36,7 @@ class TeamWorkspaceStateTest {
     }
 
     @Test
-    fun deletingCollaboratorCacheNeverDeletesOwner() = runBlocking {
+    fun deletingCollaboratorCacheNeverDeletesOwner() = runBlocking<Unit> {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = "team-member-cache.db"
         context.deleteDatabase(name)
@@ -64,7 +64,7 @@ class TeamWorkspaceStateTest {
     }
 
     @Test
-    fun invitationReplayMarkerIsIdempotent() = runBlocking {
+    fun invitationReplayMarkerIsIdempotent() = runBlocking<Unit> {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = "team-invitation-replay.db"
         context.deleteDatabase(name)
@@ -84,7 +84,7 @@ class TeamWorkspaceStateTest {
     }
 
     @Test
-    fun publishedHeadUsesGenerationAndParentCompareAndSet() = runBlocking {
+    fun publishedHeadUsesGenerationAndParentCompareAndSet() = runBlocking<Unit> {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = "team-workspace-state.db"
         context.deleteDatabase(name)
@@ -118,7 +118,7 @@ class TeamWorkspaceStateTest {
     }
 
     @Test
-    fun teamHeadCanAdvanceWhilePrivateSyncRuns() = runBlocking {
+    fun teamHeadCanAdvanceWhilePrivateSyncRuns() = runBlocking<Unit> {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = "team-workspace-private-sync.db"
         context.deleteDatabase(name)
@@ -140,7 +140,7 @@ class TeamWorkspaceStateTest {
     }
 
     @Test
-    fun localAccountSwitchOnlyChangesIsActiveWhilePrivateSyncRuns() = runBlocking {
+    fun localAccountSwitchOnlyChangesIsActiveWhilePrivateSyncRuns() = runBlocking<Unit> {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = "account-switch-guard.db"
         context.deleteDatabase(name)
