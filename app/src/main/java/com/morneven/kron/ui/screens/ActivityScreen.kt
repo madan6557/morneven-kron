@@ -292,6 +292,7 @@ private enum class ActivityFilter(val label: String) {
     ALL("Semua"),
     MONEY("Uang"),
     BUDGET("Budget"),
+    DEBT("Hutang"),
     AUTOMATIC("Otomatis"),
     RESOLUTION("Resolusi"),
     SYSTEM("Sistem"),
@@ -335,8 +336,13 @@ private fun List<ActivityRow>.toTimeline(today: LocalDate): List<ActivityTimelin
 }
 
 private fun ActivityRow.matches(filter: ActivityFilter): Boolean = when (filter) {
-    ActivityFilter.MONEY -> type in setOf("INCOME", "EXPENSE", "UNEXPECTED_EXPENSE", "TRANSFER", "OPENING_BALANCE", "CHANNEL_TRANSFER")
+    // Borrowing, lending and repayment all move real balances, so they belong under money too.
+    ActivityFilter.MONEY -> type in setOf(
+        "INCOME", "EXPENSE", "UNEXPECTED_EXPENSE", "TRANSFER", "OPENING_BALANCE",
+        "CHANNEL_TRANSFER", "DEBT_OPEN", "DEBT_PAYMENT",
+    )
     ActivityFilter.BUDGET -> type in setOf("PORTFOLIO_BOOKING", "REALLOCATION", "OVERBUDGET_COVERAGE", "RELEASE", "ROLLOVER", "CORRECTION")
+    ActivityFilter.DEBT -> type in setOf("DEBT_OPEN", "DEBT_PAYMENT", "DEBT_ARCHIVE")
     ActivityFilter.AUTOMATIC -> type == "AUTOMATION" || source == "AUTOMATION"
     ActivityFilter.RESOLUTION -> type in setOf("REALLOCATION", "OVERBUDGET_COVERAGE")
     ActivityFilter.SYSTEM -> source == "SYSTEM" || type in setOf("REVERSAL", "ARCHIVE", "RESTORE", "RESTORE_REVERSAL")

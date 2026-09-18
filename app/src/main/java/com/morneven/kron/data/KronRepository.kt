@@ -62,15 +62,20 @@ data class AutomationReport(
 ) {
     operator fun plus(other: AutomationReport) = AutomationReport(posted + other.posted, skipped + other.skipped)
 
-    /** Indonesian summary for the UI, or null when the pass had nothing worth reporting. */
+    /**
+     * Short Indonesian summary for the snackbar, or null when the pass had nothing to report.
+     *
+     * Kept to roughly two lines on a phone. The retry behaviour and the full list are explained on
+     * the home attention centre rather than crammed in here.
+     */
     fun userMessage(): String? {
         if (skipped.isEmpty()) return null
         val first = skipped.first()
-        val head = "Jadwal \"${first.title}\" belum dapat dijalankan: ${first.reason}"
+        val reason = first.reason.trim().trimEnd('.')
         return if (skipped.size == 1) {
-            "$head KRON akan mencoba lagi nanti."
+            "Jadwal \"${first.title}\" tertunda: $reason."
         } else {
-            "$head KRON melewati ${skipped.size} jadwal dan akan mencoba lagi nanti."
+            "${skipped.size} jadwal otomatis tertunda, termasuk \"${first.title}\": $reason."
         }
     }
 }
@@ -133,6 +138,7 @@ private fun AllocationEntity.bumpRevision() = copy(revision = revision + 1, upda
 private fun RecurringRuleEntity.bumpRevision() = copy(revision = revision + 1, updatedAt = System.currentTimeMillis())
 private fun DebtEntity.bumpRevision() = copy(revision = revision + 1, updatedAt = System.currentTimeMillis())
 private fun CategoryEntity.bumpRevision() = copy(revision = revision + 1, updatedAt = System.currentTimeMillis())
+private fun PortfolioAllocationTemplateEntity.bumpRevision() = copy(revision = revision + 1, updatedAt = System.currentTimeMillis())
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @Singleton
@@ -1243,9 +1249,7 @@ class KronRepository private constructor(
             dao.updateAllocationTemplate(template.copy(
                 plannedAmount = newTotal,
                 cashPercentage = newPercentage,
-                revision = template.revision + 1,
-                updatedAt = System.currentTimeMillis(),
-            ))
+            ).bumpRevision())
         }
         dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = note, beforeJson = "{\"planned\":$oldPlanned,\"template\":${template?.plannedAmount ?: 0}}", afterJson = "{\"planned\":$newPlannedAmount,\"template\":${if (template != null) template.plannedAmount + delta else 0}}"))
         refreshPeriodStatus(allocation.periodId)
@@ -1363,9 +1367,7 @@ class KronRepository private constructor(
                 existingTemplate.copy(
                     plannedAmount = newTotalAmount,
                     cashPercentage = newCashPercentage,
-                    revision = existingTemplate.revision + 1,
-                    updatedAt = System.currentTimeMillis(),
-                ),
+                ).bumpRevision(),
             )
         }
 
@@ -1467,7 +1469,7 @@ class KronRepository private constructor(
         if (existingTemplate == null) {
             dao.insertAllocationTemplate(PortfolioAllocationTemplateEntity(portfolioId = portfolio.id, categoryId = categoryId, plannedAmount = plannedAmount, cashPercentage = cashPercentage))
         } else {
-            dao.updateAllocationTemplate(existingTemplate.copy(plannedAmount = plannedAmount, cashPercentage = cashPercentage))
+            dao.updateAllocationTemplate(existingTemplate.copy(plannedAmount = plannedAmount, cashPercentage = cashPercentage).bumpRevision())
         }
         dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = note, beforeJson = "{\"periodId\":$periodId,\"categoryId\":$categoryId}", afterJson = "{\"periodId\":$periodId,\"categoryId\":$categoryId,\"planned\":$plannedAmount,\"cashPercentage\":$cashPercentage}"))
         refreshPeriodStatus(periodId)
@@ -1486,7 +1488,7 @@ class KronRepository private constructor(
         require(category.name != trimmed) { "Tidak ada perubahan nama" }
         val duplicate = dao.categoriesForAccount(activeId).firstOrNull { it.direction == TransactionDirection.EXPENSE && it.name.equals(trimmed, ignoreCase = true) && it.id != categoryId }
         require(duplicate == null) { "Nama kategori sudah dipakai" }
-        val updated = category.copy(name = trimmed, revision = category.revision + 1, updatedAt = System.currentTimeMillis())
+        val updated = category.copy(name = trimmed).bumpRevision()
         dao.updateCategory(updated)
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(eventId, LedgerType.SYSTEM, "Kategori diubah", "${category.name} → $trimmed", "USER", LocalDate.now().toEpochDay(), accountId = activeId))
@@ -1653,7 +1655,7 @@ class KronRepository private constructor(
         if (existingTemplate == null) {
             dao.insertAllocationTemplate(PortfolioAllocationTemplateEntity(portfolioId = portfolio.id, categoryId = categoryId, plannedAmount = plannedAmount, cashPercentage = cashPercentage))
         } else {
-            dao.updateAllocationTemplate(existingTemplate.copy(plannedAmount = plannedAmount, cashPercentage = cashPercentage))
+            dao.updateAllocationTemplate(existingTemplate.copy(plannedAmount = plannedAmount, cashPercentage = cashPercentage).bumpRevision())
         }
 
         dao.insertAudit(AuditSnapshotEntity(
@@ -1676,6 +1678,10 @@ class KronRepository private constructor(
     ) = database.withTransaction {
         require(amount > 0) { "Nominal harus lebih dari nol" }
         val source = requireNotNull(dao.allocationById(sourceAllocationId))
+        // Every other money moving call reaches the guard through activeAccountId or
+        // postIncome/postExpense. This one did not, which left a Team Viewer able to move booked
+        // funds between channels once the read only UI was bypassed.
+        teamAccessGuard.require(accountId, TeamCapability.WRITE)
         val account = requireNotNull(dao.accountById(accountId))
         require(account.isActive) { "Akun sumber harus menjadi akun aktif" }
         val sourcePeriod = requireNotNull(dao.periodById(source.periodId))
@@ -2355,10 +2361,11 @@ class KronRepository private constructor(
                 }
             }
         }
-        dao.allEvents().forEach { event ->
-            if (dao.budgetEventTotal(event.id) != 0L) {
-                throw LedgerInvariantException("Budget event ${event.id} tidak seimbang")
-            }
+        // One grouped query instead of one query per historical event. This check runs inside every
+        // financial write, so scanning activity_events row by row made each transaction slower for
+        // the rest of the ledger's life.
+        dao.firstUnbalancedBudgetEventId()?.let { eventId ->
+            throw LedgerInvariantException("Budget event $eventId tidak seimbang")
         }
     }
 }

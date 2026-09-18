@@ -827,11 +827,20 @@ private fun RecurringRuleCard(
 ) {
     val finished = rule.remainingOccurrences == 0 ||
         (rule.endEpochDay != null && rule.nextEpochDay > rule.endEpochDay)
+    // An active rule whose due date has passed was not posted. Showing only "Occurrence berikutnya"
+    // with a date in the past left the user to work that out for themselves.
+    val overdue = !finished && !rule.isPaused && rule.nextEpochDay < LocalDate.now().toEpochDay()
     val status = when {
         finished -> "SELESAI"
         rule.pausedByArchive -> "DIJEDA OLEH ARSIP BUDGET"
         rule.isPaused -> "DIJEDA"
+        overdue -> "TERTUNDA"
         else -> "AKTIF"
+    }
+    val statusColor = when {
+        finished || rule.isPaused -> MaterialTheme.colorScheme.onSurfaceVariant
+        overdue -> MaterialTheme.colorScheme.tertiary
+        else -> KronGreen
     }
     HudCard {
         Row(
@@ -841,7 +850,7 @@ private fun RecurringRuleCard(
         ) {
             Column(Modifier.weight(1f)) {
                 Text(rule.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(status, style = MaterialTheme.typography.labelSmall, color = if (finished || rule.isPaused) MaterialTheme.colorScheme.onSurfaceVariant else KronGreen)
+                Text(status, style = MaterialTheme.typography.labelSmall, color = statusColor)
             }
             Text(displayMoney(rule.amount, valuesVisible), style = MaterialTheme.typography.titleSmall)
         }
@@ -853,7 +862,18 @@ private fun RecurringRuleCard(
         )
         if (!finished) {
             Text(
-                "Occurrence berikutnya ${LocalDate.ofEpochDay(rule.nextEpochDay).format(ruleDateFormat)}",
+                if (overdue) {
+                    "Jatuh tempo ${LocalDate.ofEpochDay(rule.nextEpochDay).format(ruleDateFormat)} dan belum tercatat"
+                } else {
+                    "Occurrence berikutnya ${LocalDate.ofEpochDay(rule.nextEpochDay).format(ruleDateFormat)}"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = if (overdue) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (overdue) {
+            Text(
+                "KRON mencoba ulang setiap hari. Penyebab tersering adalah saldo kanal belum mencukupi saat jadwal jatuh tempo.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

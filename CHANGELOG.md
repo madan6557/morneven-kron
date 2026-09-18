@@ -16,6 +16,11 @@
 - Startup lebih tahan gagal: langkah penyiapan data dijalankan terpisah sehingga satu langkah yang gagal tidak lagi membatalkan rekonsiliasi periode dan pembersihan bukti reversal.
 - Pembacaan sync state tidak lagi memblokir main thread saat dependency injection, dan agregasi hutang pada Beranda serta Laporan tidak lagi dihitung ulang pada setiap recomposition.
 - Label aktivitas hutang, bukti, dan sistem kini berbahasa Indonesia, dan aktivitas hutang muncul pada daftar aktivitas terbaru.
+- Percepatan seluruh transaksi finansial: pemeriksaan invariant jurnal sebelumnya menjalankan satu query untuk setiap event yang pernah tercatat, pada setiap penulisan. Artinya semakin panjang riwayat, semakin lambat setiap pencatatan. Pemeriksaan kini memakai satu query agregat dengan hasil yang sama.
+- Penutupan celah izin Team: konversi dana terbooking antar kanal kini melewati pemeriksaan hak tulis Team seperti seluruh operasi finansial lain. Sebelumnya hanya UI yang menahannya untuk role Viewer.
+- Perbaikan revisi template kategori budget: penambahan dan pemulihan kategori budget tidak menaikkan revisi template, sehingga perubahan dapat kalah oleh salinan lama saat resolusi konflik sinkronisasi. Seluruh pembaruan template kini memakai satu helper yang menaikkan revisi.
+- Filter audit hutang: aktivitas hutang kini termasuk dalam filter Uang dan memiliki filter Hutang tersendiri pada halaman Transaksi & Audit.
+- Penanda jadwal tertunda pada Pengaturan: jadwal aktif yang sudah lewat jatuh tempo ditandai TERTUNDA beserta penjelasan, bukan hanya menampilkan tanggal yang sudah lewat.
 - Bump versionCode 102 -> 103 dan versionName 1.7.10 -> 1.7.11.
 
 ## 1.7.10 - 2026-09-17

@@ -335,6 +335,15 @@ interface KronDao {
     @Query("SELECT COALESCE(SUM(amount), 0) FROM cash_journal_lines") suspend fun cashTotal(): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket IN ('VAULT','UNALLOCATED','UNEXPECTED','ROLLOVER') OR allocationId IS NOT NULL") suspend fun budgetAvailableTotal(): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE eventId = :eventId") suspend fun budgetEventTotal(eventId: String): Long
+    /**
+     * First event whose budget journal lines do not net to zero, or null when every event balances.
+     *
+     * This replaces a per event scan that ran one query for every row in activity_events on every
+     * financial write, which made each transaction slower as history grew. Events with no budget
+     * lines cannot be unbalanced, so grouping the lines covers the same set.
+     */
+    @Query("SELECT eventId FROM budget_journal_lines GROUP BY eventId HAVING COALESCE(SUM(amount), 0) != 0 LIMIT 1")
+    suspend fun firstUnbalancedBudgetEventId(): String?
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'VAULT'") suspend fun vaultBalance(): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'VAULT' AND fundingChannel = :channel") suspend fun vaultBalance(channel: String): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'VAULT' AND fundingChannel = :channel AND accountId = :accountId") suspend fun vaultBalance(channel: String, accountId: Long): Long
