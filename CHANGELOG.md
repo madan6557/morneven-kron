@@ -1,11 +1,7 @@
 # KRON Changelog
 
-## 1.7.11 - 2026-09-18
+## 1.7.12 - 2026-09-18
 
-- Penyatuan kartu alokasi kategori budget terpisah kanal (linked by split): kategori yang memiliki alokasi split Cash dan eBudget kini disatukan menjadi satu kartu utuh per kategori dengan badge kanal terpadu, rincian sisa/rencana kanal, dan satu tombol Koreksi.
-- Koreksi split sinkron dan presisi: slider koreksi split persentase Cash dan eBudget beroperasi secara terhubung dan real-time. Perubahan slider otomatis menyeimbangkan kedua kanal dengan total alokasi yang konsisten dan akurat.
-- Pencegahan penggandaan total alokasi dan anomali booking: perbaikan perhitungan delta alokasi budget berbasis dana booking riil (bukan plannedAmount), mencegah lonjakan nilai booking atau alokasi saat menolkan salah satu kanal (misalnya 50:50 menjadi 100% eBudget).
-- Penyembunyian kanal 0 dana pada periode aktif: kanal dengan 0 alokasi, 0 booking, dan 0 pengeluaran otomatis disembunyikan dari kartu periode aktif dan daftar rincian kategori agar tampilan tetap bersih dan fokus pada alokasi yang aktif.
 - Perbaikan automation yang berhenti total: satu jadwal yang tidak dapat dijalankan (paling sering pengeluaran berulang yang melebihi saldo kanal) sebelumnya menghentikan seluruh pass automation, sehingga jadwal lain ikut tidak tercatat, rekonsiliasi periode budget tidak berjalan, dan pesan saldo tidak mencukupi muncul setiap membuka aplikasi. Jadwal bermasalah kini dilewati untuk pass tersebut, tanggal jatuh temponya dipertahankan agar dicoba lagi, dan jadwal lainnya tetap berjalan. Pelanggaran invariant jurnal tetap menghentikan pass secara fail closed.
 - Notifikasi dan penanda jadwal tertunda: jadwal yang dilewati dilaporkan lewat notifikasi (tanpa memuat nilai nominal) dan muncul pada Pusat perhatian di Beranda sebagai "jadwal otomatis tertunda".
 - Perbaikan jadwal bunga hutang: pembayaran tidak lagi menggeser titik hitung bunga ke tanggal pembayaran. Sebelumnya setiap pembayaran mengulang periode dari awal sehingga bunga yang sudah berjalan sebagian terhapus, dan pembayaran kecil berulang dapat menunda bunga tanpa batas. Titik hitung kini hanya maju ke batas periode yang benar benar tercapai, dan batas periode diukur dari tanggal awal sehingga hutang yang jatuh pada tanggal 31 tetap dihitung tanggal 31 dan tidak bergeser ke 28.
@@ -27,6 +23,15 @@
 - Perapian kartu akun pada Pengaturan: kartu akun tunggal tidak lagi menyisakan area kosong besar, menampilkan Total saldo, dan memasangkan badge kanal dengan nominalnya pada satu baris.
 - Panduan Langkah awal pada Beranda: pengguna baru mendapat tiga langkah berurutan (catat pemasukan, buat portfolio RAB, catat pengeluaran) yang menjelaskan alur Main Vault. Kartu ini hilang sendiri setelah ada aktivitas pertama.
 - Perapian teks pemeriksaan integritas: label akun tidak lagi terbaca "Akun Akun Utama", dan tautan rincian memakai warna tersier agar tidak terbaca sebagai peringatan pada hasil yang lulus.
+- Perbaikan kelas uji instrumentasi Team yang tidak pernah berjalan: TeamWorkspaceStateTest gagal diinisialisasi JUnit sehingga enam pengujian di dalamnya tidak pernah dieksekusi. Setelah diperbaiki, empat lulus dan dua gagal karena masih menguji trigger sync_write_guard yang sudah digantikan SnapshotOperationLock. Dua pengujian tersebut sengaja dibiarkan gagal agar keputusan kontrak sync tetap di tangan pemilik proyek.
+- Bump versionCode 103 -> 104 dan versionName 1.7.11 -> 1.7.12.
+
+## 1.7.11 - 2026-09-18
+
+- Penyatuan kartu alokasi kategori budget terpisah kanal (linked by split): kategori yang memiliki alokasi split Cash dan eBudget kini disatukan menjadi satu kartu utuh per kategori dengan badge kanal terpadu, rincian sisa/rencana kanal, dan satu tombol Koreksi.
+- Koreksi split sinkron dan presisi: slider koreksi split persentase Cash dan eBudget beroperasi secara terhubung dan real-time. Perubahan slider otomatis menyeimbangkan kedua kanal dengan total alokasi yang konsisten dan akurat.
+- Pencegahan penggandaan total alokasi dan anomali booking: perbaikan perhitungan delta alokasi budget berbasis dana booking riil (bukan plannedAmount), mencegah lonjakan nilai booking atau alokasi saat menolkan salah satu kanal (misalnya 50:50 menjadi 100% eBudget).
+- Penyembunyian kanal 0 dana pada periode aktif: kanal dengan 0 alokasi, 0 booking, dan 0 pengeluaran otomatis disembunyikan dari kartu periode aktif dan daftar rincian kategori agar tampilan tetap bersih dan fokus pada alokasi yang aktif.
 - Bump versionCode 102 -> 103 dan versionName 1.7.10 -> 1.7.11.
 
 ## 1.7.10 - 2026-09-17
