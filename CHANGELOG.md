@@ -1,5 +1,15 @@
 # KRON Changelog
 
+## 1.7.13 - 2026-09-19
+
+- Perbaikan layar "Memeriksa integritas data" yang selalu putih: layar tersebut sudah meminta tema gelap, tetapi merupakan Column tanpa background sehingga yang terlihat adalah jendela Activity. Tema jendela mewarisi Theme.Material.Light sehingga backgroundnya putih dan menembus setiap layar yang tidak mengecat backgroundnya sendiri. Layar pembuka database dan layar pemulihan kini mengecat background, dan background jendela disamakan dengan warna splash agar tidak ada kedipan putih sebelum Compose menggambar.
+- Layar sebelum database terbuka kini mengikuti pilihan tema pengguna, tidak lagi dipaku ke Gelap. Preferensi tema tersimpan di DataStore, bukan di database terenkripsi, sehingga dapat dibaca tanpa menyentuh database sebelum bootstrap selesai.
+- Perbaikan perpindahan keypad kalkulator dan keyboard sistem yang kadang gagal saat berpindah antar jenis kolom input. Tiga penyebab: perpindahan ke keyboard sistem hanya mengubah penanda dan menutup keypad tanpa pernah meminta IME muncul, tidak ada yang melepas keypad ketika fokus pindah ke kolom lain sehingga kalkulator tetap menempel di bawah keyboard sistem, dan efek yang mengawasi keypad membersihkan fokus setiap kali keypad hilang sehingga dapat merebut fokus dari kolom yang baru disentuh.
+- Keypad kalkulator tidak lagi dapat menerima fokus. Tombolnya sebelumnya berupa Surface yang fokusabel sehingga menekan satu tombol membuat kolom teks kehilangan fokus, dan menekan tombol menjadi tidak dapat dibedakan dari berpindah kolom.
+- Harmonisasi skema warna tema terang: skema sebelumnya hanya mendefinisikan sekitar sepertiga peran Material sehingga sisanya memakai baseline Material yang berkeluarga ungu, termasuk outline yang dipakai 20 pembatas dan garis tepi. Kedua skema kini mendefinisikan seluruh peran yang dibaca aplikasi.
+- Aksen merek kini mengikuti tema. Sebelumnya nilai tunggal yang disetel untuk latar gelap dipakai juga pada latar terang, sehingga emas Cash berada pada rasio kontras 1.76:1, biru eBudget 2.41:1, hijau positif 2.43:1, dan merah negatif 2.49:1. Aksen ini membawa badge kanal, seluruh angka bertanda, dan setiap judul bagian, sehingga tema terang terlihat pudar. Nilai terang kini berturut turut 4.92:1, 4.95:1, 5.14:1, dan 6.36:1 sehingga memenuhi WCAG AA, sedangkan nilai gelap tidak berubah sama sekali.
+- Bump versionCode 104 -> 105 dan versionName 1.7.12 -> 1.7.13.
+
 ## 1.7.12 - 2026-09-18
 
 - Perbaikan automation yang berhenti total: satu jadwal yang tidak dapat dijalankan (paling sering pengeluaran berulang yang melebihi saldo kanal) sebelumnya menghentikan seluruh pass automation, sehingga jadwal lain ikut tidak tercatat, rekonsiliasi periode budget tidak berjalan, dan pesan saldo tidak mencukupi muncul setiap membuka aplikasi. Jadwal bermasalah kini dilewati untuk pass tersebut, tanggal jatuh temponya dipertahankan agar dicoba lagi, dan jadwal lainnya tetap berjalan. Pelanggaran invariant jurnal tetap menghentikan pass secara fail closed.

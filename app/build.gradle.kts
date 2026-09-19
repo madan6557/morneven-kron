@@ -32,8 +32,8 @@ android {
         applicationId = "com.morneven.kron"
         minSdk = 26
         targetSdk = 37
-        versionCode = 104
-        versionName = "1.7.12"
+        versionCode = 105
+        versionName = "1.7.13"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${googleWebClientId.replace("\"", "\\\"")}\"")
