@@ -6,6 +6,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
+import androidx.compose.runtime.collectAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -81,6 +83,7 @@ class MainActivity : FragmentActivity() {
     @Inject lateinit var capsuleDriveScopeProbeFactory: Lazy<CapsuleDriveScopeProbeFactory>
     @Inject lateinit var teamSyncRuntime: Lazy<TeamSyncRuntime>
     @Inject lateinit var databaseRuntime: DatabaseRuntime
+    @Inject lateinit var privacyPreferences: com.morneven.kron.preferences.PrivacyPreferences
 
     private var driveSyncRuntime: DriveSyncRuntime? = null
     private var teamDriveScopeProbe: TeamDriveScopeProbe? = null
@@ -139,6 +142,7 @@ class MainActivity : FragmentActivity() {
         when (bootstrap.state) {
             DatabaseBootstrapState.BACKUP_REQUIRED -> setContent {
                 PreUpgradeBackupScreen(
+                    theme = rememberPreUiTheme(privacyPreferences),
                     state = backupUiState,
                     onCreateBackup = ::requestPreUpgradeBackup,
                 )
@@ -215,7 +219,7 @@ class MainActivity : FragmentActivity() {
     private fun openDatabaseAndStart() {
         if (databaseOpening) return
         databaseOpening = true
-        setContent { DatabaseOpeningScreen() }
+        setContent { DatabaseOpeningScreen(rememberPreUiTheme(privacyPreferences)) }
         lifecycleScope.launch(Dispatchers.IO) {
             val databaseError = runCatching { KronDatabase.getInstance(this@MainActivity) }.exceptionOrNull()
             val inspection = if (databaseError != null) {
@@ -303,6 +307,7 @@ class MainActivity : FragmentActivity() {
         val canRestorePreUpgrade = encryption.hasRecoverablePreEncryptionCopy(databaseFile)
         setContent {
             DatabaseRecoveryScreen(
+                theme = rememberPreUiTheme(privacyPreferences),
                 error = databaseError,
                 inspection = inspection,
                 onRestart = ::restartApplication,
@@ -332,12 +337,13 @@ private sealed interface BackupUiState {
 
 @Composable
 private fun PreUpgradeBackupScreen(
+    theme: String,
     state: BackupUiState,
     onCreateBackup: (String, String) -> Unit,
 ) {
     var password by remember { mutableStateOf("") }
     var confirmation by remember { mutableStateOf("") }
-    KronTheme("DARK") {
+    KronTheme(theme) {
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background,
@@ -407,11 +413,28 @@ private fun PreUpgradeBackupScreen(
     }
 }
 
+/**
+ * Theme for the screens shown before the database is open.
+ *
+ * These run before MainViewModel exists, so they cannot read the theme from UI state. The
+ * preference itself lives in DataStore rather than the encrypted database, so it is safe to read
+ * here. Until it arrives the app default applies, which matches the window background.
+ */
 @Composable
-private fun DatabaseOpeningScreen() {
-    KronTheme("DARK") {
+private fun rememberPreUiTheme(preferences: com.morneven.kron.preferences.PrivacyPreferences): String {
+    val theme by preferences.theme.collectAsState(initial = "DARK")
+    return theme
+}
+
+@Composable
+private fun DatabaseOpeningScreen(theme: String) {
+    KronTheme(theme) {
         Column(
-            modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(),
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .statusBarsPadding()
+                .navigationBarsPadding(),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -423,6 +446,7 @@ private fun DatabaseOpeningScreen() {
 
 @Composable
 private fun DatabaseRecoveryScreen(
+    theme: String,
     error: Throwable? = null,
     inspection: DatabaseEncryptionManager.DatabaseInspection? = null,
     onRestart: () -> Unit,
@@ -433,10 +457,11 @@ private fun DatabaseRecoveryScreen(
     val isDeviceKeyMissing = errorChain.any { it is DatabaseKeyUnavailableException }
     val isProfileMismatch = errorChain.any { it is DatabaseKeyProfileMismatchException }
     val isRecoveryRequired = errorChain.any { it is DatabaseRecoveryRequiredException }
-    KronTheme("DARK") {
+    KronTheme(theme) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
                 .statusBarsPadding()
                 .navigationBarsPadding()
                 .padding(horizontal = 28.dp),

@@ -2,6 +2,10 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <style name="Theme.KRON" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
+        <!-- The parent is a Light theme, so the default window background is white and shows
+             through every screen that paints before Compose draws. Matching the splash colour
+             keeps the handoff from splash to first frame seamless. -->
+        <item name="android:windowBackground">@color/launcher_background</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">#160F11</item>
