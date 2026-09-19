@@ -16,45 +16,116 @@ import com.morneven.kron.R
 
 val KronRed = Color(0xFFB94D59)
 val KronRedDark = Color(0xFF7C2D37)
-val KronGold = Color(0xFFE2BD4D)
 val KronPurple = Color(0xFF72517F)
-val KronGreen = Color(0xFF57B58C)
-val KronBlue = Color(0xFF65A9EF)
 val KronBackground = Color(0xFF120D0F)
 val KronSurface = Color(0xFF1C1518)
 val KronSurfaceHigh = Color(0xFF281E22)
 val KronText = Color(0xFFF2E9E5)
 val KronMuted = Color(0xFFB7AAA8)
 
+/**
+ * Brand accents, resolved per theme.
+ *
+ * The dark values are the original ones and define the look. Their light counterparts are the same
+ * hues darkened until they carry at least 4.5:1 against a light surface: the dark tones sit at
+ * roughly 2:1 on white, which is what made the light theme look washed out, since these carry the
+ * channel badges, the signed money figures and every section heading.
+ */
+val KronGoldDark = Color(0xFFE2BD4D)
+val KronGoldLight = Color(0xFF8A6A12)
+val KronGreenDark = Color(0xFF57B58C)
+val KronGreenLight = Color(0xFF1F7A55)
+val KronBlueDark = Color(0xFF65A9EF)
+val KronBlueLight = Color(0xFF1F6FC4)
+private val KronNegativeDark = Color(0xFFFF796E)
+private val KronNegativeLight = Color(0xFFB3261E)
+
+/** True while the KRON theme is painting its dark palette. */
+val LocalKronDarkTheme = androidx.compose.runtime.staticCompositionLocalOf { true }
+
+/** Cash channel accent. */
+val KronGold: Color
+    @Composable get() = if (LocalKronDarkTheme.current) KronGoldDark else KronGoldLight
+
+/** Positive money and healthy state accent. */
+val KronGreen: Color
+    @Composable get() = if (LocalKronDarkTheme.current) KronGreenDark else KronGreenLight
+
+/** eBudget channel accent. */
+val KronBlue: Color
+    @Composable get() = if (LocalKronDarkTheme.current) KronBlueDark else KronBlueLight
+
+/** Negative money accent, kept separate from colorScheme.error so failures still stand out. */
+val KronNegative: Color
+    @Composable get() = if (LocalKronDarkTheme.current) KronNegativeDark else KronNegativeLight
+
+// Roles left unset fall back to the Material baseline, which is a purple family. Every role the app
+// actually reads is spelled out here so none of that purple reaches a maroon and gold brand. The
+// values that were already defined are unchanged.
 private val DarkColors = darkColorScheme(
     primary = KronRed,
     onPrimary = Color.White,
     primaryContainer = KronRedDark,
     onPrimaryContainer = Color(0xFFFFDADF),
+    inversePrimary = Color(0xFF8C2F3C),
     secondary = KronPurple,
-    tertiary = KronGold,
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFF3F2B48),
+    onSecondaryContainer = Color(0xFFEDDCF4),
+    tertiary = KronGoldDark,
+    onTertiary = Color(0xFF3A2D00),
+    tertiaryContainer = Color(0xFF574200),
+    onTertiaryContainer = Color(0xFFFBE6A8),
     background = KronBackground,
     onBackground = KronText,
     surface = KronSurface,
     onSurface = KronText,
     surfaceVariant = KronSurfaceHigh,
     onSurfaceVariant = KronMuted,
+    surfaceTint = KronRed,
+    inverseSurface = KronText,
+    inverseOnSurface = Color(0xFF241B1D),
+    outline = Color(0xFF9C8B8E),
+    outlineVariant = Color(0xFF433539),
     error = Color(0xFFFF796E),
+    onError = Color(0xFF5F1412),
+    errorContainer = Color(0xFF8C1D18),
+    onErrorContainer = Color(0xFFFFDAD6),
+    scrim = Color.Black,
 )
 
+// The same maroon, purple and gold family as the dark palette, re-tuned for a light surface rather
+// than half-specified. Text bearing roles clear 4.5:1 against surface.
 private val LightColors = lightColorScheme(
-    primary = Color(0xFF983744),
+    primary = Color(0xFF8C2F3C),
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFF2D6DA),
+    primaryContainer = Color(0xFFFFD9DD),
+    onPrimaryContainer = Color(0xFF3B0710),
+    inversePrimary = Color(0xFFFFB3BC),
     secondary = Color(0xFF6D4D78),
-    tertiary = Color(0xFF826C10),
-    background = Color(0xFFF0ECEA),
-    onBackground = Color(0xFF241B1D),
-    surface = Color(0xFFF5F1EF),
-    onSurface = Color(0xFF241B1D),
-    surfaceVariant = Color(0xFFE5DBDB),
-    onSurfaceVariant = Color(0xFF62575A),
-    error = Color(0xFFBA1A1A),
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFFF0DBF6),
+    onSecondaryContainer = Color(0xFF2A0E33),
+    tertiary = Color(0xFF7A5E0B),
+    onTertiary = Color.White,
+    tertiaryContainer = Color(0xFFFBE6A8),
+    onTertiaryContainer = Color(0xFF271C00),
+    background = Color(0xFFF7F3F1),
+    onBackground = Color(0xFF221A1C),
+    surface = Color(0xFFFFFBF9),
+    onSurface = Color(0xFF221A1C),
+    surfaceVariant = Color(0xFFEFE2E3),
+    onSurfaceVariant = Color(0xFF5A4D50),
+    surfaceTint = Color(0xFF8C2F3C),
+    inverseSurface = Color(0xFF37292C),
+    inverseOnSurface = Color(0xFFFBEEF0),
+    outline = Color(0xFF8C7C7F),
+    outlineVariant = Color(0xFFDCC9CC),
+    error = Color(0xFFB3261E),
+    onError = Color.White,
+    errorContainer = Color(0xFFF9DEDC),
+    onErrorContainer = Color(0xFF410E0B),
+    scrim = Color.Black,
 )
 
 private val Orbitron = FontFamily(Font(R.font.orbitron))
@@ -99,10 +170,12 @@ fun KronTheme(theme: String, content: @Composable () -> Unit) {
         "SYSTEM" -> isSystemInDarkTheme()
         else -> true
     }
-    MaterialTheme(
-        colorScheme = if (dark) DarkColors else LightColors,
-        typography = KronTypography,
-        shapes = KronShapes,
-        content = content,
-    )
+    androidx.compose.runtime.CompositionLocalProvider(LocalKronDarkTheme provides dark) {
+        MaterialTheme(
+            colorScheme = if (dark) DarkColors else LightColors,
+            typography = KronTypography,
+            shapes = KronShapes,
+            content = content,
+        )
+    }
 }

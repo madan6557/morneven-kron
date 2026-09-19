@@ -1209,6 +1209,7 @@ private data class PeriodChartData(val label: String, val planned: Long, val spe
 @Composable
 private fun BudgetBarChart(data: List<PeriodChartData>, modifier: Modifier) {
     val primaryColor = MaterialTheme.colorScheme.primary
+    val withinBudgetColor = KronGreen
     val grid = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)
     val maxValue = data.maxOf { maxOf(it.planned, it.spent) }.coerceAtLeast(1)
     val barCount = data.size
@@ -1227,7 +1228,7 @@ private fun BudgetBarChart(data: List<PeriodChartData>, modifier: Modifier) {
                     val cx = idx * groupW
                     val plannedH = (item.planned.toFloat() / maxValue) * chartH
                     val spentH = (item.spent.toFloat() / maxValue) * chartH
-                    val spentColor = if (item.spent <= item.planned) KronGreen else KronRed
+                    val spentColor = if (item.spent <= item.planned) withinBudgetColor else KronRed
                     drawRect(
                         color = primaryColor.copy(alpha = 0.25f),
                         topLeft = Offset(cx + gap, size.height * 0.06f + chartH - plannedH),

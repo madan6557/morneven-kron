@@ -36,6 +36,7 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -53,6 +54,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -73,6 +75,7 @@ import com.morneven.kron.data.FundingChannel
 import com.morneven.kron.ui.theme.KronBlue
 import com.morneven.kron.ui.theme.KronGold
 import com.morneven.kron.ui.theme.KronGreen
+import com.morneven.kron.ui.theme.KronNegative
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.text.NumberFormat
@@ -266,6 +269,10 @@ fun CalculatorKeypadView(
     Column(
         modifier = modifier
             .fillMaxWidth()
+            // A real IME never takes focus from the field it is editing. Without this the keys are
+            // focusable Surfaces, so pressing one blurs the text field, which makes it impossible to
+            // tell "user pressed a key" apart from "user moved to another field".
+            .focusProperties { canFocus = false }
             .background(MaterialTheme.colorScheme.surface)
             .navigationBarsPadding()
             .padding(horizontal = 8.dp, vertical = 6.dp),
@@ -436,6 +443,9 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
     val isCustomActive = isHostActive || localShowCalculator
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
+    var hasFocus by remember { mutableStateOf(false) }
+    // Deliberately not saved: it represents a user action in flight, not restorable state.
+    var requestSystemKeyboard by remember { mutableStateOf(false) }
 
     LaunchedEffect(value) {
         val formatted = formatMoneyInput(value)
@@ -448,8 +458,9 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
     fun activateCalculator() {
         touched = true
         useSystemKeyboard = false
-        keyboardController?.hide()
+        requestSystemKeyboard = false
         focusRequester.requestFocus()
+        keyboardController?.hide()
         if (keypadHost != null) {
             keypadHost.activeFieldId = fieldId
             keypadHost.label = label
@@ -461,6 +472,7 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
             keypadHost.onSwitchToSystemKeyboard = {
                 useSystemKeyboard = true
                 keypadHost.dismiss()
+                requestSystemKeyboard = true
             }
             coroutineScope.launch {
                 delay(150)
@@ -482,12 +494,28 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
             keypadHost.onSwitchToSystemKeyboard = {
                 useSystemKeyboard = true
                 keypadHost.dismiss()
+                requestSystemKeyboard = true
             }
         }
     }
 
+    // The interceptor keeps swallowing the IME until recomposition applies useSystemKeyboard, so the
+    // request is made on the next frame rather than inline. Previously nothing asked for the
+    // keyboard at all and it only appeared when Compose happened to restart the input session.
+    LaunchedEffect(requestSystemKeyboard) {
+        if (requestSystemKeyboard) {
+            requestSystemKeyboard = false
+            focusRequester.requestFocus()
+            withFrameNanos { }
+            keyboardController?.show()
+        }
+    }
+
     LaunchedEffect(isHostActive) {
-        if (!isHostActive && !useSystemKeyboard) {
+        // The hasFocus guard matters once the keypad is released on blur: without it, moving to
+        // another field dismisses the keypad and this effect then clears focus from the field the
+        // user just tapped, closing the system keyboard they were trying to open.
+        if (!isHostActive && !useSystemKeyboard && hasFocus) {
             focusManager.clearFocus()
         } else if (isHostActive) {
             focusRequester.requestFocus()
@@ -576,8 +604,15 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
                         .onFocusChanged { focusState ->
+                            hasFocus = focusState.isFocused
                             if (focusState.isFocused && !useSystemKeyboard) {
                                 keyboardController?.hide()
+                            }
+                            // Moving to any other input, including a plain text field with no
+                            // keypad of its own, has to hand the keypad back. Nothing did this
+                            // before, so the calculator stayed docked over the system keyboard.
+                            if (!focusState.isFocused && keypadHost?.activeFieldId == fieldId) {
+                                keypadHost.dismiss()
                             }
                         },
                     singleLine = true,
@@ -888,9 +923,11 @@ fun EmptyState(icon: ImageVector, title: String, description: String, modifier: 
     }
 }
 
+/** Composable so the accent follows the active theme instead of the dark-tuned tone. */
+@Composable
 fun signedColor(value: Long): Color = when {
     value > 0 -> KronGreen
-    value < 0 -> Color(0xFFFF796E)
+    value < 0 -> KronNegative
     else -> Color.Unspecified
 }
 
