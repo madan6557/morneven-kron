@@ -1,5 +1,11 @@
 # KRON Changelog
 
+## 1.7.15 - 2026-09-26 (kandidat)
+
+- Sinkronisasi kurs otomatis widget dan percobaan manual yang gagal kini menunggu koneksi internet melalui satu pekerjaan dengan retry terbatas. Kegagalan jaringan tidak mengubah kurs KRM atau memicu refresh berulang.
+- Pembaruan tampilan widget dipisahkan dari permintaan sinkronisasi kurs. Setelah koneksi kembali, kurs diperbarui sekali tanpa mengejar tick yang terlewat saat offline.
+- Batas atas sintetis KRM dihapus; batas bawah dan pengaman nilai numerik tetap berlaku.
+
 ## 1.7.14 - 2026-09-26 (kandidat)
 
 - Total budget kini ditentukan sebelum alokasi kategori dan disimpan per periode. Sisa batas yang belum dibagi tidak dibooking.

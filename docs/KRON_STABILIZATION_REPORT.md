@@ -189,3 +189,18 @@
 - Need attention: dua tes migrasi lama 5 ke 6 dan 13 ke 14 gagal pada fixture SQL historis yang tidak lengkap; migrasi produksi yang telah dikirim tidak diubah.
 - Need attention: uji ulang instrumentasi tertahan oleh perangkat dengan `INSTALL_FAILED_USER_RESTRICTED`. Tidak ada uninstall, clear data, atau penghapusan snapshot yang dilakukan secara manual.
 - Need attention: backup round trip, uji Private/Team pada Drive nyata, install-over dari APK produksi sebelumnya, dan verifikasi kompatibilitas APK 1.0.21/1.3.20 belum selesai. Kandidat tidak boleh ditandai rilis stabil sebelum gerbang tersebut lulus.
+
+## Retry kurs widget saat offline, kandidat 1.7.15
+
+### Dampak perubahan
+
+- Persetujuan perubahan produksi: jawaban pengguna `setuju` pada 2026-09-26 setelah pembacaan `AGENTS.md` dan `docs/DRIVE_SYNC_CHANGE_CONTROL.md` serta penjelasan dampak.
+- Scheduler widget dan kegagalan sinkronisasi manual memakai satu pekerjaan WorkManager yang menunggu jaringan dan paling banyak dua retry dengan backoff. Worker hanya mengakses preferensi kurs, tanpa membuka database finansial.
+- Private Drive, Team, Kapsul, backup, schema Room, migrasi, dan aktivasi database tidak diubah. Pembaruan tampilan widget tidak lagi memulai sinkronisasi jaringan.
+- KRM tidak berubah saat sinkronisasi gagal atau offline. Satu sinkronisasi berhasil menghasilkan satu tick sintetis; tidak ada tick susulan untuk waktu offline. Batas atas dihapus, batas bawah dipertahankan.
+
+### Hasil verifikasi dan perhatian
+
+- Done: `testDebugUnitTest`, `compileDebugKotlin`, dan `lintDebug` lulus setelah perubahan utama. Pengujian ulang spesifik `KronCurrencyTest` lulus 6/6. `assembleDebug`, `assembleRelease`, dan `lintVitalRelease` lulus untuk kandidat 1.7.15.
+- Done: APK rilis kandidat memiliki `versionCode` 107, `versionName` 1.7.15, dan signature v2 dengan fingerprint SHA-256 sertifikat tetap `65c875d6810fee77ad626393685ae887b76b97d96df82dd360c5c271701caae7`. SHA-256 APK: `7C9C93FE873FE34F5429098320C0B647674AFEEFE11AEFFE0B38A8C6EB47B477`.
+- Need attention: verifikasi runtime putus-sambung jaringan pada widget nyata dan install-over APK produksi belum dilakukan. Kandidat bukan rilis stabil.

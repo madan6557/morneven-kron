@@ -121,7 +121,7 @@ object KronWidgetManager {
 
     fun notifySingleWidgetUpdate(context: Context, appWidgetId: Int) {
         val intent = Intent(context, KronWidgetProvider::class.java).apply {
-            action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
+            action = KronWidgetProvider.ACTION_REFRESH_DISPLAY
             putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, intArrayOf(appWidgetId))
         }
         context.sendBroadcast(intent)
@@ -133,7 +133,7 @@ object KronWidgetManager {
         val appWidgetIds = appWidgetManager.getAppWidgetIds(componentName)
         if (appWidgetIds != null && appWidgetIds.isNotEmpty()) {
             val intent = Intent(context, KronWidgetProvider::class.java).apply {
-                action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                action = KronWidgetProvider.ACTION_REFRESH_DISPLAY
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, appWidgetIds)
             }
             context.sendBroadcast(intent)

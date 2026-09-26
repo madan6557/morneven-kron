@@ -1,10 +1,14 @@
 package com.morneven.kron.widget
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import com.morneven.kron.ui.components.formatIdr
 import kotlin.random.Random
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -16,7 +20,7 @@ import java.util.Locale
  * Supported currencies for KRON Android Widget and displays.
  *
  * KRM (Kron Morneven) is the official currency of the fantasy world Morneven.
- * Starting reference rate: 1 Kr = Rp 1.200. Fluctuates synthetically every 30 minutes.
+ * Starting reference rate: 1 Kr = Rp 1.200. Fluctuates once per successful rate sync.
  */
 enum class WidgetCurrency(
     val code: String,        // 3-character ISO-style code shown as widget badge
@@ -105,8 +109,7 @@ object KronCurrencyManager {
     /** Hard floor: KRM cannot drop below this IDR value to prevent nonsensical rates. */
     private const val KRM_FLOOR_IDR = 100.0
 
-    /** Hard ceiling: KRM cannot exceed this IDR value to prevent runaway inflation. */
-    private const val KRM_CEIL_IDR = 50000.0
+    private val syncMutex = Mutex()
 
     /** Backwards-compatible alias for code that still reads the integer form. */
     val MORNEVEN_KRON_IN_IDR: Long get() = KRM_BASE_IDR.toLong()
@@ -122,7 +125,8 @@ object KronCurrencyManager {
     fun getKrmIdrRate(context: Context?): Double {
         if (context == null) return KRM_BASE_IDR
         val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
-        return prefs.getString(KEY_KRM_IDR_RATE, null)?.toDoubleOrNull() ?: KRM_BASE_IDR
+        return prefs.getString(KEY_KRM_IDR_RATE, null)?.toDoubleOrNull()
+            ?.takeIf { it.isFinite() && it > 0.0 } ?: KRM_BASE_IDR
     }
 
     /**
@@ -132,16 +136,13 @@ object KronCurrencyManager {
      * - 30% chance: large swing of 5-15% from the current rate.
      * - 70% chance: small movement of 0.1-2% from the current rate.
      * - Mean reversion of 8% per tick pulls rate back toward [KRM_BASE_IDR].
-     * - Result is clamped to [[KRM_FLOOR_IDR], [KRM_CEIL_IDR]].
+     * - The floor prevents invalid rates; there is no arbitrary upper cap.
      *
      * @return the new IDR-per-Kr rate after fluctuation.
      */
     fun refreshKronFluctuation(context: Context): Double {
         val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
-        val current = prefs.getString(KEY_KRM_IDR_RATE, null)?.toDoubleOrNull() ?: KRM_BASE_IDR
-
-        // Mean reversion: gently pull 8% of the gap back toward base on each tick
-        val reversion = (KRM_BASE_IDR - current) * 0.08
+        val current = getKrmIdrRate(context)
 
         val isLarge = Random.nextDouble() < 0.30
         val magnitude = if (isLarge) {
@@ -149,12 +150,18 @@ object KronCurrencyManager {
         } else {
             Random.nextDouble(0.001, 0.02)  // 0.1-2% for small movements
         }
-        val direction = if (Random.nextBoolean()) 1.0 else -1.0
-        val delta = current * magnitude * direction + reversion
-        val newRate = (current + delta).coerceIn(KRM_FLOOR_IDR, KRM_CEIL_IDR)
+        val newRate = nextKrmIdrRate(current, magnitude, Random.nextBoolean())
 
         prefs.edit().putString(KEY_KRM_IDR_RATE, newRate.toString()).apply()
         return newRate
+    }
+
+    internal fun nextKrmIdrRate(current: Double, magnitude: Double, increase: Boolean): Double {
+        val startingRate = current.takeIf { it.isFinite() && it > 0.0 } ?: KRM_BASE_IDR
+        val reversion = (KRM_BASE_IDR - startingRate) * 0.08
+        val direction = if (increase) 1.0 else -1.0
+        val next = startingRate + startingRate * magnitude * direction + reversion
+        return if (next.isFinite()) next.coerceAtLeast(KRM_FLOOR_IDR) else startingRate
     }
 
     // ------------------------------------------------------------------
@@ -168,12 +175,11 @@ object KronCurrencyManager {
     }
 
     /**
-     * Triggers [syncRatesOnline] only when rates are stale or have never been fetched.
-     * Must be called from a background dispatcher (IO or Default).
+     * Syncs only when stale. A unique network-constrained worker calls this after connectivity returns.
      */
-    suspend fun checkAndAutoSync(context: Context) {
-        if (isRatesStale(context)) {
-            syncRatesOnline(context)
+    suspend fun checkAndAutoSync(context: Context): Result<Map<String, Double>> = withContext(Dispatchers.IO) {
+        syncMutex.withLock {
+            if (isRatesStale(context)) performRateSync(context) else Result.success(emptyMap())
         }
     }
 
@@ -256,74 +262,71 @@ object KronCurrencyManager {
     // Online sync
     // ------------------------------------------------------------------
 
-    /**
-     * Fetches real-time exchange rates from the public API and caches them.
-     * Also triggers a synthetic fluctuation tick for KRM on every call.
-     */
-    suspend fun syncRatesOnline(context: Context): Result<Map<String, Double>> =
-        withContext(Dispatchers.IO) {
-            try {
-                val url = URL(API_URL)
-                val conn = (url.openConnection() as HttpURLConnection).apply {
-                    requestMethod = "GET"
-                    connectTimeout = 6000
-                    readTimeout = 6000
-                    setRequestProperty("User-Agent", "KRON-App/1.0")
-                    setRequestProperty("Accept", "application/json")
-                }
+    /** Fetches market rates. KRM changes once only after a successful fetch, never while offline. */
+    suspend fun syncRatesOnline(context: Context): Result<Map<String, Double>> = withContext(Dispatchers.IO) {
+        syncMutex.withLock { performRateSync(context) }
+    }
 
-                val responseCode = conn.responseCode
-                if (responseCode != HttpURLConnection.HTTP_OK) {
-                    conn.disconnect()
-                    // Tick KRM even on network failure so the synthetic rate still moves
-                    refreshKronFluctuation(context)
-                    KronWidgetManager.notifyWidgetUpdate(context)
-                    return@withContext Result.failure(Exception("HTTP $responseCode dari server kurs"))
-                }
-
-                val responseText = conn.inputStream.bufferedReader().use { it.readText() }
-                conn.disconnect()
-
-                val json = JSONObject(responseText)
-                if (json.optString("result", "") != "success") {
-                    refreshKronFluctuation(context)
-                    KronWidgetManager.notifyWidgetUpdate(context)
-                    return@withContext Result.failure(Exception("Format response kurs tidak valid"))
-                }
-
-                val ratesObj = json.getJSONObject("rates")
-                val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
-                val editor = prefs.edit()
-                val savedRates = mutableMapOf<String, Double>()
-
-                for (curr in WidgetCurrency.entries) {
-                    // IDR and KRON are handled separately; skip fixed-rate entries
-                    if (curr == WidgetCurrency.IDR || curr == WidgetCurrency.KRON) continue
-                    if (curr.fixedRateFromIdr != null) {
-                        savedRates[curr.code] = curr.fixedRateFromIdr
-                        continue
-                    }
-                    if (ratesObj.has(curr.code)) {
-                        val rate = ratesObj.getDouble(curr.code)
-                        editor.putString("$KEY_PREFIX_RATE${curr.code}", rate.toString())
-                        savedRates[curr.code] = rate
-                    }
-                }
-
-                editor.putLong(KEY_LAST_SYNCED, System.currentTimeMillis())
-                editor.apply()
-
-                // Synthetic KRM tick on every successful sync
-                val newKrmIdr = refreshKronFluctuation(context)
-                savedRates["KRM"] = 1.0 / newKrmIdr
-
-                KronWidgetManager.notifyWidgetUpdate(context)
-                Result.success(savedRates)
-            } catch (e: Exception) {
-                // Always tick KRM even when network is unavailable
-                refreshKronFluctuation(context)
-                KronWidgetManager.notifyWidgetUpdate(context)
-                Result.failure(e)
-            }
+    private fun performRateSync(context: Context): Result<Map<String, Double>> {
+        if (!hasInternetAccess(context)) {
+            return Result.failure(IllegalStateException("Tidak ada koneksi internet"))
         }
+        return try {
+            val conn = (URL(API_URL).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 6000
+                readTimeout = 6000
+                setRequestProperty("User-Agent", "KRON-App/1.0")
+                setRequestProperty("Accept", "application/json")
+            }
+            val responseText = try {
+                if (conn.responseCode != HttpURLConnection.HTTP_OK) {
+                    return Result.failure(Exception("HTTP ${conn.responseCode} dari server kurs"))
+                }
+                conn.inputStream.bufferedReader().use { it.readText() }
+            } finally {
+                conn.disconnect()
+            }
+
+            val json = JSONObject(responseText)
+            if (json.optString("result", "") != "success") {
+                return Result.failure(Exception("Format response kurs tidak valid"))
+            }
+
+            val ratesObj = json.getJSONObject("rates")
+            val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
+            val editor = prefs.edit()
+            val savedRates = mutableMapOf<String, Double>()
+
+            for (curr in WidgetCurrency.entries) {
+                if (curr == WidgetCurrency.IDR || curr == WidgetCurrency.KRON) continue
+                if (curr.fixedRateFromIdr != null) {
+                    savedRates[curr.code] = curr.fixedRateFromIdr
+                    continue
+                }
+                if (ratesObj.has(curr.code)) {
+                    val rate = ratesObj.getDouble(curr.code)
+                    editor.putString("$KEY_PREFIX_RATE${curr.code}", rate.toString())
+                    savedRates[curr.code] = rate
+                }
+            }
+
+            editor.putLong(KEY_LAST_SYNCED, System.currentTimeMillis())
+            editor.apply()
+
+            val newKrmIdr = refreshKronFluctuation(context)
+            savedRates["KRM"] = 1.0 / newKrmIdr
+            runCatching { KronWidgetManager.notifyWidgetUpdate(context) }
+            Result.success(savedRates)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun hasInternetAccess(context: Context): Boolean {
+        val manager = context.getSystemService(ConnectivityManager::class.java) ?: return false
+        val capabilities = manager.getNetworkCapabilities(manager.activeNetwork) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
 }

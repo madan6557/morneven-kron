@@ -74,6 +74,7 @@ import androidx.compose.ui.text.font.FontWeight
 import com.morneven.kron.ui.components.formatIdr
 import com.morneven.kron.ui.theme.KronGold
 import com.morneven.kron.widget.KronCurrencyManager
+import com.morneven.kron.widget.KronCurrencySyncScheduler
 import com.morneven.kron.widget.WidgetCurrency
 import kotlinx.coroutines.launch
 import androidx.compose.material.icons.outlined.Widgets
@@ -773,7 +774,7 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text(
-                            "* Kurs KRM berfluktuasi secara sintetis (mulai dari Rp 1.200). Kurs pasar otomatis diperbarui setiap 30 menit.",
+                            "* Kurs KRM berfluktuasi sekali setelah sinkronisasi kurs berhasil. Saat offline, kurs terakhir tetap dipakai; widget mencoba lagi setelah koneksi kembali. Pemeriksaan otomatis dijadwalkan setiap 30 menit.",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -792,10 +793,11 @@ fun SettingsScreen(
                                             Toast.LENGTH_SHORT
                                         ).show()
                                     } else {
+                                        KronCurrencySyncScheduler.scheduleIfStale(context)
                                         val errorMsg = result.exceptionOrNull()?.message ?: "Gagal memperbarui"
                                         Toast.makeText(
                                             context,
-                                            "Gagal sync kurs: $errorMsg (menggunakan kurs tersimpan/fallback)",
+                                            "Gagal sync kurs: $errorMsg. Kurs tersimpan dipakai; percobaan berikutnya menunggu koneksi.",
                                             Toast.LENGTH_LONG
                                         ).show()
                                     }

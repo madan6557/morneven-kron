@@ -11,14 +11,16 @@ import android.widget.RemoteViews
 import com.morneven.kron.MainActivity
 import com.morneven.kron.R
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-
 class KronWidgetProvider : AppWidgetProvider() {
 
     override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == ACTION_REFRESH_DISPLAY) {
+            val appWidgetManager = AppWidgetManager.getInstance(context) ?: return
+            intent.getIntArrayExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS)?.forEach { appWidgetId ->
+                updateAppWidget(context, appWidgetManager, appWidgetId)
+            }
+            return
+        }
         if (intent.action == ACTION_TOGGLE_VISIBILITY) {
             val appWidgetId = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID)
             if (appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
@@ -56,23 +58,11 @@ class KronWidgetProvider : AppWidgetProvider() {
     }
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
+        if (appWidgetIds.isEmpty()) return
         for (appWidgetId in appWidgetIds) {
             updateAppWidget(context, appWidgetManager, appWidgetId)
         }
-        val pendingResult = goAsync()
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                KronCurrencyManager.checkAndAutoSync(context)
-            } catch (_: Exception) {
-            } finally {
-                withContext(Dispatchers.Main) {
-                    for (appWidgetId in appWidgetIds) {
-                        updateAppWidget(context, appWidgetManager, appWidgetId)
-                    }
-                    pendingResult.finish()
-                }
-            }
-        }
+        KronCurrencySyncScheduler.scheduleIfStale(context)
     }
 
     override fun onAppWidgetOptionsChanged(
@@ -85,6 +75,7 @@ class KronWidgetProvider : AppWidgetProvider() {
     }
 
     companion object {
+        const val ACTION_REFRESH_DISPLAY = "com.morneven.kron.action.REFRESH_WIDGET_DISPLAY"
         const val ACTION_TOGGLE_VISIBILITY = "com.morneven.kron.action.TOGGLE_VISIBILITY"
         const val ACTION_CYCLE_CURRENCY = "com.morneven.kron.action.CYCLE_CURRENCY"
         const val ACTION_REQUEST_PIN = "com.morneven.kron.action.REQUEST_PIN"

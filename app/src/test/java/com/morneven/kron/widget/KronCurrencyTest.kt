@@ -38,6 +38,18 @@ class KronCurrencyTest {
     }
 
     @Test
+    fun syntheticKrmRateHasNoArbitraryUpperCap() {
+        val next = KronCurrencyManager.nextKrmIdrRate(100_000.0, 0.15, increase = true)
+        assertTrue(next > 100_000.0)
+        assertTrue(next > 50_000.0)
+    }
+
+    @Test
+    fun syntheticKrmRateKeepsItsLowerFloor() {
+        assertEquals(100.0, KronCurrencyManager.nextKrmIdrRate(100.0, 0.99, increase = false), 0.0001)
+    }
+
+    @Test
     fun testFormatCurrencyAmountKRM() {
         // Hidden balance masking
         val hidden = KronCurrencyManager.formatCurrencyAmount(1200L, WidgetCurrency.KRON, visible = false)
