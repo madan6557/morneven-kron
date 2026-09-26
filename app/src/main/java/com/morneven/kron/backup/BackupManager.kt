@@ -1378,6 +1378,9 @@ class BackupManager @Inject constructor(
             require(!it.rawQuery("PRAGMA foreign_key_check", null).use { cursor -> cursor.moveToFirst() }) {
                 "Relasi database tidak valid"
             }
+            require(scalar(it, "SELECT COUNT(*) FROM budget_periods p WHERE p.plannedTotal < 0 OR p.plannedTotal < (SELECT COALESCE(SUM(a.plannedAmount),0) FROM allocations a WHERE a.periodId=p.id)") == 0L) {
+                "Total budget backup tidak mencukupi rencana kategori"
+            }
             val cash = scalar(it, "SELECT COALESCE(SUM(amount),0) FROM cash_journal_lines")
             val available = scalar(
                 it,
@@ -1756,7 +1759,7 @@ class BackupManager @Inject constructor(
             "SELECT 'account',COALESCE(teamId,'private-account:'||id),name,revision,updatedAt,COALESCE(lastWriterId,''),name||'|'||isArchived||'|'||sharingMode FROM accounts$accountWhere",
             "SELECT 'category',syncId,name,revision,updatedAt,COALESCE(lastWriterId,''),name||'|'||direction||'|'||color||'|'||icon||'|'||isArchived FROM categories WHERE syncId IS NOT NULL$categoryScope",
             "SELECT 'portfolio',syncId,name,revision,updatedAt,COALESCE(lastWriterId,''),name||'|'||cadence||'|'||intervalCount||'|'||plannedIncome||'|'||rolloverEnabled||'|'||fundingPriority||'|'||startEpochDay||'|'||endMode||'|'||COALESCE(endValue,'')||'|'||isPaused||'|'||isArchived FROM portfolios WHERE syncId IS NOT NULL$directAccountScope",
-            "SELECT 'period',p.syncId,pf.name||' '||p.startEpochDay,p.revision,p.updatedAt,COALESCE(p.lastWriterId,''),pf.syncId||'|'||p.startEpochDay||'|'||p.endEpochDay||'|'||p.status FROM budget_periods p JOIN portfolios pf ON pf.id=p.portfolioId WHERE p.syncId IS NOT NULL$joinedAccountScope",
+            "SELECT 'period',p.syncId,pf.name||' '||p.startEpochDay,p.revision,p.updatedAt,COALESCE(p.lastWriterId,''),pf.syncId||'|'||p.startEpochDay||'|'||p.endEpochDay||'|'||p.status||'|'||p.plannedTotal FROM budget_periods p JOIN portfolios pf ON pf.id=p.portfolioId WHERE p.syncId IS NOT NULL$joinedAccountScope",
             "SELECT 'allocation',a.syncId,c.name||' '||a.fundingChannel,a.revision,a.updatedAt,COALESCE(a.lastWriterId,''),p.syncId||'|'||c.syncId||'|'||a.fundingChannel||'|'||a.plannedAmount FROM allocations a JOIN budget_periods p ON p.id=a.periodId JOIN portfolios pf ON pf.id=p.portfolioId JOIN categories c ON c.id=a.categoryId WHERE a.syncId IS NOT NULL$joinedAccountScope",
             "SELECT 'template',t.syncId,c.name,t.revision,t.updatedAt,COALESCE(t.lastWriterId,''),p.syncId||'|'||c.syncId||'|'||t.plannedAmount||'|'||t.cashPercentage FROM portfolio_allocation_templates t JOIN portfolios p ON p.id=t.portfolioId JOIN categories c ON c.id=t.categoryId WHERE t.syncId IS NOT NULL$portfolioAccountScope",
             "SELECT 'rule',r.syncId,r.title,r.revision,r.updatedAt,COALESCE(r.lastWriterId,''),r.title||'|'||r.direction||'|'||r.amount||'|'||r.fundingChannel||'|'||COALESCE(c.syncId,'')||'|'||COALESCE(a.syncId,'')||'|'||r.cadence||'|'||r.intervalCount||'|'||r.anchorMonth||'|'||r.anchorDay||'|'||r.startEpochDay||'|'||r.nextEpochDay||'|'||COALESCE(r.endEpochDay,'')||'|'||COALESCE(r.remainingOccurrences,'')||'|'||r.isPaused FROM recurring_rules r LEFT JOIN categories c ON c.id=r.categoryId LEFT JOIN allocations a ON a.id=r.allocationId WHERE r.syncId IS NOT NULL${directAccountScope.replace("accountId", "r.accountId")}",

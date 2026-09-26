@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.isImeVisible
@@ -36,6 +37,7 @@ import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
@@ -307,6 +309,78 @@ private val budgetCategoryDraftsSaver = Saver<SnapshotStateList<BudgetCategoryDr
     },
 )
 
+private data class BudgetIncreaseCategory(
+    val name: String,
+    val oldCash: Long = 0,
+    val oldEBudget: Long = 0,
+    val newCash: Long,
+    val newEBudget: Long,
+    val changed: Boolean = true,
+)
+
+private fun periodBudgetIncreaseCategories(
+    rows: List<AllocationBalanceRow>,
+    changedCategoryId: Long?,
+    changedName: String,
+    newCash: Long,
+    newEBudget: Long,
+): List<BudgetIncreaseCategory> {
+    val categories = rows.groupBy { it.categoryId }.map { (categoryId, categoryRows) ->
+        val oldCash = categoryRows.filter { it.fundingChannel == FundingChannel.CASH }.sumOf { it.plannedAmount }
+        val oldEBudget = categoryRows.filter { it.fundingChannel == FundingChannel.EBUDGET }.sumOf { it.plannedAmount }
+        val changed = categoryId == changedCategoryId
+        BudgetIncreaseCategory(
+            name = categoryRows.first().categoryName,
+            oldCash = oldCash,
+            oldEBudget = oldEBudget,
+            newCash = if (changed) newCash else oldCash,
+            newEBudget = if (changed) newEBudget else oldEBudget,
+            changed = changed,
+        )
+    }.toMutableList()
+    if (changedCategoryId == null || categories.none { it.changed }) {
+        categories += BudgetIncreaseCategory(changedName, newCash = newCash, newEBudget = newEBudget)
+    }
+    return categories.sortedWith(compareByDescending<BudgetIncreaseCategory> { it.changed }.thenBy { it.name })
+}
+
+private data class BudgetIncreaseRequest(
+    val previousTotal: Long,
+    val proposedTotal: Long,
+    val categories: List<BudgetIncreaseCategory>,
+    val onConfirm: () -> Unit,
+)
+
+@Composable
+private fun BudgetIncreaseDialog(
+    request: BudgetIncreaseRequest,
+    valuesVisible: Boolean,
+    onDismiss: () -> Unit,
+) {
+    val amount: (Long) -> String = { displayMoney(it, valuesVisible) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Total budget terlampaui") },
+        text = {
+            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Total sebelumnya / batas: ${amount(request.previousTotal)}")
+                Text("Total rencana kategori setelah perubahan: ${amount(request.proposedTotal)}")
+                Text("Kelebihan: ${amount(request.proposedTotal - request.previousTotal)}", color = MaterialTheme.colorScheme.error)
+                HorizontalDivider()
+                Text("Kategori dan tipe dana", style = MaterialTheme.typography.titleSmall)
+                request.categories.forEach { category ->
+                    Text(category.name + if (category.changed) " (diubah)" else "", style = MaterialTheme.typography.labelLarge)
+                    Text("Cash: ${amount(category.oldCash)} menjadi ${amount(category.newCash)}", style = MaterialTheme.typography.bodySmall)
+                    Text("eBudget: ${amount(category.oldEBudget)} menjadi ${amount(category.newEBudget)}", style = MaterialTheme.typography.bodySmall)
+                }
+                Text("Jika dilanjutkan, batas total budget naik mengikuti rencana kategori di atas.", style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = { TextButton(onClick = request.onConfirm) { Text("Abaikan batas & naikkan total") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Kembali") } },
+    )
+}
+
 @Composable
 fun ExpenseDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (Long, String, Long, List<ExpenseSplitInput>, String, String, Boolean, String?, LocalDate, LocalDate?, Int, Boolean, Uri?, java.io.File?) -> Unit, receiptUri: Uri? = null, cameraFile: java.io.File? = null, onGalleryPick: () -> Unit = {}, onCameraCapture: () -> Unit = {}) {
     val account = state.activeAccount
@@ -527,10 +601,12 @@ private fun LedgerPreviewCard(debit: String, credit: String, budget: String, aft
 }
 
 @Composable
-fun PortfolioDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (String, String, Long, Boolean, List<AllocationDraft>, LocalDate, LocalDate?, Int) -> Unit) {
+fun PortfolioDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (String, String, Long, Boolean, List<AllocationDraft>, Long, LocalDate, LocalDate?, Int) -> Unit) {
     var name by rememberSaveable { mutableStateOf("") }
     var cadence by rememberSaveable { mutableStateOf("MONTHLY") }
     var plannedIncome by rememberSaveable { mutableStateOf("") }
+    var budgetLimit by rememberSaveable { mutableStateOf("") }
+    var pendingIncrease by remember { mutableStateOf<BudgetIncreaseRequest?>(null) }
     var rollover by rememberSaveable { mutableStateOf(true) }
     var startDate by rememberDate(LocalDate.now())
     var endDate by rememberNullableDate()
@@ -547,8 +623,22 @@ fun PortfolioDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (String
         }
     }
     val totalBudget = budgetCategories.sumOf { money(it.amount) }
-    FormDialog("Buat portfolio RAB", onDismiss, confirmEnabled = name.isNotBlank() && budgetCategories.all { it.name.isNotBlank() && money(it.amount) > 0 } && intervalCount > 0 && (endDate == null || !endDate!!.isBefore(startDate)), onConfirm = {
-        onSubmit(name, cadence, money(plannedIncome), rollover, drafts, startDate, endDate, intervalCount)
+    val limit = money(budgetLimit)
+    FormDialog("Buat portfolio RAB", onDismiss, confirmEnabled = name.isNotBlank() && limit > 0 && budgetCategories.all { it.name.isNotBlank() && money(it.amount) > 0 } && intervalCount > 0 && (endDate == null || !endDate!!.isBefore(startDate)), onConfirm = {
+        if (totalBudget > limit) {
+            pendingIncrease = BudgetIncreaseRequest(
+                previousTotal = limit,
+                proposedTotal = totalBudget,
+                categories = budgetCategories.map { category ->
+                    val total = money(category.amount)
+                    val cash = total * category.cashPercentage / 100
+                    BudgetIncreaseCategory(category.name.trim(), newCash = cash, newEBudget = total - cash)
+                },
+                onConfirm = { pendingIncrease = null; onSubmit(name, cadence, money(plannedIncome), rollover, drafts, totalBudget, startDate, endDate, intervalCount) },
+            )
+        } else {
+            onSubmit(name, cadence, money(plannedIncome), rollover, drafts, limit, startDate, endDate, intervalCount)
+        }
     }) {
         OutlinedTextField(name, { name = it }, label = { Text("Nama portfolio") }, modifier = Modifier.fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -556,9 +646,12 @@ fun PortfolioDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (String
             FilterChip(selected = cadence == "YEARLY", onClick = { cadence = "YEARLY" }, label = { Text("Tahunan") })
         }
         ScheduleFields(startDate, { startDate = it }, endDate, { endDate = it }, intervalCount, { intervalCount = it }, cadence, null, null)
+        MoneyField(budgetLimit, { budgetLimit = it }, "Total budget awal")
+        Text("Tentukan batas total dahulu, lalu isi kategori. Sisa yang belum dibagi tetap di Main Vault dan batasnya tersimpan untuk koreksi berikutnya.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         MoneyField(plannedIncome, { plannedIncome = it }, "Proyeksi hasil RAB (opsional)")
         Text("Isi hanya jika RAB ini diharapkan menghasilkan pemasukan, misalnya kegiatan bisnis. Nilai ini bukan total budget dan tidak menambah saldo.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text("Total budget kategori: ${displayMoney(totalBudget, state.valuesVisible)}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.tertiary)
+        if (totalBudget > limit && limit > 0) Text("Melebihi total awal sebesar ${displayMoney(totalBudget - limit, state.valuesVisible)}. Rangkuman akan ditampilkan sebelum menyimpan.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Rollover sisa", style = MaterialTheme.typography.titleMedium)
@@ -567,7 +660,7 @@ fun PortfolioDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (String
             Switch(rollover, { rollover = it })
         }
         Text("KATEGORI BUDGET CUSTOM", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
-        Text("Buat kategori sendiri. Total budget dihitung otomatis dari seluruh kategori.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Buat kategori sendiri. Jumlah kategori boleh di bawah batas total.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         budgetCategories.forEachIndexed { index, category ->
             val percentage = category.cashPercentage
             Column(Modifier.fillMaxWidth().padding(vertical = 7.dp)) {
@@ -588,6 +681,7 @@ fun PortfolioDialog(state: KronUiState, onDismiss: () -> Unit, onSubmit: (String
             Text("Tambah kategori")
         }
     }
+    pendingIncrease?.let { request -> BudgetIncreaseDialog(request, state.valuesVisible) { pendingIncrease = null } }
 }
 
 @Composable
@@ -596,15 +690,17 @@ fun BudgetDetailDialog(
     periodId: Long,
     readOnly: Boolean = false,
     onDismiss: () -> Unit,
-    onCorrect: (Long, Long, String) -> Unit,
-    onCorrectSplit: ((Long, Long, Int, String) -> Unit)? = null,
-    onAddCategory: ((String, Long, Int, String) -> Unit)? = null,
+    onCorrect: (Long, Long, String, Long?) -> Unit,
+    onCorrectSplit: ((Long, Long, Int, String, Long?) -> Unit)? = null,
+    onAddCategory: ((String, Long, Int, String, Long?) -> Unit)? = null,
     onRenameCategory: ((Long, String) -> Unit)? = null,
     onDeleteCategory: ((Long, String) -> Unit)? = null,
-    onRestoreCategory: ((Long, Long, Int, String) -> Unit)? = null,
+    onRestoreCategory: ((Long, Long, Int, String, Long?) -> Unit)? = null,
 ) {
     val rows = state.allocations.filter { it.periodId == periodId }
     val visibleRows = rows.filter { it.isActive && !(it.periodStatus != PeriodStatus.DRAFT && it.bookedAmount == 0L && it.availableAmount == 0L && it.spentAmount == 0L) }
+    val periodUsed = rows.sumOf { it.plannedAmount }
+    val periodTotal = state.periods.firstOrNull { it.id == periodId }?.plannedTotal ?: periodUsed
     val visibleCategoryIds = remember(visibleRows) { visibleRows.map { it.categoryId }.toSet() }
     val activeCategoryAllocations = remember(rows, visibleCategoryIds) {
         rows.filter { it.categoryId in visibleCategoryIds }
@@ -627,6 +723,7 @@ fun BudgetDetailDialog(
     var addAmount by rememberSaveable { mutableStateOf("") }
     var addCashPct by rememberSaveable { mutableIntStateOf(50) }
     var addNote by rememberSaveable { mutableStateOf("Tambah kategori") }
+    var pendingIncrease by remember { mutableStateOf<BudgetIncreaseRequest?>(null) }
     val validAdd = addName.isNotBlank() && money(addAmount) > 0 && addNote.isNotBlank() && !visibleRows.any { it.categoryName.equals(addName.trim(), ignoreCase = true) }
     var renameCategoryId by rememberSaveable { mutableStateOf<Long?>(null) }
     var renameValue by rememberSaveable { mutableStateOf("") }
@@ -678,6 +775,8 @@ fun BudgetDetailDialog(
                     else if (abs(value) >= 1_000_000) compactIdr(value)
                     else formatIdr(value)
                 }
+                Text("Total budget periode saat ini: ${budgetMoney(periodTotal)}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.tertiary)
+                Text("Rencana kategori: ${budgetMoney(periodUsed)}. Sisa batas belum dibagi: ${budgetMoney((periodTotal - periodUsed).coerceAtLeast(0))}.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (!readOnly && onAddCategory != null) {
                     OutlinedButton(
                         onClick = { showAddCategory = !showAddCategory; if (!showAddCategory) { addName = ""; addAmount = ""; addCashPct = 50; addNote = "Tambah kategori" } },
@@ -701,8 +800,24 @@ fun BudgetDetailDialog(
                             Text("Dana akan dibooking dari Main Vault. Pastikan saldo cukup.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Button(
                                 onClick = {
-                                    onAddCategory(addName.trim(), money(addAmount), addCashPct, addNote.trim())
-                                    showAddCategory = false; addName = ""; addAmount = ""; addCashPct = 50; addNote = "Tambah kategori"
+                                    val categoryName = addName.trim()
+                                    val categoryAmount = money(addAmount)
+                                    val cashAmount = categoryAmount * addCashPct / 100
+                                    val cashPct = addCashPct
+                                    val note = addNote.trim()
+                                    val proposedUsed = periodUsed + categoryAmount
+                                    val saveCategory: (Long?) -> Unit = { approvedTotal ->
+                                        onAddCategory(categoryName, categoryAmount, cashPct, note, approvedTotal)
+                                        showAddCategory = false; addName = ""; addAmount = ""; addCashPct = 50; addNote = "Tambah kategori"
+                                    }
+                                    if (proposedUsed > periodTotal) {
+                                        pendingIncrease = BudgetIncreaseRequest(
+                                            previousTotal = periodTotal,
+                                            proposedTotal = proposedUsed,
+                                            categories = periodBudgetIncreaseCategories(rows, null, categoryName, cashAmount, categoryAmount - cashAmount),
+                                            onConfirm = { pendingIncrease = null; saveCategory(proposedUsed) },
+                                        )
+                                    } else saveCategory(null)
                                 },
                                 enabled = validAdd,
                                 modifier = Modifier.fillMaxWidth(),
@@ -861,6 +976,9 @@ fun BudgetDetailDialog(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            Text("Total budget periode sebelum koreksi: ${budgetMoney(periodTotal)}", style = MaterialTheme.typography.bodySmall)
+                            val proposedUsed = periodUsed - catRows.sumOf { it.plannedAmount } + targetTotal
+                            Text("Rencana kategori setelah koreksi: ${budgetMoney(proposedUsed)}", style = MaterialTheme.typography.bodySmall, color = if (proposedUsed > periodTotal) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary)
                             MoneyField(splitTotalAmount, { splitTotalAmount = it }, "Total nominal budget")
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 Text("Cash $splitCashPct% (${budgetMoney(targetCash)})", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = KronGold)
@@ -976,16 +1094,30 @@ fun BudgetDetailDialog(
                                 Button(
                                     onClick = {
                                         keypadHost.dismiss()
-                                        if (onCorrectSplit != null) {
-                                            onCorrectSplit(categoryId, targetTotal, splitCashPct, splitReason.trim())
-                                        } else if (cAlloc != null) {
-                                            onCorrect(cAlloc.id, targetTotal, splitReason.trim())
-                                        } else if (ebAlloc != null) {
-                                            onCorrect(ebAlloc.id, targetTotal, splitReason.trim())
+                                        val cashPct = splitCashPct
+                                        val reason = splitReason.trim()
+                                        val saveCorrection: (Long?) -> Unit = { approvedTotal ->
+                                            if (onCorrectSplit != null) {
+                                                onCorrectSplit(categoryId, targetTotal, cashPct, reason, approvedTotal)
+                                            } else if (cAlloc != null) {
+                                                onCorrect(cAlloc.id, targetTotal, reason, approvedTotal)
+                                            } else if (ebAlloc != null) {
+                                                onCorrect(ebAlloc.id, targetTotal, reason, approvedTotal)
+                                            }
+                                            correctionId = null
+                                            splitTotalAmount = ""
+                                            splitReason = "Koreksi budget $categoryName"
                                         }
-                                        correctionId = null
-                                        splitTotalAmount = ""
-                                        splitReason = "Koreksi budget $categoryName"
+                                        if (proposedUsed > periodTotal) {
+                                            pendingIncrease = BudgetIncreaseRequest(
+                                                previousTotal = periodTotal,
+                                                proposedTotal = proposedUsed,
+                                                categories = periodBudgetIncreaseCategories(rows, categoryId, categoryName, targetCash, targetEBudget),
+                                                onConfirm = { pendingIncrease = null; saveCorrection(proposedUsed) },
+                                            )
+                                        } else {
+                                            saveCorrection(null)
+                                        }
                                     },
                                     enabled = splitCorrectionValid,
                                     modifier = Modifier.weight(1f),
@@ -1075,11 +1207,26 @@ fun BudgetDetailDialog(
                                             Text("Dana akan dibooking dari Main Vault. Pastikan saldo cukup.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                             Button(
                                                 onClick = {
-                                                    onRestoreCategory(cat.id, money(restoreAmount), restoreCashPct, restoreNote.trim())
-                                                    restoreCategoryId = null
-                                                    restoreAmount = ""
-                                                    restoreCashPct = 50
-                                                    restoreNote = "Pulihkan kategori"
+                                                    val amount = money(restoreAmount)
+                                                    val cash = amount * restoreCashPct / 100
+                                                    val cashPct = restoreCashPct
+                                                    val note = restoreNote.trim()
+                                                    val proposedUsed = periodUsed + amount
+                                                    val saveRestore: (Long?) -> Unit = { approvedTotal ->
+                                                        onRestoreCategory(cat.id, amount, cashPct, note, approvedTotal)
+                                                        restoreCategoryId = null
+                                                        restoreAmount = ""
+                                                        restoreCashPct = 50
+                                                        restoreNote = "Pulihkan kategori"
+                                                    }
+                                                    if (proposedUsed > periodTotal) {
+                                                        pendingIncrease = BudgetIncreaseRequest(
+                                                            previousTotal = periodTotal,
+                                                            proposedTotal = proposedUsed,
+                                                            categories = periodBudgetIncreaseCategories(rows, cat.id, cat.name, cash, amount - cash),
+                                                            onConfirm = { pendingIncrease = null; saveRestore(proposedUsed) },
+                                                        )
+                                                    } else saveRestore(null)
                                                 },
                                                 enabled = money(restoreAmount) > 0 && restoreNote.isNotBlank(),
                                                 modifier = Modifier.fillMaxWidth(),
@@ -1114,6 +1261,7 @@ fun BudgetDetailDialog(
             }
         }
     }
+    pendingIncrease?.let { request -> BudgetIncreaseDialog(request, state.valuesVisible) { pendingIncrease = null } }
 }
 
 @Composable

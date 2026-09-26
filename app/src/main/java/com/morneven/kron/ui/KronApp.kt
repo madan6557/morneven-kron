@@ -1724,7 +1724,7 @@ private fun MainScaffold(
                 "Dana ${displayMoney(amount, state.valuesVisible)} akan dipindahkan dari $fromChannel ke $toChannel.",
             ) { reason -> viewModel.transfer(fromAccount, fromChannel, toAccount, toChannel, amount, listOf(note, reason).filter(String::isNotBlank).joinToString(" | ")) }
         }
-        ActionDialog.PORTFOLIO -> PortfolioDialog(state, { dialog = null }) { name, cadence, income, rollover, drafts, startDate, endDate, interval -> dialog = null; viewModel.createPortfolio(name, cadence, income, rollover, drafts, startDate, endDate, interval) }
+        ActionDialog.PORTFOLIO -> PortfolioDialog(state, { dialog = null }) { name, cadence, income, rollover, drafts, plannedTotal, startDate, endDate, interval -> dialog = null; viewModel.createPortfolio(name, cadence, income, rollover, drafts, plannedTotal, startDate, endDate, interval) }
         ActionDialog.RESOLVE -> ResolveDialog(
             state,
             { dialog = null },
@@ -2378,12 +2378,12 @@ private fun MainScaffold(
             periodId = periodId,
             readOnly = readOnly,
             onDismiss = { detailPeriod = null },
-            onCorrect = { id, amount, note -> authenticateCriticalAction("Koreksi budget") { viewModel.correctAllocation(id, amount, note) } },
-            onCorrectSplit = if (readOnly) null else { catId, total, pct, note -> authenticateCriticalAction("Koreksi split budget") { viewModel.correctBudgetCategorySplit(periodId, catId, total, pct, note) } },
-            onAddCategory = if (readOnly) null else { name, amount, pct, note -> authenticateCriticalAction("Tambah kategori") { viewModel.addBudgetCategory(periodId, name, amount, pct, note) } },
+            onCorrect = { id, amount, note, approvedTotal -> authenticateCriticalAction("Koreksi budget") { viewModel.correctAllocation(id, amount, note, approvedTotal) } },
+            onCorrectSplit = if (readOnly) null else { catId, total, pct, note, approvedTotal -> authenticateCriticalAction("Koreksi split budget") { viewModel.correctBudgetCategorySplit(periodId, catId, total, pct, note, approvedTotal) } },
+            onAddCategory = if (readOnly) null else { name, amount, pct, note, approvedTotal -> authenticateCriticalAction("Tambah kategori") { viewModel.addBudgetCategory(periodId, name, amount, pct, note, approvedTotal) } },
             onRenameCategory = if (readOnly) null else { catId, newName -> authenticateCriticalAction("Ganti nama kategori") { viewModel.renameBudgetCategoryInPeriod(periodId, catId, newName) } },
             onDeleteCategory = if (readOnly) null else { catId, note -> authenticateCriticalAction("Arsipkan kategori") { viewModel.removeBudgetCategory(periodId, catId, note) } },
-            onRestoreCategory = if (readOnly) null else { catId, amount, pct, note -> authenticateCriticalAction("Pulihkan kategori") { viewModel.restoreBudgetCategory(periodId, catId, amount, pct, note) } },
+            onRestoreCategory = if (readOnly) null else { catId, amount, pct, note, approvedTotal -> authenticateCriticalAction("Pulihkan kategori") { viewModel.restoreBudgetCategory(periodId, catId, amount, pct, note, approvedTotal) } },
         )
     }
     historyPortfolioId?.let { portfolioId ->

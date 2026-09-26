@@ -304,8 +304,8 @@ internal object TeamGraphImporter {
         fillMapping(db, "team_portfolio_map", "portfolios")
 
         db.execSQL(
-            """INSERT INTO budget_periods(portfolioId,startEpochDay,endEpochDay,status,createdAt,syncId,revision,updatedAt,lastWriterId)
-               SELECT pm.targetId,s.startEpochDay,s.endEpochDay,s.status,s.createdAt,s.syncId,s.revision,s.updatedAt,s.lastWriterId
+            """INSERT INTO budget_periods(portfolioId,startEpochDay,endEpochDay,status,plannedTotal,createdAt,syncId,revision,updatedAt,lastWriterId)
+               SELECT pm.targetId,s.startEpochDay,s.endEpochDay,s.status,s.plannedTotal,s.createdAt,s.syncId,s.revision,s.updatedAt,s.lastWriterId
                FROM team_source.budget_periods s JOIN team_portfolio_map pm ON pm.sourceId=s.portfolioId""",
         )
         fillMapping(db, "team_period_map", "budget_periods")
@@ -559,6 +559,7 @@ internal object TeamGraphImporter {
     }
 
     private fun validateFinancialInvariants(db: SQLiteDatabase) {
+        requireZero(db, "SELECT COUNT(*) FROM budget_periods p WHERE p.plannedTotal < 0 OR p.plannedTotal < (SELECT COALESCE(SUM(a.plannedAmount),0) FROM allocations a WHERE a.periodId=p.id)", null, "Total budget hasil import Team tidak valid")
         requireZero(
             db,
             """SELECT COUNT(*) FROM (

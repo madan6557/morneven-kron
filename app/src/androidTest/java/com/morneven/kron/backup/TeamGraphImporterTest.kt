@@ -44,6 +44,7 @@ class TeamGraphImporterTest {
             assertEquals(allocationId, scalar(db, "SELECT targetAllocationId FROM activity_events WHERE id='team-event'"))
             assertEquals(allocationId, scalar(db, "SELECT allocationId FROM recurring_rules WHERE id='team-rule'"))
             assertEquals(1, scalar(db, "SELECT COUNT(*) FROM portfolio_allocation_templates WHERE syncId='team-template'"))
+            assertEquals(150, scalar(db, "SELECT plannedTotal FROM budget_periods WHERE syncId='team-period'"))
             assertEquals(100, scalar(db, "SELECT SUM(amount) FROM cash_journal_lines WHERE accountId=$accountId"))
             assertEquals(
                 100,
@@ -73,6 +74,7 @@ class TeamGraphImporterTest {
         val accountId = TeamGraphImporter.merge(target, source, metadata())
         SQLiteDatabase.openDatabase(source.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
             db.execSQL("UPDATE categories SET name='Remote category',revision=1,updatedAt=2 WHERE syncId='team-category'")
+            db.execSQL("UPDATE budget_periods SET plannedTotal=175,revision=1,updatedAt=2 WHERE syncId='team-period'")
             db.execSQL("UPDATE team_workspaces SET generation=8")
         }
 
@@ -80,6 +82,7 @@ class TeamGraphImporterTest {
 
         SQLiteDatabase.openDatabase(target.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
             assertEquals("Remote category", text(db, "SELECT name FROM categories WHERE accountId=$accountId AND syncId='team-category'"))
+            assertEquals(175, scalar(db, "SELECT plannedTotal FROM budget_periods WHERE syncId='team-period'"))
             assertEquals(PRIVATE_MARKER, text(db, "SELECT name FROM accounts WHERE id=1"))
             assertEquals("TEAM", text(db, "SELECT sharingMode FROM accounts WHERE id=$accountId"))
             assertEquals(8, scalar(db, "SELECT generation FROM team_workspaces WHERE accountId=$accountId"))
@@ -331,7 +334,7 @@ class TeamGraphImporterTest {
             execSQL("INSERT INTO team_workspaces(accountId,teamId,folderId,localRole,ownerSubjectHash,headSnapshotId,generation,status,canRead,canWrite,canShare,capabilitiesVerifiedAt,archivedAt,updatedAt) VALUES(1,'team-1','folder-1','OWNER','owner-subject',NULL,7,'SYNCED',1,1,1,1,NULL,1)")
             execSQL("INSERT INTO categories(id,name,direction,color,icon,isArchived,accountId,syncId,revision,updatedAt,lastWriterId) VALUES(1,'Team category','EXPENSE',1,'category',0,1,'team-category',0,1,'owner-device')")
             execSQL("INSERT INTO portfolios(id,name,cadence,intervalCount,plannedIncome,rolloverEnabled,fundingPriority,startEpochDay,endMode,endValue,isPaused,isArchived,archivedAt,createdAt,accountId,syncId,revision,updatedAt,lastWriterId) VALUES(1,'Team budget','MONTHLY',1,100,0,1,1,'CONTINUOUS',NULL,0,0,NULL,1,1,'team-portfolio',0,1,'owner-device')")
-            execSQL("INSERT INTO budget_periods(id,portfolioId,startEpochDay,endEpochDay,status,createdAt,syncId,revision,updatedAt,lastWriterId) VALUES(1,1,1,30,'ACTIVE',1,'team-period',0,1,'owner-device')")
+            execSQL("INSERT INTO budget_periods(id,portfolioId,startEpochDay,endEpochDay,status,plannedTotal,createdAt,syncId,revision,updatedAt,lastWriterId) VALUES(1,1,1,30,'ACTIVE',150,1,'team-period',0,1,'owner-device')")
             execSQL("INSERT INTO allocations(id,periodId,categoryId,fundingChannel,plannedAmount,syncId,revision,updatedAt,lastWriterId) VALUES(1,1,1,'CASH',100,'team-allocation',0,1,'owner-device')")
             execSQL("INSERT INTO portfolio_allocation_templates(id,portfolioId,categoryId,plannedAmount,cashPercentage,syncId,revision,updatedAt,lastWriterId) VALUES(1,1,1,100,100,'team-template',0,1,'owner-device')")
             execSQL("INSERT INTO recurring_rules(id,title,direction,amount,accountId,fundingChannel,categoryId,allocationId,cadence,intervalCount,anchorMonth,anchorDay,startEpochDay,nextEpochDay,endEpochDay,remainingOccurrences,isPaused,pausedByArchive,createdAt,syncId,revision,updatedAt,lastWriterId) VALUES('team-rule','Rule','EXPENSE',100,1,'CASH',1,1,'MONTHLY',1,1,1,1,1,NULL,NULL,0,0,1,'team-rule-sync',0,1,'owner-device')")

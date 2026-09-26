@@ -440,6 +440,8 @@ interface KronDao {
     @Query("SELECT * FROM categories WHERE id = :id LIMIT 1") suspend fun categoryById(id: Long): CategoryEntity?
     @Query("SELECT * FROM portfolios ORDER BY id") suspend fun allPortfolios(): List<PortfolioEntity>
     @Query("SELECT * FROM budget_periods ORDER BY id") suspend fun allPeriods(): List<BudgetPeriodEntity>
+    @Query("SELECT p.id FROM budget_periods p WHERE p.plannedTotal < 0 OR p.plannedTotal < (SELECT COALESCE(SUM(a.plannedAmount),0) FROM allocations a WHERE a.periodId=p.id) LIMIT 1")
+    suspend fun firstBudgetTotalViolation(): Long?
     @Query("SELECT * FROM allocations ORDER BY id") suspend fun allAllocations(): List<AllocationEntity>
     @Query("SELECT * FROM portfolio_allocation_templates WHERE portfolioId = :portfolioId ORDER BY id") suspend fun templatesForPortfolio(portfolioId: Long): List<PortfolioAllocationTemplateEntity>
     @Query("SELECT * FROM portfolio_allocation_templates ORDER BY id") suspend fun allAllocationTemplates(): List<PortfolioAllocationTemplateEntity>

@@ -591,6 +591,34 @@ class KronMigrationTest {
     }
 
     @Test
+    fun migrationNineteenToTwentyPreservesPeriodAndBackfillsBudgetTotal() {
+        val name = "kron-production-19-to-20.db"
+        migrationHelper.createDatabase(name, 19).apply {
+            execSQL("INSERT INTO accounts(id,name,isActive,isArchived,createdAt,sharingMode,teamId,revision,updatedAt) VALUES(1,'Utama',1,0,1,'PRIVATE',NULL,0,1)")
+            execSQL("INSERT INTO categories(id,name,direction,color,icon,isArchived,accountId,syncId,revision,updatedAt,lastWriterId) VALUES(1,'Makan','EXPENSE',1,'category',0,1,'category-19',0,1,NULL)")
+            execSQL("INSERT INTO portfolios(id,name,cadence,intervalCount,plannedIncome,rolloverEnabled,fundingPriority,startEpochDay,endMode,endValue,isPaused,isArchived,archivedAt,createdAt,accountId,syncId,revision,updatedAt,lastWriterId) VALUES(1,'RAB','MONTHLY',1,0,0,1,1,'CONTINUOUS',NULL,0,0,NULL,1,1,'portfolio-19',0,1,NULL)")
+            execSQL("INSERT INTO budget_periods(id,portfolioId,startEpochDay,endEpochDay,status,createdAt,syncId,revision,updatedAt,lastWriterId) VALUES(1,1,1,30,'ACTIVE',1,'period-19',0,1,NULL)")
+            execSQL("INSERT INTO allocations(id,periodId,categoryId,fundingChannel,plannedAmount,syncId,revision,updatedAt,lastWriterId) VALUES(1,1,1,'CASH',60000,'cash-19',0,1,NULL)")
+            execSQL("INSERT INTO allocations(id,periodId,categoryId,fundingChannel,plannedAmount,syncId,revision,updatedAt,lastWriterId) VALUES(2,1,1,'EBUDGET',40000,'ebudget-19',0,1,NULL)")
+            close()
+        }
+        migrationHelper.runMigrationsAndValidate(name, 20, true, KronDatabase.MIGRATION_19_20).apply {
+            query("SELECT plannedTotal,revision FROM budget_periods WHERE id=1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(100000L, cursor.getLong(0))
+                assertEquals(0L, cursor.getLong(1))
+            }
+            query("SELECT SUM(plannedAmount) FROM allocations WHERE periodId=1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(100000L, cursor.getLong(0))
+            }
+            query("PRAGMA foreign_key_check").use { cursor -> assertFalse(cursor.moveToFirst()) }
+            query("PRAGMA integrity_check").use { cursor -> assertTrue(cursor.moveToFirst()); assertEquals("ok", cursor.getString(0)) }
+            close()
+        }
+    }
+
+    @Test
     fun productionPreviewPathMigratesThenKeepsVersionAfterRawReopen() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val fixtureName = "kron-production-17-preview-repro.db"

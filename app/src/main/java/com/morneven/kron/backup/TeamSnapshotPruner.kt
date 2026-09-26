@@ -94,6 +94,7 @@ internal object TeamSnapshotPruner {
         val accountId = scope.accountId.toString()
         val eventScope = "SELECT id FROM activity_events WHERE accountId=$accountId"
         fun empty(sql: String, message: String) = require(scalar(db, sql) == 0L) { message }
+        empty("SELECT COUNT(*) FROM budget_periods p WHERE p.plannedTotal < 0 OR p.plannedTotal < (SELECT COALESCE(SUM(a.plannedAmount),0) FROM allocations a WHERE a.periodId=p.id)", "Total budget snapshot Team tidak valid")
         empty("SELECT COUNT(*) FROM cash_journal_lines WHERE eventId IN ($eventScope) AND accountId<>$accountId", "Cash event Team menyentuh akun lain")
         empty("SELECT COUNT(*) FROM budget_journal_lines WHERE eventId IN ($eventScope) AND accountId<>$accountId", "Budget event Team menyentuh akun lain")
         empty("SELECT COUNT(*) FROM ledger_lines WHERE eventId IN ($eventScope) AND accountId IS NOT NULL AND accountId<>$accountId", "Ledger event Team menyentuh akun lain")

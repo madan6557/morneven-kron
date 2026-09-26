@@ -218,6 +218,7 @@ data class BudgetPeriodEntity(
     val startEpochDay: Long,
     val endEpochDay: Long,
     val status: String,
+    @ColumnInfo(defaultValue = "0") val plannedTotal: Long = 0,
     val createdAt: Long = System.currentTimeMillis(),
     @ColumnInfo(defaultValue = "''") val syncId: String = UUID.randomUUID().toString(),
     @ColumnInfo(defaultValue = "0") val revision: Long = 0,

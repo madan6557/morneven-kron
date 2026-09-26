@@ -195,7 +195,7 @@ internal object TeamGraphRefresher {
                 WHERE l.accountId=$accountId AND (l.name<>r.name OR l.cadence<>r.cadence OR l.intervalCount<>r.intervalCount OR l.plannedIncome<>r.plannedIncome OR l.rolloverEnabled<>r.rolloverEnabled OR l.fundingPriority<>r.fundingPriority OR l.startEpochDay<>r.startEpochDay OR l.endMode<>r.endMode OR COALESCE(l.endValue,'')<>COALESCE(r.endValue,'') OR l.isPaused<>r.isPaused OR l.isArchived<>r.isArchived)""",
             """SELECT COUNT(*) FROM budget_periods l JOIN portfolios lp ON lp.id=l.portfolioId
                 JOIN team_source.budget_periods r ON r.syncId=l.syncId JOIN team_source.portfolios rp ON rp.id=r.portfolioId
-                WHERE lp.accountId=$accountId AND (lp.syncId<>rp.syncId OR l.startEpochDay<>r.startEpochDay OR l.endEpochDay<>r.endEpochDay OR l.status<>r.status)""",
+                WHERE lp.accountId=$accountId AND (lp.syncId<>rp.syncId OR l.startEpochDay<>r.startEpochDay OR l.endEpochDay<>r.endEpochDay OR l.status<>r.status OR l.plannedTotal<>r.plannedTotal)""",
             """SELECT COUNT(*) FROM allocations l JOIN budget_periods lpr ON lpr.id=l.periodId JOIN portfolios lp ON lp.id=lpr.portfolioId JOIN categories lc ON lc.id=l.categoryId
                 JOIN team_source.allocations r ON r.syncId=l.syncId JOIN team_source.budget_periods rpr ON rpr.id=r.periodId JOIN team_source.portfolios rp ON rp.id=rpr.portfolioId JOIN team_source.categories rc ON rc.id=r.categoryId
                 WHERE lp.accountId=$accountId AND (l.fundingChannel<>r.fundingChannel OR l.plannedAmount<>r.plannedAmount OR lp.syncId<>rp.syncId OR lc.syncId<>rc.syncId)""",
@@ -280,13 +280,13 @@ internal object TeamGraphRefresher {
         if (overwriteExisting) updateColumns(db, "portfolios", listOf("name", "cadence", "intervalCount", "plannedIncome", "rolloverEnabled", "fundingPriority", "startEpochDay", "endMode", "endValue", "isPaused", "isArchived", "archivedAt", "revision", "updatedAt", "lastWriterId"), accountId)
 
         db.execSQL(
-            """INSERT INTO budget_periods(portfolioId,startEpochDay,endEpochDay,status,createdAt,syncId,revision,updatedAt,lastWriterId)
-               SELECT pm.targetId,s.startEpochDay,s.endEpochDay,s.status,s.createdAt,s.syncId,s.revision,s.updatedAt,s.lastWriterId
+            """INSERT INTO budget_periods(portfolioId,startEpochDay,endEpochDay,status,plannedTotal,createdAt,syncId,revision,updatedAt,lastWriterId)
+               SELECT pm.targetId,s.startEpochDay,s.endEpochDay,s.status,s.plannedTotal,s.createdAt,s.syncId,s.revision,s.updatedAt,s.lastWriterId
                FROM team_source.budget_periods s JOIN refresh_portfolio_map pm ON pm.sourceId=s.portfolioId
                WHERE NOT EXISTS(SELECT 1 FROM budget_periods t WHERE t.syncId=s.syncId)""",
         )
         map(db, "refresh_period_map", "budget_periods")
-        if (overwriteExisting) updateColumns(db, "budget_periods", listOf("startEpochDay", "endEpochDay", "status", "revision", "updatedAt", "lastWriterId"), null)
+        if (overwriteExisting) updateColumns(db, "budget_periods", listOf("startEpochDay", "endEpochDay", "status", "plannedTotal", "revision", "updatedAt", "lastWriterId"), null)
 
         db.execSQL(
             """INSERT INTO allocations(periodId,categoryId,fundingChannel,plannedAmount,syncId,revision,updatedAt,lastWriterId)
@@ -405,6 +405,7 @@ internal object TeamGraphRefresher {
     }
 
     private fun validateFinancialInvariants(db: SQLiteDatabase) {
+        requireZero(db, "SELECT COUNT(*) FROM budget_periods p WHERE p.plannedTotal < 0 OR p.plannedTotal < (SELECT COALESCE(SUM(a.plannedAmount),0) FROM allocations a WHERE a.periodId=p.id)", null, "Total budget hasil sync Team tidak valid")
         requireZero(db, "SELECT COUNT(*) FROM (SELECT eventId FROM ledger_lines GROUP BY eventId HAVING SUM(CASE WHEN side='DEBIT' THEN amount ELSE -amount END)<>0)", null, "General ledger hasil sync Team tidak seimbang")
         requireZero(db, "SELECT COUNT(*) FROM (SELECT eventId FROM budget_journal_lines GROUP BY eventId HAVING SUM(amount)<>0)", null, "Subledger budget hasil sync Team tidak seimbang")
     }

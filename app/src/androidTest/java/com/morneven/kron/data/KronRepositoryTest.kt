@@ -34,6 +34,79 @@ class KronRepositoryTest {
     fun tearDown() = database.close()
 
     @Test
+    fun budgetTotalPersistsAndRequiresExplicitIncrease() = runBlocking {
+        val account = dao.activeAccount()!!
+        val category = dao.allCategories().first { it.direction == TransactionDirection.EXPENSE }
+        repository.addIncome(account.id, FundingChannel.CASH, 200, null, "Dana", "")
+        val portfolioId = repository.createPortfolio(
+            "RAB Batas", "MONTHLY", 0, false,
+            listOf(AllocationDraft(category.id, FundingChannel.CASH, 40)),
+            plannedTotal = 100,
+        )
+        val period = dao.periodsForPortfolio(portfolioId).single()
+        assertEquals(100L, period.plannedTotal)
+        assertEquals(40L, dao.allocationsForPeriod(period.id).sumOf { it.plannedAmount })
+
+        repository.correctBudgetCategorySplit(period.id, category.id, 80, 100, "Koreksi dalam batas")
+        assertEquals(100L, dao.periodById(period.id)!!.plannedTotal)
+
+        assertTrue(runCatching {
+            repository.correctBudgetCategorySplit(period.id, category.id, 120, 100, "Koreksi tanpa persetujuan")
+        }.isFailure)
+        assertEquals(80L, dao.allocationsForPeriod(period.id).sumOf { it.plannedAmount })
+        assertEquals(100L, dao.periodById(period.id)!!.plannedTotal)
+
+        repository.correctBudgetCategorySplit(period.id, category.id, 120, 100, "Naikkan batas", approvedTotal = 120)
+        assertEquals(120L, dao.periodById(period.id)!!.plannedTotal)
+        assertEquals(120L, dao.allocationsForPeriod(period.id).sumOf { it.plannedAmount })
+        assertEquals(dao.cashTotal(FundingChannel.CASH), dao.budgetAvailableTotal(FundingChannel.CASH))
+    }
+
+    @Test
+    fun nextBudgetPeriodKeepsUnallocatedTotalLimit() = runBlocking {
+        val account = dao.activeAccount()!!
+        val category = dao.allCategories().first { it.direction == TransactionDirection.EXPENSE }
+        repository.addIncome(account.id, FundingChannel.CASH, 200, null, "Dana", "")
+        val portfolioId = repository.createPortfolio(
+            "RAB Berulang", "MONTHLY", 0, false,
+            listOf(AllocationDraft(category.id, FundingChannel.CASH, 40)),
+            startDate = LocalDate.now().minusMonths(1),
+            plannedTotal = 100,
+        )
+        repository.reconcilePortfolios()
+        val periods = dao.periodsForPortfolio(portfolioId)
+        assertTrue(periods.size >= 2)
+        assertEquals(100L, periods.maxBy { it.startEpochDay }.plannedTotal)
+    }
+
+    @Test
+    fun addingCategoryUsesRemainingLimitOrRequiresApproval() = runBlocking {
+        val account = dao.activeAccount()!!
+        val category = dao.allCategories().first { it.direction == TransactionDirection.EXPENSE }
+        repository.addIncome(account.id, FundingChannel.CASH, 200, null, "Dana", "")
+        val portfolioId = repository.createPortfolio(
+            "RAB Kategori", "MONTHLY", 0, false,
+            listOf(AllocationDraft(category.id, FundingChannel.CASH, 40)),
+            plannedTotal = 100,
+        )
+        val period = dao.periodsForPortfolio(portfolioId).single()
+
+        repository.addBudgetCategoryToPeriod(period.id, "Kategori Tambahan Uji A", 50, 100, "Dalam batas")
+        assertEquals(100L, dao.periodById(period.id)!!.plannedTotal)
+        assertEquals(90L, dao.allocationsForPeriod(period.id).sumOf { it.plannedAmount })
+
+        assertTrue(runCatching {
+            repository.addBudgetCategoryToPeriod(period.id, "Kategori Tambahan Uji B", 20, 100, "Tanpa persetujuan")
+        }.isFailure)
+        assertEquals(100L, dao.periodById(period.id)!!.plannedTotal)
+        assertEquals(90L, dao.allocationsForPeriod(period.id).sumOf { it.plannedAmount })
+
+        repository.addBudgetCategoryToPeriod(period.id, "Kategori Tambahan Uji B", 20, 100, "Naikkan batas", approvedTotal = 110)
+        assertEquals(110L, dao.periodById(period.id)!!.plannedTotal)
+        assertEquals(110L, dao.allocationsForPeriod(period.id).sumOf { it.plannedAmount })
+    }
+
+    @Test
     fun resolvingExample_movesTenFromBToA_andKeepsAuditTrail() = runBlocking {
         val account = dao.allAccounts().first()
         val expenseCategories = dao.allCategories().filter { it.direction == TransactionDirection.EXPENSE }

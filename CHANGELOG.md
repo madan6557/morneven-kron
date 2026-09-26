@@ -1,5 +1,12 @@
 # KRON Changelog
 
+## 1.7.14 - 2026-09-26 (kandidat)
+
+- Total budget kini ditentukan sebelum alokasi kategori dan disimpan per periode. Sisa batas yang belum dibagi tidak dibooking.
+- Koreksi, tambah, dan pulihkan kategori menampilkan total lama dan rencana baru. Kenaikan di atas batas memerlukan popup dengan kelebihan serta rincian Cash dan eBudget per kategori.
+- Migrasi Room 19 ke 20 mengisi total budget periode lama dari rencana kategori yang ada. Impor dan sinkronisasi Team mempertahankan total tersebut.
+- Snapshot Drive baru mensyaratkan versionCode 106 agar aplikasi lama tidak membuka schema 20.
+
 ## 1.7.13 - 2026-09-19
 
 - Perbaikan layar "Memeriksa integritas data" yang selalu putih: layar tersebut sudah meminta tema gelap, tetapi merupakan Column tanpa background sehingga yang terlihat adalah jendela Activity. Tema jendela mewarisi Theme.Material.Light sehingga backgroundnya putih dan menembus setiap layar yang tidak mengecat backgroundnya sendiri. Layar pembuka database dan layar pemulihan kini mengecat background, dan background jendela disamakan dengan warna splash agar tidak ada kedipan putih sebelum Compose menggambar.

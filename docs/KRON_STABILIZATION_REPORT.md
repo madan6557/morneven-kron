@@ -173,3 +173,19 @@
 - Status: done untuk unit test dan compile.
 - Bukti uji: `accountSwitchUsesSingleRemoteDatasetInsteadOfComparingWithOldLocalGraph` dan seluruh `testDebugUnitTest` lulus; compile Kotlin debug lulus.
 - Catatan risiko: fork atau beberapa dataset pada akun tujuan tetap diblokir demi mencegah pemilihan remote yang ambigu; uji dua akun Drive nyata perlu dijalankan setelah perangkat kembali authorized.
+
+## Total budget per periode, kandidat 1.7.14
+
+### Dampak perubahan
+
+- Schema Room 20 menyimpan `plannedTotal` pada setiap periode. Migrasi 19 ke 20 mengisinya dari jumlah alokasi lama tanpa mengubah jurnal atau saldo.
+- Snapshot Private dan backup membawa kolom baru melalui database penuh. Import, refresh, dan pruner Team mempertahankan serta memvalidasi total periode. Digest konflik memasukkan nilainya.
+- Snapshot Drive yang dibuat versi ini mensyaratkan `versionCode` 106 agar APK lama tidak membuka schema 20. Kapsul dan scheduler tidak diubah.
+
+### Hasil verifikasi dan perhatian
+
+- Done: `testDebugUnitTest`, `lintDebug`, `lintVitalRelease`, kompilasi androidTest, `assembleDebug`, dan `assembleRelease` lulus. Sebelum penambahan tes kategori terakhir, 43 dari 45 tes instrumentasi terpilih lulus; tes migrasi 19 ke 20, total budget repository, dan import/refresh Team termasuk yang lulus.
+- Done: APK kandidat 1.7.14 terverifikasi dengan signature v2 dan fingerprint sertifikat SHA-256 yang sama dengan arsip 1.7.0. SHA-256 APK kandidat: `E3DA197FBEA8E9611574FE64AA5E62CA12BF653A029455D2826247A326DFD774`.
+- Need attention: dua tes migrasi lama 5 ke 6 dan 13 ke 14 gagal pada fixture SQL historis yang tidak lengkap; migrasi produksi yang telah dikirim tidak diubah.
+- Need attention: uji ulang instrumentasi tertahan oleh perangkat dengan `INSTALL_FAILED_USER_RESTRICTED`. Tidak ada uninstall, clear data, atau penghapusan snapshot yang dilakukan secara manual.
+- Need attention: backup round trip, uji Private/Team pada Drive nyata, install-over dari APK produksi sebelumnya, dan verifikasi kompatibilitas APK 1.0.21/1.3.20 belum selesai. Kandidat tidak boleh ditandai rilis stabil sebelum gerbang tersebut lulus.

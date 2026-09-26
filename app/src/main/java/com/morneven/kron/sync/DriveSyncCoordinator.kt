@@ -222,8 +222,8 @@ class DriveSyncCoordinator(
 ) {
     companion object {
         private const val SYNC_TIMEOUT_MILLIS = 180_000L
-        // 1.6.6 keeps the 1.6.4 payload, key, and Room schema contracts.
-        private const val MINIMUM_COMPATIBLE_APP_VERSION_CODE = 89
+        // Schema 20 adds the persisted period budget and cannot be opened by earlier APKs.
+        private const val MINIMUM_COMPATIBLE_APP_VERSION_CODE = 106
     }
     suspend fun syncNow(): SyncRunResult = syncMutex.withLock { syncNowLocked() }
 

@@ -919,6 +919,7 @@ class KronRepository private constructor(
         startDate: LocalDate = LocalDate.now(),
         endDate: LocalDate? = null,
         intervalCount: Int = 1,
+        plannedTotal: Long? = null,
     ) = database.withTransaction {
         require(name.isNotBlank()) { "Nama portfolio wajib diisi" }
         require(drafts.isNotEmpty() && drafts.all { it.plannedAmount > 0 }) { "Tambahkan minimal satu alokasi" }
@@ -972,6 +973,8 @@ class KronRepository private constructor(
             ))
         }
         val total = resolvedDrafts.sumOf { it.plannedAmount }
+        val periodBudget = plannedTotal ?: total
+        require(periodBudget >= total && periodBudget > 0) { "Total budget harus mencukupi seluruh kategori" }
         val requestedByChannel = resolvedDrafts.groupBy { it.fundingChannel }.mapValues { (_, values) -> values.sumOf { it.plannedAmount } }
         val withinPeriod = !today.isBefore(start) && !today.isAfter(end)
         val canFund = withinPeriod && requestedByChannel.all { (channel, value) -> dao.vaultBalance(channel, activeId) >= value }
@@ -979,6 +982,7 @@ class KronRepository private constructor(
             portfolioId = portfolioId,
             startEpochDay = start.toEpochDay(),
             endEpochDay = end.toEpochDay(),
+            plannedTotal = periodBudget,
             status = when {
                 today.isBefore(start) -> PeriodStatus.DRAFT
                 today.isAfter(end) -> PeriodStatus.CLOSED
@@ -1225,7 +1229,7 @@ class KronRepository private constructor(
         eventId
     }
 
-    suspend fun correctAllocation(allocationId: Long, newPlannedAmount: Long, note: String) = database.withTransaction {
+    suspend fun correctAllocation(allocationId: Long, newPlannedAmount: Long, note: String, approvedTotal: Long? = null) = database.withTransaction {
         require(newPlannedAmount >= 0) { "Nominal budget tidak boleh negatif" }
         val allocation = requireNotNull(dao.allocationById(allocationId))
         val activeId = activeAccountId()
@@ -1233,6 +1237,7 @@ class KronRepository private constructor(
         val period = requireNotNull(dao.periodById(allocation.periodId))
         require(period.status != PeriodStatus.CLOSED) { "Periode sudah tertutup" }
         val oldPlanned = allocation.plannedAmount
+        approvePeriodBudgetIncrease(period, dao.allocationsForPeriod(period.id).sumOf { it.plannedAmount } - oldPlanned + newPlannedAmount, approvedTotal)
         val currentAvailable = dao.allocationAvailable(allocationId)
         val spent = dao.allocationSpent(allocationId)
         require(newPlannedAmount >= spent) { "Budget baru lebih kecil dari pengeluaran yang sudah tercatat" }
@@ -1272,6 +1277,7 @@ class KronRepository private constructor(
         newTotalAmount: Long,
         newCashPercentage: Int,
         note: String,
+        approvedTotal: Long? = null,
     ): String = database.withTransaction {
         require(newTotalAmount >= 0) { "Nominal budget tidak boleh negatif" }
         require(newCashPercentage in 0..100) { "Persentase cash tidak valid" }
@@ -1291,6 +1297,7 @@ class KronRepository private constructor(
         val oldCash = cashAlloc?.plannedAmount ?: 0L
         val oldEBudget = eBudgetAlloc?.plannedAmount ?: 0L
         val oldTotal = oldCash + oldEBudget
+        approvePeriodBudgetIncrease(period, dao.allocationsForPeriod(periodId).sumOf { it.plannedAmount } - oldTotal + newTotalAmount, approvedTotal)
 
         val newCash = newTotalAmount * newCashPercentage / 100
         val newEBudget = newTotalAmount - newCash
@@ -1401,6 +1408,7 @@ class KronRepository private constructor(
         plannedAmount: Long,
         cashPercentage: Int,
         note: String,
+        approvedTotal: Long? = null,
     ) = database.withTransaction {
         val trimmedName = categoryName.trim()
         require(trimmedName.isNotBlank()) { "Nama kategori wajib diisi" }
@@ -1413,6 +1421,7 @@ class KronRepository private constructor(
         require(portfolio.accountId == activeId) { "Portfolio bukan milik akun aktif" }
         require(!portfolio.isArchived) { "Portfolio sudah diarsip" }
         require(period.status != PeriodStatus.CLOSED) { "Periode sudah tertutup" }
+        approvePeriodBudgetIncrease(period, dao.allocationsForPeriod(periodId).sumOf { it.plannedAmount } + plannedAmount, approvedTotal)
         val cashAmount = plannedAmount * cashPercentage / 100
         val eBudgetAmount = plannedAmount - cashAmount
         require(cashAmount >= 0 && eBudgetAmount >= 0) { "Komposisi kanal tidak valid" }
@@ -1600,6 +1609,7 @@ class KronRepository private constructor(
         plannedAmount: Long,
         cashPercentage: Int,
         note: String,
+        approvedTotal: Long? = null,
     ) = database.withTransaction {
         val trimmedNote = note.trim()
         require(trimmedNote.isNotBlank()) { "Alasan wajib diisi" }
@@ -1613,6 +1623,7 @@ class KronRepository private constructor(
         require(period.status != PeriodStatus.CLOSED) { "Periode sudah tertutup" }
         val category = requireNotNull(dao.categoryById(categoryId)) { "Kategori tidak ditemukan" }
         require(category.isArchived) { "Kategori tidak berada di arsip" }
+        approvePeriodBudgetIncrease(period, dao.allocationsForPeriod(periodId).sumOf { it.plannedAmount } + plannedAmount, approvedTotal)
 
         val cashAmount = plannedAmount * cashPercentage / 100
         val eBudgetAmount = plannedAmount - cashAmount
@@ -2241,6 +2252,7 @@ class KronRepository private constructor(
                 portfolioId = portfolio.id,
                 startEpochDay = start.toEpochDay(),
                 endEpochDay = end.toEpochDay(),
+                plannedTotal = maxOf(previous?.plannedTotal ?: 0L, dao.templatesForPortfolio(portfolio.id).sumOf { it.plannedAmount }),
                 status = if (unresolved) PeriodStatus.DRAFT else PeriodStatus.UNDERFUNDED,
             ))
             val nextAllocations = mutableMapOf<Pair<Long, String>, Long>()
@@ -2316,6 +2328,14 @@ class KronRepository private constructor(
         return needs.all { (channel, amount) -> dao.vaultBalance(channel, portfolio.accountId) >= amount }
     }
 
+    private suspend fun approvePeriodBudgetIncrease(period: BudgetPeriodEntity, plannedByCategories: Long, approvedTotal: Long?) {
+        require(plannedByCategories >= 0) { "Total kategori budget tidak valid" }
+        if (plannedByCategories > period.plannedTotal) {
+            require(approvedTotal == plannedByCategories) { "Konfirmasi kenaikan total budget diperlukan" }
+            dao.updatePeriod(period.copy(plannedTotal = plannedByCategories).bumpRevision())
+        }
+    }
+
     private fun advanceRule(rule: RecurringRuleEntity): RecurringRuleEntity {
         val current = LocalDate.ofEpochDay(rule.nextEpochDay)
         val nextDate = ScheduleCalculator.next(current, rule.cadence, rule.anchorMonth, rule.anchorDay, rule.intervalCount)
@@ -2388,6 +2408,7 @@ class KronRepository private constructor(
      */
     private suspend fun assertInvariant() {
         ledgerPostingEngine.finalizeUnsealedEvents()
+        dao.firstBudgetTotalViolation()?.let { throw LedgerInvariantException("Total budget periode $it lebih kecil dari rencana kategori") }
         if (dao.unbalancedLedgerEvents().isNotEmpty()) {
             throw LedgerInvariantException("General ledger memiliki event tidak seimbang")
         }

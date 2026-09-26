@@ -1127,8 +1127,8 @@ class MainViewModel @Inject constructor(
         repository.transferBookedChannel(sourceAllocationId, accountId, amount, note)
     }
 
-    fun createPortfolio(name: String, cadence: String, plannedIncome: Long, rollover: Boolean, drafts: List<AllocationDraft>, startDate: LocalDate = LocalDate.now(), endDate: LocalDate? = null, intervalCount: Int = 1) = runAction("Portfolio dibuat") {
-        repository.createPortfolio(name, cadence, plannedIncome, rollover, drafts, startDate, endDate, intervalCount)
+    fun createPortfolio(name: String, cadence: String, plannedIncome: Long, rollover: Boolean, drafts: List<AllocationDraft>, plannedTotal: Long, startDate: LocalDate = LocalDate.now(), endDate: LocalDate? = null, intervalCount: Int = 1) = runAction("Portfolio dibuat") {
+        repository.createPortfolio(name, cadence, plannedIncome, rollover, drafts, startDate, endDate, intervalCount, plannedTotal)
     }
 
     fun fundPeriod(periodId: Long) = runAction("Portfolio aktif") { repository.fundUnderfundedPeriod(periodId) }
@@ -1158,8 +1158,8 @@ class MainViewModel @Inject constructor(
         repository.resolveFromRollover(targetId, amount, note)
     }
 
-    fun correctAllocation(allocationId: Long, newPlannedAmount: Long, note: String) = runAction("Koreksi budget tercatat") {
-        repository.correctAllocation(allocationId, newPlannedAmount, note)
+    fun correctAllocation(allocationId: Long, newPlannedAmount: Long, note: String, approvedTotal: Long? = null) = runAction("Koreksi budget tercatat") {
+        repository.correctAllocation(allocationId, newPlannedAmount, note, approvedTotal)
     }
 
     fun correctBudgetCategorySplit(
@@ -1168,12 +1168,13 @@ class MainViewModel @Inject constructor(
         newTotal: Long,
         cashPercentage: Int,
         note: String,
+        approvedTotal: Long? = null,
     ) = runAction("Koreksi split budget tercatat") {
-        repository.correctBudgetCategorySplit(periodId, categoryId, newTotal, cashPercentage, note)
+        repository.correctBudgetCategorySplit(periodId, categoryId, newTotal, cashPercentage, note, approvedTotal)
     }
 
-    fun addBudgetCategory(periodId: Long, categoryName: String, plannedAmount: Long, cashPercentage: Int, note: String) = runAction("Kategori budget ditambahkan") {
-        repository.addBudgetCategoryToPeriod(periodId, categoryName, plannedAmount, cashPercentage, note)
+    fun addBudgetCategory(periodId: Long, categoryName: String, plannedAmount: Long, cashPercentage: Int, note: String, approvedTotal: Long? = null) = runAction("Kategori budget ditambahkan") {
+        repository.addBudgetCategoryToPeriod(periodId, categoryName, plannedAmount, cashPercentage, note, approvedTotal)
     }
 
     fun renameBudgetCategory(categoryId: Long, newName: String) = runAction("Nama kategori diperbarui") {
@@ -1188,8 +1189,8 @@ class MainViewModel @Inject constructor(
         repository.removeBudgetCategoryFromPeriod(periodId, categoryId, note)
     }
 
-    fun restoreBudgetCategory(periodId: Long, categoryId: Long, plannedAmount: Long, cashPercentage: Int, note: String) = runAction("Kategori budget dipulihkan") {
-        repository.restoreBudgetCategory(periodId, categoryId, plannedAmount, cashPercentage, note)
+    fun restoreBudgetCategory(periodId: Long, categoryId: Long, plannedAmount: Long, cashPercentage: Int, note: String, approvedTotal: Long? = null) = runAction("Kategori budget dipulihkan") {
+        repository.restoreBudgetCategory(periodId, categoryId, plannedAmount, cashPercentage, note, approvedTotal)
     }
 
     fun allocateUnallocated(targetId: Long, amount: Long, note: String) = runAction("Pengeluaran berhasil dialokasikan") {

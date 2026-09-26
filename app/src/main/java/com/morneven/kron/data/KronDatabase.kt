@@ -41,7 +41,7 @@ import com.morneven.kron.security.SqlCipherLibrary
         DebtEntity::class,
         DebtEntryEntity::class,
     ],
-    version = 19,
+    version = 20,
     exportSchema = true,
 )
 abstract class KronDatabase : RoomDatabase() {
@@ -1166,6 +1166,23 @@ abstract class KronDatabase : RoomDatabase() {
             }
         }
 
+        /** Preserve the total previously implied by allocations before storing an explicit period budget. */
+        val MIGRATION_19_20: Migration = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE budget_periods ADD COLUMN plannedTotal INTEGER NOT NULL DEFAULT 0")
+                db.execSQL(
+                    "UPDATE budget_periods SET plannedTotal = " +
+                        "(SELECT COALESCE(SUM(a.plannedAmount), 0) FROM allocations a WHERE a.periodId = budget_periods.id)",
+                )
+                check(db.query("PRAGMA foreign_key_check").use { !it.moveToFirst() }) {
+                    "Relasi database tidak valid setelah migrasi total budget"
+                }
+                check(db.query("PRAGMA integrity_check").use { it.moveToFirst() && it.getString(0).equals("ok", true) }) {
+                    "Database tidak utuh setelah migrasi total budget"
+                }
+            }
+        }
+
         private val ALL_MIGRATIONS = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
@@ -1185,6 +1202,7 @@ abstract class KronDatabase : RoomDatabase() {
             MIGRATION_16_17,
             MIGRATION_17_18,
             MIGRATION_18_19,
+            MIGRATION_19_20,
         )
 
         private fun addTeamSyncColumns(
@@ -1564,6 +1582,9 @@ abstract class KronDatabase : RoomDatabase() {
             require(integrityOk) { "Integritas database KRON tidak valid" }
             val hasForeignKeyViolation = db.query("PRAGMA foreign_key_check").use { it.moveToFirst() }
             require(!hasForeignKeyViolation) { "Relasi database KRON tidak valid" }
+            require(
+                scalar(db, "SELECT COUNT(*) FROM budget_periods p WHERE p.plannedTotal < 0 OR p.plannedTotal < (SELECT COALESCE(SUM(a.plannedAmount),0) FROM allocations a WHERE a.periodId=p.id)") == 0L,
+            ) { "Total budget periode tidak mencukupi rencana kategori" }
             require(scalar(db, "SELECT COUNT(*) FROM accounts WHERE sharingMode NOT IN ('PRIVATE','TEAM')") == 0L) {
                 "Mode berbagi akun tidak valid"
             }
@@ -1695,6 +1716,6 @@ abstract class KronDatabase : RoomDatabase() {
         }
 
         const val DATABASE_NAME = "kron-v4.db"
-        const val SCHEMA_VERSION = 19
+        const val SCHEMA_VERSION = 20
     }
 }
