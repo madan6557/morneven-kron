@@ -1193,6 +1193,10 @@ class MainViewModel @Inject constructor(
         repository.restoreBudgetCategory(periodId, categoryId, plannedAmount, cashPercentage, note, approvedTotal)
     }
 
+    fun updatePeriodPlannedTotal(periodId: Long, newPlannedTotal: Long) = runAction("Total budget diperbarui") {
+        repository.updatePeriodPlannedTotal(periodId, newPlannedTotal)
+    }
+
     fun allocateUnallocated(targetId: Long, amount: Long, note: String) = runAction("Pengeluaran berhasil dialokasikan") {
         repository.allocateUnallocated(targetId, amount, note)
     }

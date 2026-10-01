@@ -1,5 +1,13 @@
 # KRON Changelog
 
+## 1.7.16 - 2026-10-01
+
+- Perbaikan navigasi kursor pada kolom input uang (MoneyField): kursor kini dapat dipindahkan bebas dengan menyentuh posisi teks yang diinginkan, penyisipan angka di tengah nominal mempertahankan angka nol tanpa terpotong, dan penghapusan mundur melewati pemisah ribuan berjalan presisi tanpa menggeser posisi kursor.
+- Perbaikan peralihan ke keyboard sistem: menekan tombol "Sistem" pada keypad custom KRON langsung memunculkan input method sistem Android tanpa tertahan atau macet.
+- Penyesuaian alokasi total budget periode: batas alokasi total dapat diperbarui kapan saja melalui dialog Detail Budget, dilengkapi tombol pintas untuk langsung menyamakan total alokasi dengan jumlah akumulasi kategori sehingga sisa budget yang belum teralokasi langsung bersih.
+- Informasi alokasi pada layar Budget: kartu portfolio periode aktif kini menampilkan ringkasan sisa alokasi total yang belum dibagi ke kategori bila terdapat selisih lebih.
+- Bump versionCode 107 -> 108 dan versionName 1.7.15 -> 1.7.16.
+
 ## 1.7.15 - 2026-09-26 (kandidat)
 
 - Sinkronisasi kurs otomatis widget dan percobaan manual yang gagal kini menunggu koneksi internet melalui satu pekerjaan dengan retry terbatas. Kegagalan jaringan tidak mengubah kurs KRM atau memicu refresh berulang.

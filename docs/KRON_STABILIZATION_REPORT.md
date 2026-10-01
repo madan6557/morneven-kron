@@ -204,3 +204,17 @@
 - Done: `testDebugUnitTest`, `compileDebugKotlin`, dan `lintDebug` lulus setelah perubahan utama. Pengujian ulang spesifik `KronCurrencyTest` lulus 6/6. `assembleDebug`, `assembleRelease`, dan `lintVitalRelease` lulus untuk kandidat 1.7.15.
 - Done: APK rilis kandidat memiliki `versionCode` 107, `versionName` 1.7.15, dan signature v2 dengan fingerprint SHA-256 sertifikat tetap `65c875d6810fee77ad626393685ae887b76b97d96df82dd360c5c271701caae7`. SHA-256 APK: `7C9C93FE873FE34F5429098320C0B647674AFEEFE11AEFFE0B38A8C6EB47B477`.
 - Need attention: verifikasi runtime putus-sambung jaringan pada widget nyata dan install-over APK produksi belum dilakukan. Kandidat bukan rilis stabil.
+
+## Navigasi kursor, peralihan IME sistem, dan penyesuaian alokasi total budget, 1.7.16
+
+### Dampak perubahan
+
+- Navigasi kursor pada MoneyField diperbaiki dengan menghapus overlay sentuhan yang memblokir klik pada OutlinedTextField. Transisi posisi kursor kini dipertahankan secara utuh, dan penyisipan/penghapusan angka di tengah nominal serta melewati pemisah ribuan berjalan presisi tanpa memangkas angka nol.
+- Peralihan ke keyboard sistem melalui snapshotFlow aktif yang memanggil nextHandler.startInputMethod seketika saat tombol Sistem ditekan.
+- Penambahan fungsi updatePeriodPlannedTotal di KronRepository dan UI dialog BudgetDetailDialog untuk memperbarui batas alokasi total budget periode, lengkap dengan validasi batas bawah terhadap alokasi kategori serta tombol penyesuaian instan untuk membersihkan sisa alokasi yang belum terbagi.
+- Kartu periode aktif pada layar Budget kini menampilkan sisa alokasi total yang belum dibagi ke kategori bila ada selisih.
+
+### Hasil verifikasi
+
+- Done: testDebugUnitTest (termasuk unit test kursor keypad MoneyFormatterTest), assembleRelease, lintVitalRelease, dan verifikasi signature v2 lulus.
+- Done: APK rilis memiliki versionCode 108, versionName 1.7.16, dan signature v2 dengan fingerprint SHA-256 sertifikat 65c875d6810fee77ad626393685ae887b76b97d96df82dd360c5c271701caae7. SHA-256 APK: C191FF747A94EA88BF01D025F4019EEBB95CE578B8DBF4B705B6964961B0EBFC.

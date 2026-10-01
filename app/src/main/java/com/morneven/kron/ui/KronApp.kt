@@ -2378,6 +2378,7 @@ private fun MainScaffold(
             periodId = periodId,
             readOnly = readOnly,
             onDismiss = { detailPeriod = null },
+            onUpdatePeriodTotal = if (readOnly) null else { pId, newTotal -> authenticateCriticalAction("Ubah total budget") { viewModel.updatePeriodPlannedTotal(pId, newTotal) } },
             onCorrect = { id, amount, note, approvedTotal -> authenticateCriticalAction("Koreksi budget") { viewModel.correctAllocation(id, amount, note, approvedTotal) } },
             onCorrectSplit = if (readOnly) null else { catId, total, pct, note, approvedTotal -> authenticateCriticalAction("Koreksi split budget") { viewModel.correctBudgetCategorySplit(periodId, catId, total, pct, note, approvedTotal) } },
             onAddCategory = if (readOnly) null else { name, amount, pct, note, approvedTotal -> authenticateCriticalAction("Tambah kategori") { viewModel.addBudgetCategory(periodId, name, amount, pct, note, approvedTotal) } },

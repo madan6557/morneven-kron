@@ -152,8 +152,11 @@ fun BudgetScreen(
             items(latestActivePeriods, key = { it.key }) { (_, rows) ->
                 val first = rows.first()
                 val portfolio = state.portfolios.first { it.id == first.portfolioId }
+                val period = state.periods.firstOrNull { it.id == first.periodId }
+                val periodTotal = period?.plannedTotal ?: rows.sumOf { it.plannedAmount }
                 ActiveBudgetCard(
                     rows = rows,
+                    periodTotal = periodTotal,
                     paused = portfolio.isPaused,
                     rolloverEnabled = portfolio.rolloverEnabled,
                     hasPortfolioDeficit = state.allocations.any { it.portfolioId == first.portfolioId && it.availableAmount < 0 },
@@ -219,6 +222,7 @@ fun BudgetScreen(
 @Composable
 private fun ActiveBudgetCard(
     rows: List<AllocationBalanceRow>,
+    periodTotal: Long,
     paused: Boolean,
     rolloverEnabled: Boolean,
     hasPortfolioDeficit: Boolean,
@@ -247,6 +251,28 @@ private fun ActiveBudgetCard(
             Text(displayMoney(available, visible), color = signedColor(available), style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, maxLines = 1, softWrap = false)
         }
         BudgetProgress(booked, available)
+        val plannedCategories = rows.sumOf { it.plannedAmount }
+        val unallocated = (periodTotal - plannedCategories).coerceAtLeast(0L)
+        if (unallocated > 0L) {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Sisa belum dibagi",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    displayMoney(unallocated, visible),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                )
+            }
+        }
         Spacer(Modifier.height(14.dp))
         val visibleRows = rows.filter { it.isActive && !(it.periodStatus != PeriodStatus.DRAFT && it.bookedAmount == 0L && it.availableAmount == 0L && it.spentAmount == 0L) }
         visibleRows.forEach { row ->

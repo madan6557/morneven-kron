@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,6 +27,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material.icons.outlined.CalendarMonth
@@ -690,6 +693,7 @@ fun BudgetDetailDialog(
     periodId: Long,
     readOnly: Boolean = false,
     onDismiss: () -> Unit,
+    onUpdatePeriodTotal: ((Long, Long) -> Unit)? = null,
     onCorrect: (Long, Long, String, Long?) -> Unit,
     onCorrectSplit: ((Long, Long, Int, String, Long?) -> Unit)? = null,
     onAddCategory: ((String, Long, Int, String, Long?) -> Unit)? = null,
@@ -710,6 +714,8 @@ fun BudgetDetailDialog(
     }
     val archivedExpenseCategories = state.archivedCategories.filter { it.direction == TransactionDirection.EXPENSE }
     var showArchivedSection by rememberSaveable { mutableStateOf(false) }
+    var showEditPeriodTotal by rememberSaveable { mutableStateOf(false) }
+    var editPeriodTotal by rememberSaveable { mutableStateOf("") }
     var restoreCategoryId by rememberSaveable { mutableStateOf<Long?>(null) }
     var restoreAmount by rememberSaveable { mutableStateOf("") }
     var restoreCashPct by rememberSaveable { mutableIntStateOf(50) }
@@ -775,8 +781,82 @@ fun BudgetDetailDialog(
                     else if (abs(value) >= 1_000_000) compactIdr(value)
                     else formatIdr(value)
                 }
-                Text("Total budget periode saat ini: ${budgetMoney(periodTotal)}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.tertiary)
-                Text("Rencana kategori: ${budgetMoney(periodUsed)}. Sisa batas belum dibagi: ${budgetMoney((periodTotal - periodUsed).coerceAtLeast(0))}.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val unallocated = (periodTotal - periodUsed).coerceAtLeast(0)
+                HudCard(accent = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.55f)) {
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Total budget periode saat ini", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(budgetMoney(periodTotal), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.tertiary)
+                            }
+                            if (!readOnly && onUpdatePeriodTotal != null) {
+                                OutlinedButton(
+                                    onClick = {
+                                        showEditPeriodTotal = !showEditPeriodTotal
+                                        if (showEditPeriodTotal) {
+                                            editPeriodTotal = if (periodTotal > 0L) periodTotal.toString() else ""
+                                        }
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                ) {
+                                    Icon(Icons.Outlined.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(if (showEditPeriodTotal) "Tutup" else "Ubah total")
+                                }
+                            }
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Rencana kategori", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(budgetMoney(periodUsed), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Sisa belum dialokasikan", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(budgetMoney(unallocated), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = if (unallocated > 0) KronGold else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+
+                        if (showEditPeriodTotal && !readOnly && onUpdatePeriodTotal != null) {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                            Text("Atur alokasi total budget", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.tertiary)
+                            Text(
+                                "Tentukan batas total budget untuk periode ini. Sisa batas yang belum dibagi tetap berada di Main Vault dan tidak dibooking.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            MoneyField(editPeriodTotal, { editPeriodTotal = it }, "Total alokasi budget")
+                            val parsedNewTotal = money(editPeriodTotal)
+                            val isBelowCategories = parsedNewTotal < periodUsed && editPeriodTotal.isNotBlank()
+                            if (isBelowCategories) {
+                                Text(
+                                    "Total alokasi tidak boleh lebih kecil dari rencana kategori saat ini (${budgetMoney(periodUsed)}). Kurangi alokasi kategori terlebih dahulu jika ingin menurunkan total di bawah nilai tersebut.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                            if (unallocated > 0) {
+                                OutlinedButton(
+                                    onClick = { editPeriodTotal = periodUsed.toString() },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text("Sesuaikan ke total kategori (${budgetMoney(periodUsed)})", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                            Button(
+                                onClick = {
+                                    onUpdatePeriodTotal(periodId, parsedNewTotal)
+                                    showEditPeriodTotal = false
+                                },
+                                enabled = parsedNewTotal >= periodUsed && parsedNewTotal > 0 && parsedNewTotal != periodTotal,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("Simpan total budget")
+                            }
+                        }
+                    }
+                }
                 if (!readOnly && onAddCategory != null) {
                     OutlinedButton(
                         onClick = { showAddCategory = !showAddCategory; if (!showAddCategory) { addName = ""; addAmount = ""; addCashPct = 50; addNote = "Tambah kategori" } },

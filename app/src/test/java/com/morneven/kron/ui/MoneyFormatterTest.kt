@@ -71,4 +71,34 @@ class MoneyFormatterTest {
         assertEquals(100000L, parseMoneyInput("5 * 20000"))
         assertEquals(50000L, parseMoneyInput("100000 / 2"))
     }
+
+    @Test
+    fun keypadInsertsDigitsAtCursorPosition() {
+        // "100.000", cursor at index 1 (between 1 and 0) -> insert "5" -> "1.500.000", cursor after 5 (index 3)
+        val initial = androidx.compose.ui.text.input.TextFieldValue("100.000", androidx.compose.ui.text.TextRange(1))
+        val (resField, resVal) = com.morneven.kron.ui.components.applyKeypadAction(initial, "5", null)
+        assertEquals("1.500.000", resField.text)
+        assertEquals(3, resField.selection.start)
+        assertEquals("1500000", resVal)
+    }
+
+    @Test
+    fun keypadBackspaceAtMiddleDeletesPrecedingDigit() {
+        // "150.000", cursor at index 2 (after 5) -> backspace -> "10.000", cursor at index 1
+        val initial = androidx.compose.ui.text.input.TextFieldValue("150.000", androidx.compose.ui.text.TextRange(2))
+        val (resField, resVal) = com.morneven.kron.ui.components.applyKeypadAction(initial, "⌫", null)
+        assertEquals("10.000", resField.text)
+        assertEquals(1, resField.selection.start)
+        assertEquals("10000", resVal)
+    }
+
+    @Test
+    fun keypadBackspaceAfterDotDeletesDigitBeforeDot() {
+        // "150.000", cursor at index 4 (right after ".") -> backspace -> deletes the "0" before dot -> "15.000"
+        val initial = androidx.compose.ui.text.input.TextFieldValue("150.000", androidx.compose.ui.text.TextRange(4))
+        val (resField, resVal) = com.morneven.kron.ui.components.applyKeypadAction(initial, "⌫", null)
+        assertEquals("15.000", resField.text)
+        assertEquals(2, resField.selection.start)
+        assertEquals("15000", resVal)
+    }
 }

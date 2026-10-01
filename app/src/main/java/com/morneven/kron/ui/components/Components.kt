@@ -41,6 +41,11 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.collectLatest
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.material3.Card
@@ -135,7 +140,7 @@ fun kronTextFieldColors(isCustomFocused: Boolean = false) = androidx.compose.mat
     unfocusedPrefixColor = if (isCustomFocused) KronGold else MaterialTheme.colorScheme.onSurfaceVariant,
 )
 
-private fun applyKeypadAction(
+internal fun applyKeypadAction(
     currentField: TextFieldValue,
     key: String,
     evaluated: Long?,
@@ -157,7 +162,7 @@ private fun applyKeypadAction(
                 } else {
                     val raw = sanitizeMoneyDigits(newText)
                     val formatted = formatMoneyInput(raw)
-                    val targetDigits = sanitizeMoneyDigits(text.substring(0, start)).length
+                    val targetDigits = text.substring(0, start).count(Char::isDigit)
                     val newCursor = offsetForDigitCount(formatted, targetDigits.coerceAtMost(formatted.count(Char::isDigit)))
                     TextFieldValue(formatted, TextRange(newCursor)) to raw
                 }
@@ -166,6 +171,7 @@ private fun applyKeypadAction(
                 val after = text.substring(start)
                 val charsToDelete = when {
                     before.endsWith(" + ") || before.endsWith(" - ") || before.endsWith(" × ") || before.endsWith(" ÷ ") -> 3
+                    before.endsWith(".") && before.length > 1 -> 2
                     else -> 1
                 }
                 val newBefore = before.dropLast(charsToDelete)
@@ -177,7 +183,7 @@ private fun applyKeypadAction(
                 } else {
                     val raw = sanitizeMoneyDigits(newText)
                     val formatted = formatMoneyInput(raw)
-                    val targetDigits = sanitizeMoneyDigits(newBefore).length
+                    val targetDigits = newBefore.count(Char::isDigit)
                     val newCursor = offsetForDigitCount(formatted, targetDigits.coerceAtMost(formatted.count(Char::isDigit)))
                     TextFieldValue(formatted, TextRange(newCursor)) to raw
                 }
@@ -225,8 +231,8 @@ private fun applyKeypadAction(
                 val newCursor = start + key.length
                 TextFieldValue(newText, TextRange(newCursor)) to newText
             } else {
-                val rawBefore = sanitizeMoneyDigits(text.substring(0, start))
-                val rawAfter = sanitizeMoneyDigits(text.substring(end))
+                val rawBefore = text.substring(0, start).filter(Char::isDigit)
+                val rawAfter = text.substring(end).filter(Char::isDigit)
                 val newRaw = "$rawBefore$key$rawAfter"
                 if (newRaw.isEmpty()) {
                     TextFieldValue("", TextRange.Zero) to ""
@@ -234,7 +240,7 @@ private fun applyKeypadAction(
                     val rawSanitized = sanitizeMoneyDigits(newRaw)
                     if (rawSanitized.toLongOrNull() != null) {
                         val formatted = formatMoneyInput(rawSanitized)
-                        val targetDigits = rawBefore.length + key.length
+                        val targetDigits = rawBefore.length + key.count(Char::isDigit)
                         val newCursor = offsetForDigitCount(formatted, targetDigits.coerceAtMost(formatted.count(Char::isDigit)))
                         TextFieldValue(formatted, TextRange(newCursor)) to rawSanitized
                     } else {
@@ -506,7 +512,7 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
         if (requestSystemKeyboard) {
             requestSystemKeyboard = false
             focusRequester.requestFocus()
-            withFrameNanos { }
+            delay(80)
             keyboardController?.show()
         }
     }
@@ -533,17 +539,24 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
             @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
             androidx.compose.ui.platform.InterceptPlatformTextInput(
                 interceptor = { request, nextHandler ->
-                    if (!useSystemKeyboard) {
-                        kotlinx.coroutines.awaitCancellation()
-                    } else {
-                        nextHandler.startInputMethod(request)
+                    snapshotFlow { useSystemKeyboard }.collectLatest { systemActive ->
+                        if (systemActive) {
+                            nextHandler.startInputMethod(request)
+                        } else {
+                            kotlinx.coroutines.awaitCancellation()
+                        }
                     }
+                    kotlinx.coroutines.awaitCancellation()
                 }
             ) {
                 androidx.compose.material3.OutlinedTextField(
                     value = field,
                     onValueChange = { candidate ->
                         touched = true
+                        if (candidate.text == field.text) {
+                            field = candidate
+                            return@OutlinedTextField
+                        }
                         if (MoneyExpressionEvaluator.isExpression(candidate.text)) {
                             val sanitized = MoneyExpressionEvaluator.sanitizeExpression(candidate.text)
                             field = TextFieldValue(sanitized, candidate.selection)
@@ -605,14 +618,25 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
                         .focusRequester(focusRequester)
                         .onFocusChanged { focusState ->
                             hasFocus = focusState.isFocused
-                            if (focusState.isFocused && !useSystemKeyboard) {
+                            if (focusState.isFocused && !useSystemKeyboard && !isCustomActive) {
                                 keyboardController?.hide()
+                                activateCalculator()
                             }
                             // Moving to any other input, including a plain text field with no
                             // keypad of its own, has to hand the keypad back. Nothing did this
                             // before, so the calculator stayed docked over the system keyboard.
                             if (!focusState.isFocused && keypadHost?.activeFieldId == fieldId) {
                                 keypadHost.dismiss()
+                            }
+                        }
+                        .pointerInput(isCustomActive, useSystemKeyboard) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                    if (event.type == PointerEventType.Press && !useSystemKeyboard && !isCustomActive) {
+                                        activateCalculator()
+                                    }
+                                }
                             }
                         },
                     singleLine = true,
@@ -640,20 +664,6 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
                             Text("Nominal harus lebih dari nol")
                         }
                     },
-                )
-            }
-
-            if (!useSystemKeyboard) {
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .padding(end = if (isExpr && evaluated != null) 96.dp else 52.dp)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                        ) {
-                            activateCalculator()
-                        }
                 )
             }
         }
@@ -723,6 +733,7 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
             fallbackHost.onSwitchToSystemKeyboard = {
                 useSystemKeyboard = true
                 localShowCalculator = false
+                requestSystemKeyboard = true
             }
 
             LaunchedEffect(fallbackHost.activeFieldId) {

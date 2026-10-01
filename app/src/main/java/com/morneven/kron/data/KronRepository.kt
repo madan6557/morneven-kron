@@ -1690,6 +1690,27 @@ class KronRepository private constructor(
         eventId
     }
 
+    suspend fun updatePeriodPlannedTotal(periodId: Long, newPlannedTotal: Long): String = database.withTransaction {
+        require(newPlannedTotal >= 0) { "Total budget tidak boleh negatif" }
+        val period = requireNotNull(dao.periodById(periodId)) { "Periode tidak ditemukan" }
+        val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == period.portfolioId }) { "Portfolio tidak ditemukan" }
+        val activeId = activeAccountId()
+        require(portfolio.accountId == activeId) { "Portfolio bukan milik akun aktif" }
+        require(!portfolio.isArchived) { "Portfolio sudah diarsip" }
+        require(period.status != PeriodStatus.CLOSED) { "Periode sudah tertutup" }
+        val plannedByCategories = dao.allocationsForPeriod(periodId).sumOf { it.plannedAmount }
+        require(newPlannedTotal >= plannedByCategories) { "Total budget tidak boleh lebih kecil dari rencana kategori" }
+        val oldTotal = period.plannedTotal
+        require(newPlannedTotal != oldTotal) { "Tidak ada perubahan total budget" }
+
+        dao.updatePeriod(period.copy(plannedTotal = newPlannedTotal).bumpRevision())
+        val eventId = UUID.randomUUID().toString()
+        dao.insertEvent(ActivityEventEntity(eventId, LedgerType.SYSTEM, "Total budget disesuaikan", "Total budget ${portfolio.name} diubah dari $oldTotal menjadi $newPlannedTotal", "USER", LocalDate.now().toEpochDay(), accountId = activeId))
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = "Penyesuaian total budget periode", beforeJson = "{\"periodId\":$periodId,\"plannedTotal\":$oldTotal}", afterJson = "{\"periodId\":$periodId,\"plannedTotal\":$newPlannedTotal}"))
+        assertInvariant()
+        eventId
+    }
+
     suspend fun transferBookedChannel(
         sourceAllocationId: Long,
         accountId: Long,
