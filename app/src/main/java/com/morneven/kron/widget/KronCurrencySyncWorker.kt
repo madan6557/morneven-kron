@@ -29,6 +29,7 @@ class KronCurrencySyncWorker(
     companion object {
         internal const val MAX_RETRIES = 2
         internal const val UNIQUE_WORK_NAME = "kron_currency_sync_when_connected"
+        internal const val UNIQUE_PERIODIC_WORK_NAME = "kron_currency_periodic_sync"
     }
 }
 
@@ -41,7 +42,18 @@ object KronCurrencySyncScheduler {
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
             KronCurrencySyncWorker.UNIQUE_WORK_NAME,
-            ExistingWorkPolicy.KEEP,
+            ExistingWorkPolicy.REPLACE,
+            request,
+        )
+    }
+
+    fun schedulePeriodic(context: Context) {
+        val request = androidx.work.PeriodicWorkRequestBuilder<KronCurrencySyncWorker>(1, TimeUnit.HOURS)
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .build()
+        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+            KronCurrencySyncWorker.UNIQUE_PERIODIC_WORK_NAME,
+            androidx.work.ExistingPeriodicWorkPolicy.KEEP,
             request,
         )
     }

@@ -161,6 +161,9 @@ class MainActivity : FragmentActivity() {
         super.onResume()
         if (DatabaseAccessGate.isReady()) viewModel.refreshForCurrentDate()
         applyPendingSyncActivationIfSafe()
+        runCatching {
+            com.morneven.kron.widget.KronCurrencySyncScheduler.scheduleIfStale(this)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {

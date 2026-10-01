@@ -461,6 +461,17 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
     val isExpr = MoneyExpressionEvaluator.isExpression(field.text)
     val evaluated = if (isExpr) MoneyExpressionEvaluator.evaluate(field.text) else null
 
+    val view = androidx.compose.ui.platform.LocalView.current
+    val imm = remember(view) {
+        view.context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+    }
+
+    fun switchToSystemKeyboard() {
+        useSystemKeyboard = true
+        if (keypadHost != null) keypadHost.dismiss() else localShowCalculator = false
+        requestSystemKeyboard = true
+    }
+
     fun activateCalculator() {
         touched = true
         useSystemKeyboard = false
@@ -476,9 +487,7 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
                 onValue(newVal)
             }
             keypadHost.onSwitchToSystemKeyboard = {
-                useSystemKeyboard = true
-                keypadHost.dismiss()
-                requestSystemKeyboard = true
+                switchToSystemKeyboard()
             }
             coroutineScope.launch {
                 delay(150)
@@ -498,9 +507,7 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
                 onValue(newVal)
             }
             keypadHost.onSwitchToSystemKeyboard = {
-                useSystemKeyboard = true
-                keypadHost.dismiss()
-                requestSystemKeyboard = true
+                switchToSystemKeyboard()
             }
         }
     }
@@ -512,8 +519,13 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
         if (requestSystemKeyboard) {
             requestSystemKeyboard = false
             focusRequester.requestFocus()
-            delay(80)
-            keyboardController?.show()
+            listOf(50L, 120L, 250L).forEach { delayMs ->
+                delay(delayMs)
+                keyboardController?.show()
+                view.post {
+                    imm?.showSoftInput(view, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+                }
+            }
         }
     }
 
@@ -541,6 +553,13 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
                 interceptor = { request, nextHandler ->
                     snapshotFlow { useSystemKeyboard }.collectLatest { systemActive ->
                         if (systemActive) {
+                            coroutineScope.launch {
+                                delay(60)
+                                keyboardController?.show()
+                                view.post {
+                                    imm?.showSoftInput(view, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+                                }
+                            }
                             nextHandler.startInputMethod(request)
                         } else {
                             kotlinx.coroutines.awaitCancellation()
@@ -598,16 +617,12 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
                                 }
                             } else {
                                 IconButton(onClick = {
-                                    if (isHostActive || localShowCalculator) {
-                                        if (keypadHost != null) keypadHost.dismiss() else localShowCalculator = false
-                                    } else {
-                                        activateCalculator()
-                                    }
+                                    switchToSystemKeyboard()
                                 }) {
                                     Icon(
-                                        if (isHostActive || localShowCalculator) Icons.Outlined.KeyboardHide else Icons.Outlined.Calculate,
-                                        contentDescription = if (isHostActive || localShowCalculator) "Tutup kalkulator" else "Buka keypad kalkulator",
-                                        tint = if (isHostActive || localShowCalculator) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        Icons.Outlined.Keyboard,
+                                        contentDescription = "Gunakan keyboard sistem",
+                                        tint = MaterialTheme.colorScheme.primary,
                                     )
                                 }
                             }
@@ -618,9 +633,13 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
                         .focusRequester(focusRequester)
                         .onFocusChanged { focusState ->
                             hasFocus = focusState.isFocused
-                            if (focusState.isFocused && !useSystemKeyboard && !isCustomActive) {
-                                keyboardController?.hide()
-                                activateCalculator()
+                            if (focusState.isFocused) {
+                                if (!useSystemKeyboard && !isCustomActive) {
+                                    keyboardController?.hide()
+                                    activateCalculator()
+                                } else if (useSystemKeyboard) {
+                                    keyboardController?.show()
+                                }
                             }
                             // Moving to any other input, including a plain text field with no
                             // keypad of its own, has to hand the keypad back. Nothing did this
@@ -633,8 +652,12 @@ fun MoneyField(value: String, onValue: (String) -> Unit, label: String) {
                             awaitPointerEventScope {
                                 while (true) {
                                     val event = awaitPointerEvent(PointerEventPass.Initial)
-                                    if (event.type == PointerEventType.Press && !useSystemKeyboard && !isCustomActive) {
-                                        activateCalculator()
+                                    if (event.type == PointerEventType.Press) {
+                                        if (!useSystemKeyboard && !isCustomActive) {
+                                            activateCalculator()
+                                        } else if (useSystemKeyboard) {
+                                            keyboardController?.show()
+                                        }
                                     }
                                 }
                             }

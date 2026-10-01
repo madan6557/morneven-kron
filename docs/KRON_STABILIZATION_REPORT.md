@@ -218,3 +218,17 @@
 
 - Done: testDebugUnitTest (termasuk unit test kursor keypad MoneyFormatterTest), assembleRelease, lintVitalRelease, dan verifikasi signature v2 lulus.
 - Done: APK rilis memiliki versionCode 108, versionName 1.7.16, dan signature v2 dengan fingerprint SHA-256 sertifikat 65c875d6810fee77ad626393685ae887b76b97d96df82dd360c5c271701caae7. SHA-256 APK: C191FF747A94EA88BF01D025F4019EEBB95CE578B8DBF4B705B6964961B0EBFC.
+
+## Switch keyboard pada kolom input dan sinkronisasi kurs otomatis, 1.7.17
+
+### Dampak perubahan
+
+- Tombol switch keyboard pada MoneyField (trailingIcon) diperbaiki menjadi toggle dua arah: beralih ke keyboard sistem saat keypad aktif, dan beralih ke keypad kalkulator saat keyboard sistem aktif. Dilengkapi mekanisme trigger showSoftInput berulang pada LocalView untuk menjamin keyboard sistem muncul pada seluruh perangkat.
+- Sinkronisasi kurs mata uang diperluas dengan multi-endpoint gratis tanpa API key (open.er-api.com dan api.exchangerate-api.com) dengan fallback otomatis bila salah satu server mengalami kegagalan atau timeout.
+- Pemeriksaan konektivitas jaringan disesuaikan ke NET_CAPABILITY_INTERNET agar tidak terhalang oleh pengaturan DNS privat pada perangkat.
+- Penjadwalan WorkManager periodik setiap 1 jam untuk sinkronisasi kurs saat terhubung internet, serta pengecekan otomatis saat aplikasi dibuka (onResume) jika data kurs sudah melebihi 30 menit.
+
+### Hasil verifikasi
+
+- Done: testDebugUnitTest (termasuk KronCurrencyTest), assembleRelease, lintVitalRelease, dan verifikasi signature v2 lulus.
+- Done: APK rilis memiliki versionCode 109, versionName 1.7.17, dan signature v2 dengan fingerprint SHA-256 sertifikat 65c875d6810fee77ad626393685ae887b76b97d96df82dd360c5c271701caae7. SHA-256 APK: 7701CD4EDE9AE9F2D42FACDAAC9EF648436532ED7F8E397FAA2E5D416CB84D30.

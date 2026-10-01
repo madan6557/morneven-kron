@@ -53,6 +53,10 @@ class KronApplication : Application() {
             ExistingPeriodicWorkPolicy.UPDATE,
             PeriodicWorkRequestBuilder<AutomationWorker>(24, TimeUnit.HOURS).build(),
         )
+        runCatching {
+            com.morneven.kron.widget.KronCurrencySyncScheduler.schedulePeriodic(this)
+            com.morneven.kron.widget.KronCurrencySyncScheduler.scheduleIfStale(this)
+        }
     }
 
     private fun createNotificationChannel() {

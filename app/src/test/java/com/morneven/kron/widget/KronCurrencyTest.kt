@@ -90,4 +90,12 @@ class KronCurrencyTest {
         val yen = KronCurrencyManager.formatCurrencyAmount(1_100_000L, WidgetCurrency.JPY, visible = true)
         assertEquals("¥ 10.000", yen)
     }
+
+    @Test
+    fun testCurrencyApiEndpointsConfigured() {
+        assertEquals(2, KronCurrencyManager.API_URLS.size)
+        assertTrue(KronCurrencyManager.API_URLS.all { it.startsWith("https://") })
+        assertTrue(KronCurrencyManager.API_URLS.any { it.contains("open.er-api.com") })
+        assertTrue(KronCurrencyManager.API_URLS.any { it.contains("exchangerate-api.com") })
+    }
 }

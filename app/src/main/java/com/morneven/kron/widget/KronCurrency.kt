@@ -98,7 +98,10 @@ object KronCurrencyManager {
     private const val KEY_PREFIX_RATE = "rate_"
     private const val KEY_LAST_SYNCED = "rates_last_synced_at"
     private const val KEY_KRM_IDR_RATE = "krm_synthetic_idr_rate"
-    private const val API_URL = "https://open.er-api.com/v6/latest/IDR"
+    internal val API_URLS = listOf(
+        "https://open.er-api.com/v6/latest/IDR",
+        "https://api.exchangerate-api.com/v4/latest/IDR",
+    )
 
     /** 30 minutes in milliseconds -- matches widget update period. */
     private const val STALE_THRESHOLD_MS = 30L * 60L * 1000L
@@ -271,62 +274,63 @@ object KronCurrencyManager {
         if (!hasInternetAccess(context)) {
             return Result.failure(IllegalStateException("Tidak ada koneksi internet"))
         }
-        return try {
-            val conn = (URL(API_URL).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 6000
-                readTimeout = 6000
-                setRequestProperty("User-Agent", "KRON-App/1.0")
-                setRequestProperty("Accept", "application/json")
-            }
-            val responseText = try {
-                if (conn.responseCode != HttpURLConnection.HTTP_OK) {
-                    return Result.failure(Exception("HTTP ${conn.responseCode} dari server kurs"))
+        var lastException: Exception? = null
+        for (apiUrl in API_URLS) {
+            try {
+                val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 6000
+                    readTimeout = 6000
+                    setRequestProperty("User-Agent", "KRON-App/1.0")
+                    setRequestProperty("Accept", "application/json")
                 }
-                conn.inputStream.bufferedReader().use { it.readText() }
-            } finally {
-                conn.disconnect()
-            }
-
-            val json = JSONObject(responseText)
-            if (json.optString("result", "") != "success") {
-                return Result.failure(Exception("Format response kurs tidak valid"))
-            }
-
-            val ratesObj = json.getJSONObject("rates")
-            val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
-            val editor = prefs.edit()
-            val savedRates = mutableMapOf<String, Double>()
-
-            for (curr in WidgetCurrency.entries) {
-                if (curr == WidgetCurrency.IDR || curr == WidgetCurrency.KRON) continue
-                if (curr.fixedRateFromIdr != null) {
-                    savedRates[curr.code] = curr.fixedRateFromIdr
-                    continue
+                val responseText = try {
+                    if (conn.responseCode != HttpURLConnection.HTTP_OK) {
+                        throw Exception("HTTP ${conn.responseCode} dari $apiUrl")
+                    }
+                    conn.inputStream.bufferedReader().use { it.readText() }
+                } finally {
+                    conn.disconnect()
                 }
-                if (ratesObj.has(curr.code)) {
-                    val rate = ratesObj.getDouble(curr.code)
-                    editor.putString("$KEY_PREFIX_RATE${curr.code}", rate.toString())
-                    savedRates[curr.code] = rate
+
+                val json = JSONObject(responseText)
+                val ratesObj = json.optJSONObject("rates")
+                    ?: throw Exception("Format response kurs dari $apiUrl tidak memiliki objek rates")
+
+                val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
+                val editor = prefs.edit()
+                val savedRates = mutableMapOf<String, Double>()
+
+                for (curr in WidgetCurrency.entries) {
+                    if (curr == WidgetCurrency.IDR || curr == WidgetCurrency.KRON) continue
+                    if (curr.fixedRateFromIdr != null) {
+                        savedRates[curr.code] = curr.fixedRateFromIdr
+                        continue
+                    }
+                    if (ratesObj.has(curr.code)) {
+                        val rate = ratesObj.getDouble(curr.code)
+                        editor.putString("$KEY_PREFIX_RATE${curr.code}", rate.toString())
+                        savedRates[curr.code] = rate
+                    }
                 }
+
+                editor.putLong(KEY_LAST_SYNCED, System.currentTimeMillis())
+                editor.apply()
+
+                val newKrmIdr = refreshKronFluctuation(context)
+                savedRates["KRM"] = 1.0 / newKrmIdr
+                runCatching { KronWidgetManager.notifyWidgetUpdate(context) }
+                return Result.success(savedRates)
+            } catch (e: Exception) {
+                lastException = e
             }
-
-            editor.putLong(KEY_LAST_SYNCED, System.currentTimeMillis())
-            editor.apply()
-
-            val newKrmIdr = refreshKronFluctuation(context)
-            savedRates["KRM"] = 1.0 / newKrmIdr
-            runCatching { KronWidgetManager.notifyWidgetUpdate(context) }
-            Result.success(savedRates)
-        } catch (e: Exception) {
-            Result.failure(e)
         }
+        return Result.failure(lastException ?: Exception("Gagal menghubungi server kurs"))
     }
 
     private fun hasInternetAccess(context: Context): Boolean {
         val manager = context.getSystemService(ConnectivityManager::class.java) ?: return false
         val capabilities = manager.getNetworkCapabilities(manager.activeNetwork) ?: return false
-        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 }

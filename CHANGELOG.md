@@ -1,5 +1,12 @@
 # KRON Changelog
 
+## 1.7.17 - 2026-10-01
+
+- Perbaikan tombol switch keyboard pada kolom input (MoneyField): tombol di sisi kanan kolom nominal kini berfungsi sebagai toggle langsung antara keyboard sistem (ikon keyboard) dan keypad kalkulator KRON (ikon kalkulator), lengkap dengan jaminan pemunculan IME sistem Android.
+- Sinkronisasi kurs mata uang otomatis dan multi-endpoint gratis: sinkronisasi kurs kini didukung dua endpoint publik gratis tanpa API key (open.er-api.com dan api.exchangerate-api.com) dengan mekanisme fallback otomatis.
+- Penjadwalan kurs otomatis: WorkManager kini menjalankan pemeriksaan kurs periodik setiap 1 jam saat terhubung internet, serta pengecekan otomatis saat aplikasi dibuka jika data kurs telah melewati 30 menit. Validasi jaringan disesuaikan agar tidak terhalang oleh konfigurasi DNS privat.
+- Bump versionCode 108 -> 109 dan versionName 1.7.16 -> 1.7.17.
+
 ## 1.7.16 - 2026-10-01
 
 - Perbaikan navigasi kursor pada kolom input uang (MoneyField): kursor kini dapat dipindahkan bebas dengan menyentuh posisi teks yang diinginkan, penyisipan angka di tengah nominal mempertahankan angka nol tanpa terpotong, dan penghapusan mundur melewati pemisah ribuan berjalan presisi tanpa menggeser posisi kursor.
