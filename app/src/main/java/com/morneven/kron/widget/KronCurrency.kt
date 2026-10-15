@@ -138,8 +138,9 @@ object KronCurrencyManager {
      * Behavior:
      * - 30% chance: large swing of 5-15% from the current rate.
      * - 70% chance: small movement of 0.1-2% from the current rate.
-     * - Mean reversion of 8% per tick pulls rate back toward [KRM_BASE_IDR].
-     * - The floor prevents invalid rates; there is no arbitrary upper cap.
+     * - No arbitrary upper cap and no artificial mean-reversion anchor, allowing KRM
+     *   to naturally trend and explore higher values beyond the initial 1000-1500 range.
+     * - Safe hard floor [KRM_FLOOR_IDR] prevents invalid or negative rates.
      *
      * @return the new IDR-per-Kr rate after fluctuation.
      */
@@ -161,9 +162,8 @@ object KronCurrencyManager {
 
     internal fun nextKrmIdrRate(current: Double, magnitude: Double, increase: Boolean): Double {
         val startingRate = current.takeIf { it.isFinite() && it > 0.0 } ?: KRM_BASE_IDR
-        val reversion = (KRM_BASE_IDR - startingRate) * 0.08
         val direction = if (increase) 1.0 else -1.0
-        val next = startingRate + startingRate * magnitude * direction + reversion
+        val next = startingRate * (1.0 + magnitude * direction)
         return if (next.isFinite()) next.coerceAtLeast(KRM_FLOOR_IDR) else startingRate
     }
 

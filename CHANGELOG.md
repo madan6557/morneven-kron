@@ -1,5 +1,13 @@
 # KRON Changelog
 
+## 1.7.22 - 2026-10-15
+
+- Desain profesional menu Laporan dan Pengaturan: perombakan metrik KPI cash flow menjadi grid 2 kolom modern untuk Masuk dan Keluar lengkap dengan indikator perubahan persentase dan nominal, penambahan hero banner Net Cash Flow/Perubahan dengan warna bertanda (signed color) dan ikon dompet, perancangan ulang baris Komposisi Aset menjadi kartu terstruktur dengan lencana kanal fisik/digital dan saldo tegas, serta penataan metrik ringkas pada Laporan Hutang.
+- Penyeragaman margin judul seksi dan kartu di seluruh menu: standardisasi padding LazyColumn (16.dp horizontal, 14.dp vertical) pada layar Pengaturan, Budget, dan Hutang agar serasi dengan Beranda dan Laporan. Memindahkan SectionHeader keluar dari kartu dengan jarak vertikal konsisten 8.dp ke konten kartu.
+- Transisi navigasi berarah dan intuitif: perpindahan antar tab menu utama kini menggunakan geser horizontal terarah (slide left/right) sesuai posisi fisik tab di bilah navigasi, sedangkan navigasi masuk/keluar sub-halaman dan modal (seperti Hutang & Piutang) dibedakan menggunakan transisi scale dan fade terpadu tanpa efek slide yang membingungkan.
+- Penghapusan batas atas sintetis kurs KRM: menghilangkan tarikan mean-reversion buatan pada kalkulasi fluktuasi kurs Kron Morneven, memungkinkan kurs KRM bergerak bebas dan alami menjelajahi nilai di atas rentang awal 1000-1500 dengan perlindungan floor minimum aman.
+- Bump versionCode 113 -> 114 dan versionName 1.7.21 -> 1.7.22.
+
 ## 1.7.21 - 2026-10-15
 
 - Perbaikan scoping validasi snapshot Team pada sinkronisasi Private Drive: validasi graph sebelum pemangkasan (TeamSnapshotPruner.validateGraph) kini hanya memeriksa event dan hutang milik akun Team itu sendiri, sehingga keberadaan hutang pada akun privat lain tidak lagi memicu error palsu "Hutang Team milik akun lain". Validasi ketiadaan hutang akun lain ditempatkan pada snapshot yang sudah terisolasi (validateSnapshot).

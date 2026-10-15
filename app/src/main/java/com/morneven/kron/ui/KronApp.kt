@@ -13,6 +13,10 @@ import android.view.WindowManager
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -198,6 +202,8 @@ private val destinations = listOf(
     Destination("settings", "Pengaturan", Icons.Filled.Settings, Icons.Outlined.Settings),
 )
 
+private val mainRoutes = destinations.map { it.route }.toSet()
+private fun isMainMenu(route: String?): Boolean = route != null && route in mainRoutes
 private fun routePosition(route: String?): Int = destinations.indexOfFirst { it.route == route }.takeIf { it >= 0 } ?: 0
 
 private const val PAGE_TRANSITION_DURATION = 350
@@ -1155,8 +1161,12 @@ private fun MainScaffold(
             startDestination = "home",
             modifier = Modifier.fillMaxSize().padding(padding),
             enterTransition = {
-                if (targetState.destination.route == initialState.destination.route) EnterTransition.None else {
-                    val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) {
+                val initial = initialState.destination.route
+                val target = targetState.destination.route
+                if (target == initial) {
+                    EnterTransition.None
+                } else if (isMainMenu(initial) && isMainMenu(target)) {
+                    val direction = if (routePosition(target) >= routePosition(initial)) {
                         AnimatedContentTransitionScope.SlideDirection.Left
                     } else {
                         AnimatedContentTransitionScope.SlideDirection.Right
@@ -1164,12 +1174,19 @@ private fun MainScaffold(
                     slideIntoContainer(
                         towards = direction,
                         animationSpec = tween(PAGE_TRANSITION_DURATION, easing = FastOutSlowInEasing),
-                    )
+                    ) + fadeIn(animationSpec = tween(PAGE_TRANSITION_DURATION, easing = FastOutSlowInEasing))
+                } else {
+                    fadeIn(animationSpec = tween(240, easing = FastOutSlowInEasing)) +
+                        scaleIn(initialScale = 0.93f, animationSpec = tween(240, easing = FastOutSlowInEasing))
                 }
             },
             exitTransition = {
-                if (targetState.destination.route == initialState.destination.route) ExitTransition.None else {
-                    val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) {
+                val initial = initialState.destination.route
+                val target = targetState.destination.route
+                if (target == initial) {
+                    ExitTransition.None
+                } else if (isMainMenu(initial) && isMainMenu(target)) {
+                    val direction = if (routePosition(target) >= routePosition(initial)) {
                         AnimatedContentTransitionScope.SlideDirection.Left
                     } else {
                         AnimatedContentTransitionScope.SlideDirection.Right
@@ -1177,12 +1194,19 @@ private fun MainScaffold(
                     slideOutOfContainer(
                         towards = direction,
                         animationSpec = tween(PAGE_TRANSITION_DURATION, easing = FastOutSlowInEasing),
-                    )
+                    ) + fadeOut(animationSpec = tween(PAGE_TRANSITION_DURATION, easing = FastOutSlowInEasing))
+                } else {
+                    fadeOut(animationSpec = tween(180, easing = FastOutSlowInEasing)) +
+                        scaleOut(targetScale = 1.04f, animationSpec = tween(180, easing = FastOutSlowInEasing))
                 }
             },
             popEnterTransition = {
-                if (targetState.destination.route == initialState.destination.route) EnterTransition.None else {
-                    val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) {
+                val initial = initialState.destination.route
+                val target = targetState.destination.route
+                if (target == initial) {
+                    EnterTransition.None
+                } else if (isMainMenu(initial) && isMainMenu(target)) {
+                    val direction = if (routePosition(target) >= routePosition(initial)) {
                         AnimatedContentTransitionScope.SlideDirection.Left
                     } else {
                         AnimatedContentTransitionScope.SlideDirection.Right
@@ -1190,12 +1214,19 @@ private fun MainScaffold(
                     slideIntoContainer(
                         towards = direction,
                         animationSpec = tween(PAGE_TRANSITION_DURATION, easing = FastOutSlowInEasing),
-                    )
+                    ) + fadeIn(animationSpec = tween(PAGE_TRANSITION_DURATION, easing = FastOutSlowInEasing))
+                } else {
+                    fadeIn(animationSpec = tween(220, easing = FastOutSlowInEasing)) +
+                        scaleIn(initialScale = 1.04f, animationSpec = tween(220, easing = FastOutSlowInEasing))
                 }
             },
             popExitTransition = {
-                if (targetState.destination.route == initialState.destination.route) ExitTransition.None else {
-                    val direction = if (routePosition(targetState.destination.route) >= routePosition(initialState.destination.route)) {
+                val initial = initialState.destination.route
+                val target = targetState.destination.route
+                if (target == initial) {
+                    ExitTransition.None
+                } else if (isMainMenu(initial) && isMainMenu(target)) {
+                    val direction = if (routePosition(target) >= routePosition(initial)) {
                         AnimatedContentTransitionScope.SlideDirection.Left
                     } else {
                         AnimatedContentTransitionScope.SlideDirection.Right
@@ -1203,7 +1234,10 @@ private fun MainScaffold(
                     slideOutOfContainer(
                         towards = direction,
                         animationSpec = tween(PAGE_TRANSITION_DURATION, easing = FastOutSlowInEasing),
-                    )
+                    ) + fadeOut(animationSpec = tween(PAGE_TRANSITION_DURATION, easing = FastOutSlowInEasing))
+                } else {
+                    fadeOut(animationSpec = tween(200, easing = FastOutSlowInEasing)) +
+                        scaleOut(targetScale = 0.93f, animationSpec = tween(200, easing = FastOutSlowInEasing))
                 }
             },
         ) {

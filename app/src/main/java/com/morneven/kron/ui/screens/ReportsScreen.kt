@@ -1,9 +1,12 @@
 package com.morneven.kron.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -11,13 +14,20 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AccountBalance
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
+import androidx.compose.material.icons.outlined.ArrowDownward
+import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.material.icons.outlined.Payments
 import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
@@ -46,6 +56,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.morneven.kron.data.ActivityRow
@@ -67,6 +78,7 @@ import com.morneven.kron.ui.components.formatIdr
 import com.morneven.kron.ui.components.signedColor
 import com.morneven.kron.ui.theme.KronGold
 import com.morneven.kron.ui.theme.KronGreen
+import com.morneven.kron.ui.theme.KronSubCardShape
 import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
@@ -326,54 +338,81 @@ fun ReportsScreen(
     }
 
         item {
-            HudCard {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SectionHeader(
                     if (mode == ReportMode.CUMULATIVE) "Perubahan saldo $rangeLabel" else "Cash flow $rangeLabel"
                 )
-                ReportMetric("Masuk", money(income), KronGreen) {
-                    ChangeIndicator(income, prevIncome, ComparisonType.INCOME, visible, ::compactChange)
-                }
-                ReportMetric("Keluar", money(expense), MaterialTheme.colorScheme.error) {
-                    ChangeIndicator(expense, prevExpense, ComparisonType.EXPENSE, visible, ::compactChange)
-                }
-                ReportMetric("Net", money(net), KronGold) {
-                    ChangeIndicator(net, prevNet, ComparisonType.NET, visible, ::compactChange)
-                }
-                Spacer(Modifier.height(14.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = !showTable, onClick = { showTable = false }, label = { Text("Grafik") })
-                    FilterChip(selected = showTable, onClick = { showTable = true }, label = { Text("Tabel") })
-                }
-                if (!showTable) {
-                    ChartLegend(effectiveSeries)
-                    Spacer(Modifier.height(8.dp))
-                    CashFlowChart(
-                        buckets = buckets,
-                        series = effectiveSeries,
-                        selected = selectedPoint,
-                        valuesVisible = visible,
-                        onSelect = { selectedPoint = it },
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    if (selectedPoint in buckets.indices) {
-                        val detailBucket = if (mode == ReportMode.CUMULATIVE) {
-                            CashFlowBucket(
-                                key = rawBuckets[selectedPoint].key,
-                                label = rawBuckets[selectedPoint].label,
-                                income = rawBuckets[selectedPoint].income,
-                                expense = rawBuckets[selectedPoint].expense,
-                                explicitNet = buckets[selectedPoint].net,
-                            )
-                        } else {
-                            buckets[selectedPoint]
-                        }
-                        BucketDetails(detailBucket, money)
-                    } else {
-                        Text(
-                            if (buckets.isEmpty()) "Belum ada cash flow pada rentang ini" else "Tekan grafik untuk melihat rincian periode",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                HudCard {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        ReportKpiCard(
+                            label = "Masuk",
+                            value = money(income),
+                            icon = Icons.Outlined.ArrowDownward,
+                            color = KronGreen,
+                            modifier = Modifier.weight(1f),
+                            indicator = {
+                                ChangeIndicator(income, prevIncome, ComparisonType.INCOME, visible, ::compactChange)
+                            },
                         )
+                        ReportKpiCard(
+                            label = "Keluar",
+                            value = money(expense),
+                            icon = Icons.Outlined.ArrowUpward,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.weight(1f),
+                            indicator = {
+                                ChangeIndicator(expense, prevExpense, ComparisonType.EXPENSE, visible, ::compactChange)
+                            },
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    NetCashFlowCard(
+                        label = if (mode == ReportMode.CUMULATIVE) "Net Perubahan" else "Net Cash Flow",
+                        value = money(net),
+                        net = net,
+                        indicator = {
+                            ChangeIndicator(net, prevNet, ComparisonType.NET, visible, ::compactChange)
+                        },
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = !showTable, onClick = { showTable = false }, label = { Text("Grafik") })
+                        FilterChip(selected = showTable, onClick = { showTable = true }, label = { Text("Tabel") })
+                    }
+                    if (!showTable) {
+                        ChartLegend(effectiveSeries)
+                        Spacer(Modifier.height(8.dp))
+                        CashFlowChart(
+                            buckets = buckets,
+                            series = effectiveSeries,
+                            selected = selectedPoint,
+                            valuesVisible = visible,
+                            onSelect = { selectedPoint = it },
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        if (selectedPoint in buckets.indices) {
+                            val detailBucket = if (mode == ReportMode.CUMULATIVE) {
+                                CashFlowBucket(
+                                    key = rawBuckets[selectedPoint].key,
+                                    label = rawBuckets[selectedPoint].label,
+                                    income = rawBuckets[selectedPoint].income,
+                                    expense = rawBuckets[selectedPoint].expense,
+                                    explicitNet = buckets[selectedPoint].net,
+                                )
+                            } else {
+                                buckets[selectedPoint]
+                            }
+                            BucketDetails(detailBucket, money)
+                        } else {
+                            Text(
+                                if (buckets.isEmpty()) "Belum ada cash flow pada rentang ini" else "Tekan grafik untuk melihat rincian periode",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }
@@ -406,36 +445,54 @@ fun ReportsScreen(
         }
 
         item {
-            HudCard {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SectionHeader("Komposisi aset")
-                if (channel in setOf(ReportChannel.ALL, ReportChannel.CASH)) {
-                    AssetRow(FundingChannel.CASH, state.totalCashAssets, money)
-                }
-                if (channel == ReportChannel.ALL) Spacer(Modifier.height(12.dp))
-                if (channel in setOf(ReportChannel.ALL, ReportChannel.EBUDGET)) {
-                    AssetRow(FundingChannel.EBUDGET, state.totalEBudgetAssets, money)
+                HudCard {
+                    if (channel in setOf(ReportChannel.ALL, ReportChannel.CASH)) {
+                        AssetRow(FundingChannel.CASH, state.totalCashAssets, money)
+                    }
+                    if (channel == ReportChannel.ALL) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(vertical = 10.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                        )
+                    }
+                    if (channel in setOf(ReportChannel.ALL, ReportChannel.EBUDGET)) {
+                        AssetRow(FundingChannel.EBUDGET, state.totalEBudgetAssets, money)
+                    }
                 }
             }
         }
 
         if (reportDebts.isNotEmpty()) item {
-            HudCard(accent = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.65f)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SectionHeader("Laporan Hutang")
-                Text("Tracker ini tidak menambah saldo aset. Hanya pembayaran yang masuk ke cash flow.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(10.dp))
-                ReportMetric("Perlu dibayar", money(debtPayable), MaterialTheme.colorScheme.error)
-                ReportMetric("Akan diterima", money(debtReceivable), KronGreen)
-                ReportMetric("Bunga berjalan", money(debtInterest), KronGold)
-                Text("Aktif ${reportDebts.count { it.status == DebtStatus.OPEN }} · Lunas ${reportDebts.count { it.status == DebtStatus.SETTLED }} · Arsip ${reportDebts.count { it.status == DebtStatus.ARCHIVED }}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                reportDebts.filter { it.status == DebtStatus.OPEN }.sortedBy { it.dueEpochDay ?: Long.MAX_VALUE }.take(3).forEach { debt ->
-                    val interest = DebtCalculator.currentInterest(debt, today)
-                    HorizontalDivider(modifier = Modifier.padding(top = 8.dp, bottom = 6.dp))
-                    Text("${if (debt.role == DebtRole.DEBTOR) "Hutang" else "Piutang"} · ${debt.counterparty}", style = MaterialTheme.typography.bodyMedium)
-                    Text("${debt.title} · ${money(debt.principalOutstanding + interest)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    debt.dueEpochDay?.let { due -> Text("Tenggat ${shortDate(LocalDate.ofEpochDay(due))}", style = MaterialTheme.typography.labelSmall, color = if (LocalDate.ofEpochDay(due).isBefore(today)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary) }
-                }
-                TextButton(onClick = onManageDebts, modifier = Modifier.fillMaxWidth().height(48.dp)) {
-                    Text("Kelola hutang & piutang")
+                HudCard(accent = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.65f)) {
+                    Text("Tracker ini tidak menambah saldo aset. Hanya pembayaran yang masuk ke cash flow.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        ReportMetricCompact("Perlu dibayar", money(debtPayable), MaterialTheme.colorScheme.error, Modifier.weight(1f))
+                        ReportMetricCompact("Akan diterima", money(debtReceivable), KronGreen, Modifier.weight(1f))
+                    }
+                    if (debtInterest > 0L) {
+                        Spacer(Modifier.height(8.dp))
+                        ReportMetricCompact("Bunga berjalan", money(debtInterest), KronGold, Modifier.fillMaxWidth())
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Text("Aktif ${reportDebts.count { it.status == DebtStatus.OPEN }} · Lunas ${reportDebts.count { it.status == DebtStatus.SETTLED }} · Arsip ${reportDebts.count { it.status == DebtStatus.ARCHIVED }}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    reportDebts.filter { it.status == DebtStatus.OPEN }.sortedBy { it.dueEpochDay ?: Long.MAX_VALUE }.take(3).forEach { debt ->
+                        val interest = DebtCalculator.currentInterest(debt, today)
+                        HorizontalDivider(modifier = Modifier.padding(top = 8.dp, bottom = 6.dp))
+                        Text("${if (debt.role == DebtRole.DEBTOR) "Hutang" else "Piutang"} · ${debt.counterparty}", style = MaterialTheme.typography.bodyMedium)
+                        Text("${debt.title} · ${money(debt.principalOutstanding + interest)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        debt.dueEpochDay?.let { due -> Text("Tenggat ${shortDate(LocalDate.ofEpochDay(due))}", style = MaterialTheme.typography.labelSmall, color = if (LocalDate.ofEpochDay(due).isBefore(today)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary) }
+                    }
+                    TextButton(onClick = onManageDebts, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                        Text("Kelola hutang & piutang")
+                    }
                 }
             }
         }
@@ -678,22 +735,148 @@ private fun List<CashFlowBucket>.toCumulative(): List<CashFlowBucket> {
 }
 
 @Composable
-private fun ReportMetric(label: String, value: String, color: Color, indicator: (@Composable () -> Unit)? = null) {
+private fun ReportKpiCard(
+    label: String,
+    value: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    color: Color,
+    modifier: Modifier = Modifier,
+    indicator: (@Composable () -> Unit)? = null,
+) {
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f),
-        shape = MaterialTheme.shapes.small,
-        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        modifier = modifier,
+        shape = KronSubCardShape,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.25f)),
     ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(value, style = MaterialTheme.typography.titleLarge, color = color, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (indicator != null) {
-                HorizontalDivider(
-                    modifier = Modifier.padding(vertical = 4.dp),
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    label.uppercase(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Box(
+                    modifier = Modifier
+                        .size(26.dp)
+                        .background(color.copy(alpha = 0.12f), RoundedCornerShape(7.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        icon,
+                        contentDescription = null,
+                        tint = color,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+            Text(
+                value,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = color,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (indicator != null) {
                 indicator()
             }
+        }
+    }
+}
+
+@Composable
+private fun NetCashFlowCard(
+    label: String,
+    value: String,
+    net: Long,
+    indicator: (@Composable () -> Unit)? = null,
+) {
+    val netColor = when {
+        net > 0 -> KronGreen
+        net < 0 -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = KronSubCardShape,
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.07f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.weight(1f),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), RoundedCornerShape(8.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Outlined.AccountBalanceWallet,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    Text(
+                        label.uppercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (indicator != null) {
+                        indicator()
+                    }
+                }
+            }
+            Text(
+                value,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = netColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReportMetricCompact(
+    label: String,
+    value: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        shape = KronSubCardShape,
+        border = BorderStroke(1.dp, color.copy(alpha = 0.20f)),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -744,9 +927,48 @@ private fun ChartLegend(series: ReportSeries) {
 
 @Composable
 private fun AssetRow(channel: String, value: Long, money: (Long) -> String) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-        ChannelBadge(channel)
-        Text(money(value), style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    val isCash = channel == FundingChannel.CASH
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .background(
+                        if (isCash) KronGreen.copy(alpha = 0.12f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        RoundedCornerShape(10.dp),
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    if (isCash) Icons.Outlined.Payments else Icons.Outlined.AccountBalance,
+                    contentDescription = null,
+                    tint = if (isCash) KronGreen else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                ChannelBadge(channel)
+                Text(
+                    if (isCash) "Kas tunai & fisik" else "Akun bank & digital",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Text(
+            money(value),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

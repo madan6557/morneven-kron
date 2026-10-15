@@ -94,7 +94,7 @@ fun BudgetScreen(
 
     LazyColumn(
         modifier = modifier,
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
@@ -129,10 +129,10 @@ fun BudgetScreen(
 
         if (!showArchive) {
             item {
-                HudCard(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     SectionHeader("Dana terbooking")
-                    Spacer(Modifier.height(10.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    HudCard(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         ChannelAmount(FundingChannel.CASH, state.bookedCash, state.valuesVisible, Modifier.weight(1f))
                         ChannelAmount(FundingChannel.EBUDGET, state.bookedEBudget, state.valuesVisible, Modifier.weight(1f))
                     }
@@ -186,6 +186,7 @@ fun BudgetScreen(
                         }
                     }
                 }
+            }
             }
 
             if (latestActivePeriods.isEmpty()) {

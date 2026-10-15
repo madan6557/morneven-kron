@@ -45,6 +45,16 @@ class KronCurrencyTest {
     }
 
     @Test
+    fun syntheticKrmRateCanFreelyExploreBeyondBaseRangeWithoutMeanReversionPull() {
+        val next = KronCurrencyManager.nextKrmIdrRate(2500.0, 0.10, increase = true)
+        assertEquals(2750.0, next, 0.0001)
+        assertTrue(next > 2500.0)
+
+        val nextSmall = KronCurrencyManager.nextKrmIdrRate(5000.0, 0.01, increase = true)
+        assertEquals(5050.0, nextSmall, 0.0001)
+    }
+
+    @Test
     fun syntheticKrmRateKeepsItsLowerFloor() {
         assertEquals(100.0, KronCurrencyManager.nextKrmIdrRate(100.0, 0.99, increase = false), 0.0001)
     }
