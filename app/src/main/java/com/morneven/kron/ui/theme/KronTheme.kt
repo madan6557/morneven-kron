@@ -32,13 +32,13 @@ val KronMuted = Color(0xFFB7AAA8)
  * channel badges, the signed money figures and every section heading.
  */
 val KronGoldDark = Color(0xFFE2BD4D)
-val KronGoldLight = Color(0xFF8A6A12)
+val KronGoldLight = Color(0xFFA87B05)
 val KronGreenDark = Color(0xFF57B58C)
-val KronGreenLight = Color(0xFF1F7A55)
+val KronGreenLight = Color(0xFF0D8A52)
 val KronBlueDark = Color(0xFF65A9EF)
-val KronBlueLight = Color(0xFF1F6FC4)
+val KronBlueLight = Color(0xFF1565C0)
 private val KronNegativeDark = Color(0xFFFF796E)
-private val KronNegativeLight = Color(0xFFB3261E)
+private val KronNegativeLight = Color(0xFFD32F2F)
 
 /** True while the KRON theme is painting its dark palette. */
 val LocalKronDarkTheme = androidx.compose.runtime.staticCompositionLocalOf { true }
@@ -98,42 +98,42 @@ private val DarkColors = darkColorScheme(
     scrim = Color.Black,
 )
 
-// The same maroon, purple and gold family as the dark palette, re-tuned for a light surface rather
-// than half-specified. Text bearing roles clear 4.5:1 against surface.
+// The Swiss Executive Alabaster light palette for high-end personal wealth management.
+// Clean pure surfaces, deep imperial bordeaux, authentic royal gold, vibrant emerald, and crisp contrast.
 private val LightColors = lightColorScheme(
-    primary = Color(0xFF8C2F3C),
+    primary = Color(0xFF9B1D31),
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFFFD9DD),
-    onPrimaryContainer = Color(0xFF3B0710),
+    primaryContainer = Color(0xFFFCEBED),
+    onPrimaryContainer = Color(0xFF4A0A17),
     inversePrimary = Color(0xFFFFB3BC),
-    secondary = Color(0xFF6D4D78),
+    secondary = Color(0xFF5E4E63),
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFFF0DBF6),
-    onSecondaryContainer = Color(0xFF2A0E33),
-    tertiary = Color(0xFF7A5E0B),
+    secondaryContainer = Color(0xFFF1EBF3),
+    onSecondaryContainer = Color(0xFF26182B),
+    tertiary = Color(0xFF9E6F05),
     onTertiary = Color.White,
-    tertiaryContainer = Color(0xFFFBE6A8),
-    onTertiaryContainer = Color(0xFF271C00),
-    background = Color(0xFFF7F3F1),
-    onBackground = Color(0xFF221A1C),
-    surface = Color(0xFFFFFBF9),
-    onSurface = Color(0xFF221A1C),
-    surfaceVariant = Color(0xFFEFE2E3),
-    onSurfaceVariant = Color(0xFF5A4D50),
+    tertiaryContainer = Color(0xFFFEF3D6),
+    onTertiaryContainer = Color(0xFF332000),
+    background = Color(0xFFF6F8FA),
+    onBackground = Color(0xFF111827),
+    surface = Color(0xFFFFFFFF),
+    onSurface = Color(0xFF111827),
+    surfaceVariant = Color(0xFFEEF2F5),
+    onSurfaceVariant = Color(0xFF5F6B7A),
     surfaceContainerLowest = Color(0xFFFFFFFF),
-    surfaceContainerLow = Color(0xFFF8F2F0),
-    surfaceContainer = Color(0xFFF1EAE8),
-    surfaceContainerHigh = Color(0xFFEBE3E0),
-    surfaceContainerHighest = Color(0xFFE5DDD9),
-    surfaceTint = Color(0xFF8C2F3C),
-    inverseSurface = Color(0xFF37292C),
-    inverseOnSurface = Color(0xFFFBEEF0),
-    outline = Color(0xFF8C7C7F),
-    outlineVariant = Color(0xFFDCC9CC),
-    error = Color(0xFFB3261E),
+    surfaceContainerLow = Color(0xFFF8F9FB),
+    surfaceContainer = Color(0xFFFFFFFF),
+    surfaceContainerHigh = Color(0xFFF0F3F6),
+    surfaceContainerHighest = Color(0xFFE5E9EE),
+    surfaceTint = Color(0xFF9B1D31),
+    inverseSurface = Color(0xFF1E232B),
+    inverseOnSurface = Color(0xFFF1F4F8),
+    outline = Color(0xFFB0B7C3),
+    outlineVariant = Color(0xFFE2E6EA),
+    error = Color(0xFFD32F2F),
     onError = Color.White,
-    errorContainer = Color(0xFFF9DEDC),
-    onErrorContainer = Color(0xFF410E0B),
+    errorContainer = Color(0xFFFEECEB),
+    onErrorContainer = Color(0xFF4C0805),
     scrim = Color.Black,
 )
 

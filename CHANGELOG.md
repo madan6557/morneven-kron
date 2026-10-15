@@ -1,5 +1,11 @@
 # KRON Changelog
 
+## 1.7.26 - 2026-10-15
+
+- Perombakan total palet mode terang (Swiss Executive Alabaster): menghilangkan rona kusam pinkish-mauve pada latar belakang dan kartu, menggantikannya dengan kanvas platinum alabaster bersih (#F6F8FA) dan kartu putih kristal (#FFFFFF) beraksen garis batas hairline platinum halus (#E2E6EA).
+- Elevasi warna brand dan aksen finansial profesional: memperkaya warna primer KRON menjadi Imperial Bordeaux (#9B1D31) dengan kontras tinggi (>7:1), menghidupkan kembali aksen emas menjadi Royal Amber Gold (#A87B05 / #9E6F05) untuk judul seksi dan kanal Cash, menerapkan hijau zamrud segar (#0D8A52) untuk mutasi masuk dan saldo sehat, biru safir (#1565C0) untuk eBudget, serta tipografi Obsidian Ink (#111827) untuk keterbacaan angka finansial yang tajam dan presisi.
+- Bump versionCode 117 -> 118 dan versionName 1.7.25 -> 1.7.26.
+
 ## 1.7.25 - 2026-10-15
 
 - Grafik batang untuk mode arus kas: penyajian grafik visual pada mode Arus kas kini menggunakan diagram batang (bar chart) berujung melengkung modern (berdampingan hijau-merah untuk semua transaksi, atau batang tunggal untuk pemasukan, pengeluaran, dan net), sedangkan mode Akumulasi net tetap mempertahankan grafik garis tren kontinu.
