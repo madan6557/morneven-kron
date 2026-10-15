@@ -1,5 +1,11 @@
 # KRON Changelog
 
+## 1.7.20 - 2026-10-15
+
+- Perbaikan loop otorisasi Google Drive: saat menerima HTTP 401 Unauthorized karena akun dicabut atau logout di perangkat lain, KRON kini secara eksplisit membersihkan token kadaluarsa dari cache Google Play Services (clearToken) dan sesi lokal (invalidateToken).
+- Pemutusan rantai rekursif otorisasi UI: penanganan hasil sinkronisasi dan koneksi Drive kini dicegah dari perulangan otomatis tak terbatas saat otorisasi ulang masih menghasilkan 401, dengan pemberitahuan kegagalan yang jelas dan penghentian bersih.
+- Bump versionCode 111 -> 112 dan versionName 1.7.19 -> 1.7.20.
+
 ## 1.7.19 - 2026-10-15
 
 - Penataan layout shift-proof Main Vault: menghilangkan teks keterangan dalam kurung pada judul Main Vault, memisahkan rincian Cash dan eBudget secara proporsional ke kolom terpisah, serta menempatkan dana Rollover pada baris mandiri sehingga tidak lagi bertumpuk atau terpotong pada layar ponsel.

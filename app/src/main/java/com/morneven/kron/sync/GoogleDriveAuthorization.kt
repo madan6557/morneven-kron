@@ -61,6 +61,7 @@ interface DriveAuthorizationSession {
     suspend fun connect(): DriveConnectResult
     suspend fun accessToken(interactive: Boolean = false): DriveAccessTokenResult
     suspend fun disconnect()
+    suspend fun invalidateToken(token: String? = null) {}
 }
 
 class AuthorizationClientDriveSession(
@@ -99,6 +100,7 @@ class AuthorizationClientDriveSession(
     suspend fun reauthorizeCurrent(): DriveConnectResult {
         val account = accountStore.read()
             ?: return DriveConnectResult.Failed("Akun Google belum terhubung", retryable = false)
+        invalidateToken()
         return acceptConnectionResult(account, authorize(account, interactive = true))
     }
 
@@ -152,17 +154,21 @@ class AuthorizationClientDriveSession(
         }
     }
 
-    override suspend fun disconnect() {
-        val account = accountStore.read()
-        val token = cachedGrant?.accessToken
+    override suspend fun invalidateToken(token: String?) {
+        val tokenToClear = token ?: cachedGrant?.accessToken
         cachedGrant = null
-        if (token != null) try {
-            authorizationClient.clearToken(token)
+        if (!tokenToClear.isNullOrBlank()) try {
+            authorizationClient.clearToken(tokenToClear)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             Unit
         }
+    }
+
+    override suspend fun disconnect() {
+        val account = accountStore.read()
+        invalidateToken()
         if (account != null) try {
             authorizationClient.revokeAccess(account, requestedScopes)
         } catch (cancelled: CancellationException) {

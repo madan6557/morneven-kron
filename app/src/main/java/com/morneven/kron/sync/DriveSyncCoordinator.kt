@@ -902,6 +902,7 @@ class DriveSyncCoordinator(
                 SyncRunResult.FreeOnlyBlocked
             }
             is DriveAuthorizationException -> {
+                runCatching { authorization.invalidateToken() }
                 stateStore.update { it.copy(status = SyncStatus.AUTHORIZATION_REQUIRED, lastError = error.message) }
                 SyncRunResult.AuthorizationRequired
             }

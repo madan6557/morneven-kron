@@ -612,7 +612,14 @@ private fun MainScaffold(
                 driveSyncRuntime?.let { runtime ->
                     scope.launch {
                         when (val connection = runtime.reauthorizeCurrent()) {
-                            is DriveConnectResult.Connected -> handleSyncResult(runtime.syncNow())
+                            is DriveConnectResult.Connected -> {
+                                val syncResult = runtime.syncNow()
+                                if (syncResult is SyncRunResult.AuthorizationRequired) {
+                                    viewModel.showMessage("Otorisasi Drive tidak valid. Silakan hubungkan ulang akun Google.")
+                                } else {
+                                    handleSyncResult(syncResult)
+                                }
+                            }
                             is DriveConnectResult.UserActionRequired -> {
                                 launchedAuthorizationId = null
                                 viewModel.setPendingDriveAuthorization(connection.account, connection.resolutionId)
@@ -688,7 +695,12 @@ private fun MainScaffold(
                         isAccountSwitching = false
                         awaitingDriveConnectionConfirmation = false
                         viewModel.showMessage("Terhubung ke ${result.account.email}")
-                        handleSyncResult(runtime.syncNow())
+                        val syncResult = runtime.syncNow()
+                        if (syncResult is SyncRunResult.AuthorizationRequired) {
+                            viewModel.showMessage("Otorisasi Drive tidak valid. Silakan hubungkan ulang akun Google.")
+                        } else {
+                            handleSyncResult(syncResult)
+                        }
                     }
                 }
             }

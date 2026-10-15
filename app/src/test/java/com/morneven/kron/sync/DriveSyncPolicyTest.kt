@@ -306,6 +306,81 @@ class DriveSyncPolicyTest {
         assertTrue(stateStore.read().lastError?.contains("Passphrase Drive salah") == true)
     }
 
+    @Test
+    fun driveAuthorizationExceptionInvalidatesToken() = runBlocking {
+        val stateStore = InMemoryStateStore()
+        var tokenInvalidated = false
+        val auth = object : DriveAuthorizationSession {
+            val account = GoogleAccountIdentity("subject-a", "owner@example.com")
+            override suspend fun currentAccount() = account
+            override suspend fun connect() = DriveConnectResult.Connected(account)
+            override suspend fun accessToken(interactive: Boolean) = DriveAccessTokenResult.Granted(account, "stale-token")
+            override suspend fun disconnect() = Unit
+            override suspend fun invalidateToken(token: String?) {
+                tokenInvalidated = true
+            }
+        }
+        val drive = object : DriveAppDataClient {
+            override suspend fun listSnapshots(accessToken: String): List<RemoteDriveSnapshot> {
+                throw DriveAuthorizationException("Otorisasi Google Drive perlu diperbarui", 401)
+            }
+            override suspend fun uploadSnapshot(accessToken: String, manifest: DriveSnapshotManifest, encryptedEnvelope: ByteArray) = error("unused")
+            override suspend fun downloadSnapshot(accessToken: String, fileId: String) = error("unused")
+            override suspend fun deleteSnapshot(accessToken: String, fileId: String) = error("unused")
+        }
+        val coordinator = DriveSyncCoordinator(
+            authorization = auth,
+            drive = drive,
+            local = object : LocalSnapshotSource {
+                override suspend fun describe() = LocalDatasetSnapshot("dataset-a", 1, 6, true)
+                override suspend fun exportSnapshotPayload() = "payload".toByteArray()
+                override suspend fun applyRemoteAtomically(payload: ByteArray, manifest: DriveSnapshotManifest, account: GoogleAccountIdentity) = LocalApplyOutcome.APPLIED
+            },
+            stateStore = stateStore,
+            secretProvider = SyncSecretProvider { "passphrase-aman".toCharArray() },
+            currentAppVersionCode = 22,
+        )
+
+        val result = coordinator.syncNow()
+        assertEquals(SyncRunResult.AuthorizationRequired, result)
+        assertEquals(SyncStatus.AUTHORIZATION_REQUIRED, stateStore.read().status)
+        assertTrue(tokenInvalidated)
+    }
+
+    @Test
+    fun authorizationSessionInvalidateTokenClearsCachedGrantAndBridgeToken() = runBlocking {
+        val account = GoogleAccountIdentity("subject-a", "owner@example.com")
+        val store = InMemoryAccountStore(account)
+        val clearedTokens = mutableListOf<String>()
+        val bridge = object : AuthorizationClientBridge {
+            var tokenCount = 1
+            override suspend fun authorize(account: GoogleAccountIdentity?, requestedScopes: Set<String>, interactive: Boolean): AuthorizationClientResult {
+                return AuthorizationClientResult.Granted("token-${tokenCount++}", 100_000, requestedScopes)
+            }
+            override suspend fun revokeAccess(account: GoogleAccountIdentity) = Unit
+            override suspend fun clearToken(accessToken: String) {
+                clearedTokens.add(accessToken)
+            }
+        }
+        val session = AuthorizationClientDriveSession(
+            accountSelector = CredentialManagerAccountSelector { account },
+            authorizationClient = bridge,
+            accountStore = store,
+            nowEpochMillis = { 1_000 },
+        )
+
+        val firstToken = session.accessToken(interactive = false)
+        assertTrue(firstToken is DriveAccessTokenResult.Granted)
+        assertEquals("token-1", (firstToken as DriveAccessTokenResult.Granted).accessToken)
+
+        session.invalidateToken()
+        assertEquals(listOf("token-1"), clearedTokens)
+
+        val secondToken = session.accessToken(interactive = false)
+        assertTrue(secondToken is DriveAccessTokenResult.Granted)
+        assertEquals("token-2", (secondToken as DriveAccessTokenResult.Granted).accessToken)
+    }
+
     private fun coordinator(stateStore: SyncStateStore, drive: DriveAppDataClient) = DriveSyncCoordinator(
         authorization = grantedAuthorization(),
         drive = drive,
