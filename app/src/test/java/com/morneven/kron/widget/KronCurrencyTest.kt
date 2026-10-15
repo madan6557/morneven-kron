@@ -108,4 +108,17 @@ class KronCurrencyTest {
         assertTrue(KronCurrencyManager.API_URLS.any { it.contains("open.er-api.com") })
         assertTrue(KronCurrencyManager.API_URLS.any { it.contains("exchangerate-api.com") })
     }
+
+    @Test
+    fun testKrmRateHistoryEntry() {
+        val entry = KrmRateHistoryEntry(1700000000L, 1450.0)
+        assertEquals(1700000000L, entry.timestampMs)
+        assertEquals(1450.0, entry.rate, 0.0001)
+    }
+
+    @Test
+    fun testGetKrmRateHistoryNullContextReturnsEmpty() {
+        val list = KronCurrencyManager.getKrmRateHistory(null)
+        assertTrue(list.isEmpty())
+    }
 }

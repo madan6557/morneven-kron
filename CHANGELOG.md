@@ -1,5 +1,12 @@
 # KRON Changelog
 
+## 1.7.23 - 2026-10-15
+
+- Perekaman riwayat perubahan kurs KRM: penambahan pencatatan kronologis pergerakan nilai tukar Kron Morneven ke penyimpanan terkelola dengan batas jendela data optimal, mencatat waktu dan nominal pergerakan setiap kali fluktuasi sintetis pasar terjadi.
+- Grafik visual fluktuasi kurs KRON: penambahan tombol grafik di samping opsi mata uang KRON pada dialog pengaturan mata uang, membuka dialog visual interaktif dengan grafik garis kanvas dinamis (Canvas line chart), arsiran gradien emas, ringkasan metrik statistik (kurs terkini, persentase tren, nilai terendah, rata-rata, dan tertinggi), kemampuan inspeksi sentuh titik data, tombol simulasi pergerakan pasar langsung, serta tabel riwayat data.
+- Imunitas pergeseran layout (shift-proof) menyeluruh: penguncian tinggi grid berpasangan dengan IntrinsicSize.Min dan fillMaxHeight pada kartu Masuk/Keluar Laporan dan Arus Kas Beranda; slot indikator perubahan tetap berukuran minimum 18.dp agar ada atau tidaknya indikator tidak mengubah tinggi kartu; proteksi overflow dan pencegahan pelipatan baris teks (maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) pada seluruh tampilan angka; serta normalisasi baris Rollover agar tinggi kartu tidak melompat saat menyembunyikan atau menampilkan nilai.
+- Bump versionCode 114 -> 115 dan versionName 1.7.22 -> 1.7.23.
+
 ## 1.7.22 - 2026-10-15
 
 - Desain profesional menu Laporan dan Pengaturan: perombakan metrik KPI cash flow menjadi grid 2 kolom modern untuk Masuk dan Keluar lengkap dengan indikator perubahan persentase dan nominal, penambahan hero banner Net Cash Flow/Perubahan dengan warna bertanda (signed color) dan ikon dompet, perancangan ulang baris Komposisi Aset menjadi kartu terstruktur dengan lencana kanal fisik/digital dan saldo tegas, serta penataan metrik ringkas pada Laporan Hutang.

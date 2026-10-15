@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -961,7 +963,14 @@ fun ChannelBadge(channel: String) {
 @Composable
 fun Metric(label: String, value: String, modifier: Modifier = Modifier, color: Color = MaterialTheme.colorScheme.onSurface) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            label.uppercase(),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+        )
         Text(value, style = MaterialTheme.typography.titleMedium, color = color, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false)
     }
 }
@@ -1294,6 +1303,7 @@ fun TransactionCardItem(
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
 
@@ -1407,17 +1417,21 @@ fun HeroBalanceCard(
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             softWrap = false,
+            overflow = TextOverflow.Ellipsis,
         )
 
         Spacer(Modifier.height(14.dp))
 
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(IntrinsicSize.Min),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Surface(
                 modifier = Modifier
                     .weight(1f)
+                    .fillMaxHeight()
                     .clickable(
                         enabled = visible && shouldCompactSecondaryHomeMoney(cashAssets),
                         onClick = { onExactMoney?.invoke("Total Cash", cashAssets) },
@@ -1449,6 +1463,7 @@ fun HeroBalanceCard(
                         color = KronGold,
                         maxLines = 1,
                         softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -1456,6 +1471,7 @@ fun HeroBalanceCard(
             Surface(
                 modifier = Modifier
                     .weight(1f)
+                    .fillMaxHeight()
                     .clickable(
                         enabled = visible && shouldCompactSecondaryHomeMoney(eBudgetAssets),
                         onClick = { onExactMoney?.invoke("Total eBudget", eBudgetAssets) },
@@ -1487,6 +1503,7 @@ fun HeroBalanceCard(
                         color = KronBlue,
                         maxLines = 1,
                         softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -1530,6 +1547,7 @@ fun HeroBalanceCard(
                         color = MaterialTheme.colorScheme.tertiary,
                         maxLines = 1,
                         softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
 
@@ -1578,7 +1596,7 @@ fun HeroBalanceCard(
                     }
                 }
 
-                if (rollover > 0 || !visible) {
+                if (rollover > 0) {
                     HorizontalDivider(
                         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f),
                         thickness = 0.6.dp,
@@ -1602,6 +1620,7 @@ fun HeroBalanceCard(
                             color = MaterialTheme.colorScheme.tertiary,
                             maxLines = 1,
                             softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
@@ -1728,6 +1747,9 @@ fun CashFlowCard(
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                     color = signedColor(net),
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                 )
             }
@@ -1736,12 +1758,16 @@ fun CashFlowCard(
         Spacer(Modifier.height(12.dp))
 
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(IntrinsicSize.Min),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             // Inflow
             Surface(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
                 shape = KronSubCardShape,
                 color = KronGreen.copy(alpha = 0.08f),
                 border = BorderStroke(0.8.dp, KronGreen.copy(alpha = 0.25f)),
@@ -1766,7 +1792,13 @@ fun CashFlowCard(
                         }
                     }
                     Column {
-                        Text("Masuk", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            "Masuk",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
                         Text(
                             displayMoney(income, visible),
                             style = MaterialTheme.typography.titleSmall,
@@ -1774,6 +1806,7 @@ fun CashFlowCard(
                             color = KronGreen,
                             maxLines = 1,
                             softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
@@ -1781,7 +1814,9 @@ fun CashFlowCard(
 
             // Outflow
             Surface(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
                 shape = KronSubCardShape,
                 color = MaterialTheme.colorScheme.error.copy(alpha = 0.08f),
                 border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.25f)),
@@ -1806,7 +1841,13 @@ fun CashFlowCard(
                         }
                     }
                     Column {
-                        Text("Keluar", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            "Keluar",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
                         Text(
                             displayMoney(expense, visible),
                             style = MaterialTheme.typography.titleSmall,
@@ -1814,6 +1855,7 @@ fun CashFlowCard(
                             color = MaterialTheme.colorScheme.error,
                             maxLines = 1,
                             softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }

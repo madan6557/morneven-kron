@@ -44,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.morneven.kron.data.DebtCalculator
 import com.morneven.kron.data.DebtEntity
@@ -245,13 +246,26 @@ private fun DebtCard(
         }
         HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Column {
-                Text("Pokok tersisa", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(displayMoney(debt.principalOutstanding, valuesVisible), style = MaterialTheme.typography.titleMedium)
+            Column(modifier = Modifier.weight(1f, fill = false)) {
+                Text("Pokok tersisa", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, softWrap = false)
+                Text(
+                    displayMoney(debt.principalOutstanding, valuesVisible),
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
-            Column(horizontalAlignment = Alignment.End) {
-                Text("Bunga berjalan", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(displayMoney(interest, valuesVisible), style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f, fill = false), horizontalAlignment = Alignment.End) {
+                Text("Bunga berjalan", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, softWrap = false)
+                Text(
+                    displayMoney(interest, valuesVisible),
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
         due?.let {

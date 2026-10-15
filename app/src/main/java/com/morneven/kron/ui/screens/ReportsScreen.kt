@@ -8,13 +8,17 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -111,12 +115,12 @@ private fun ChangeIndicator(
     if (previous == null || (previous == 0L && current == 0L) || (previous != 0L && current == previous)) return
 
     if (!visible) {
-        Text("Rp ***", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Rp ***", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, softWrap = false)
         return
     }
 
     if (previous == 0L) {
-        Text("Baru", style = MaterialTheme.typography.bodySmall, color = KronGreen)
+        Text("Baru", style = MaterialTheme.typography.bodySmall, color = KronGreen, maxLines = 1, softWrap = false)
         return
     }
 
@@ -131,7 +135,14 @@ private fun ChangeIndicator(
         ComparisonType.NET -> if (delta >= 0) KronGreen else MaterialTheme.colorScheme.error
     }
 
-    Text("$nominalStr ($percentStr)", style = MaterialTheme.typography.bodySmall, color = color)
+    Text(
+        "$nominalStr ($percentStr)",
+        style = MaterialTheme.typography.bodySmall,
+        color = color,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Ellipsis,
+    )
 }
 
 @Composable
@@ -344,7 +355,7 @@ fun ReportsScreen(
                 )
                 HudCard {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         ReportKpiCard(
@@ -352,7 +363,7 @@ fun ReportsScreen(
                             value = money(income),
                             icon = Icons.Outlined.ArrowDownward,
                             color = KronGreen,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
                             indicator = {
                                 ChangeIndicator(income, prevIncome, ComparisonType.INCOME, visible, ::compactChange)
                             },
@@ -362,7 +373,7 @@ fun ReportsScreen(
                             value = money(expense),
                             icon = Icons.Outlined.ArrowUpward,
                             color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
                             indicator = {
                                 ChangeIndicator(expense, prevExpense, ComparisonType.EXPENSE, visible, ::compactChange)
                             },
@@ -762,6 +773,8 @@ private fun ReportKpiCard(
                     label.uppercase(),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
                 )
                 Box(
                     modifier = Modifier
@@ -783,10 +796,18 @@ private fun ReportKpiCard(
                 fontWeight = FontWeight.Bold,
                 color = color,
                 maxLines = 1,
+                softWrap = false,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (indicator != null) {
-                indicator()
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 18.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (indicator != null) {
+                    indicator()
+                }
             }
         }
     }
@@ -820,7 +841,7 @@ private fun NetCashFlowCard(
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f, fill = false),
             ) {
                 Box(
                     modifier = Modifier
@@ -840,18 +861,27 @@ private fun NetCashFlowCard(
                         label.uppercase(),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false,
                     )
-                    if (indicator != null) {
-                        indicator()
+                    Box(
+                        modifier = Modifier.heightIn(min = 16.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        if (indicator != null) {
+                            indicator()
+                        }
                     }
                 }
             }
+            Spacer(Modifier.width(8.dp))
             Text(
                 value,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = netColor,
                 maxLines = 1,
+                softWrap = false,
                 overflow = TextOverflow.Ellipsis,
             )
         }
@@ -875,8 +905,22 @@ private fun ReportMetricCompact(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
-            Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                label.uppercase(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                softWrap = false,
+            )
+            Text(
+                value,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = color,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
@@ -901,9 +945,9 @@ private fun BucketDetails(bucket: CashFlowBucket, money: (Long) -> String, previ
 
 @Composable
 private fun ReportValueRow(label: String, value: String, color: Color) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
-        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-        Text(value, style = MaterialTheme.typography.labelLarge, color = color, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f), maxLines = 1, softWrap = false)
+        Text(value, style = MaterialTheme.typography.labelLarge, color = color, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -936,6 +980,7 @@ private fun AssetRow(channel: String, value: Long, money: (Long) -> String) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.weight(1f, fill = false),
         ) {
             Box(
                 modifier = Modifier
@@ -959,14 +1004,18 @@ private fun AssetRow(channel: String, value: Long, money: (Long) -> String) {
                     if (isCash) "Kas tunai & fisik" else "Akun bank & digital",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
                 )
             }
         }
+        Spacer(Modifier.width(8.dp))
         Text(
             money(value),
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
+            softWrap = false,
             overflow = TextOverflow.Ellipsis,
         )
     }

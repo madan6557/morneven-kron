@@ -9,12 +9,21 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.util.Locale
+
+/**
+ * Historical exchange rate record for KRM or other tracked currencies.
+ */
+data class KrmRateHistoryEntry(
+    val timestampMs: Long,
+    val rate: Double,
+)
 
 /**
  * Supported currencies for KRON Android Widget and displays.
@@ -157,6 +166,7 @@ object KronCurrencyManager {
         val newRate = nextKrmIdrRate(current, magnitude, Random.nextBoolean())
 
         prefs.edit().putString(KEY_KRM_IDR_RATE, newRate.toString()).apply()
+        recordKrmRate(context, newRate)
         return newRate
     }
 
@@ -165,6 +175,91 @@ object KronCurrencyManager {
         val direction = if (increase) 1.0 else -1.0
         val next = startingRate * (1.0 + magnitude * direction)
         return if (next.isFinite()) next.coerceAtLeast(KRM_FLOOR_IDR) else startingRate
+    }
+
+    private const val KEY_KRM_HISTORY = "krm_synthetic_rate_history"
+    private const val MAX_HISTORY_POINTS = 120
+
+    /**
+     * Retrieves the chronological list of recorded KRM exchange rate data points.
+     * Guaranteed to return at least one initial baseline point.
+     */
+    fun getKrmRateHistory(context: Context?): List<KrmRateHistoryEntry> {
+        if (context == null) return emptyList()
+        val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
+        val raw = prefs.getString(KEY_KRM_HISTORY, null)
+        val currentRate = getKrmIdrRate(context)
+        if (raw.isNullOrBlank()) {
+            val now = System.currentTimeMillis()
+            val initial = listOf(
+                KrmRateHistoryEntry(now - 3600_000L, KRM_BASE_IDR),
+                KrmRateHistoryEntry(now, currentRate),
+            )
+            saveKrmRateHistory(context, initial)
+            return initial
+        }
+        return try {
+            val array = JSONArray(raw)
+            val list = mutableListOf<KrmRateHistoryEntry>()
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val time = obj.optLong("time", 0L)
+                val rate = obj.optDouble("rate", 0.0)
+                if (time > 0L && rate > 0.0 && rate.isFinite()) {
+                    list.add(KrmRateHistoryEntry(time, rate))
+                }
+            }
+            if (list.isEmpty()) {
+                val now = System.currentTimeMillis()
+                val initial = listOf(KrmRateHistoryEntry(now, currentRate))
+                saveKrmRateHistory(context, initial)
+                initial
+            } else {
+                list
+            }
+        } catch (_: Exception) {
+            val now = System.currentTimeMillis()
+            listOf(KrmRateHistoryEntry(now, currentRate))
+        }
+    }
+
+    /**
+     * Records a new exchange rate data point into the chronological history.
+     */
+    fun recordKrmRate(context: Context, rate: Double, timestampMs: Long = System.currentTimeMillis()) {
+        val currentHistory = getKrmRateHistory(context).toMutableList()
+        currentHistory.add(KrmRateHistoryEntry(timestampMs, rate))
+        val trimmed = if (currentHistory.size > MAX_HISTORY_POINTS) {
+            currentHistory.takeLast(MAX_HISTORY_POINTS)
+        } else {
+            currentHistory
+        }
+        saveKrmRateHistory(context, trimmed)
+    }
+
+    private fun saveKrmRateHistory(context: Context, list: List<KrmRateHistoryEntry>) {
+        val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
+        val array = JSONArray()
+        for (entry in list) {
+            val obj = JSONObject()
+            obj.put("time", entry.timestampMs)
+            obj.put("rate", entry.rate)
+            array.put(obj)
+        }
+        prefs.edit().putString(KEY_KRM_HISTORY, array.toString()).apply()
+    }
+
+    /**
+     * Resets the KRM rate history to a fresh baseline at the current rate.
+     */
+    fun clearKrmRateHistory(context: Context) {
+        val now = System.currentTimeMillis()
+        val currentRate = getKrmIdrRate(context)
+        val initial = listOf(
+            KrmRateHistoryEntry(now - 1800_000L, KRM_BASE_IDR),
+            KrmRateHistoryEntry(now, currentRate),
+        )
+        saveKrmRateHistory(context, initial)
     }
 
     // ------------------------------------------------------------------

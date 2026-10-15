@@ -296,7 +296,15 @@ private fun ActiveBudgetCard(
                 Spacer(Modifier.height(2.dp))
                 Text("${if (paused) "JEDA" else first.periodStatus.replace('_', ' ')} · ${LocalDate.ofEpochDay(first.startEpochDay).format(indonesianDate)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Text(displayMoney(available, visible), color = signedColor(available), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+            Text(
+                displayMoney(available, visible),
+                color = signedColor(available),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                softWrap = false,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
         }
         Spacer(Modifier.height(10.dp))
         BudgetProgress(booked, available)
@@ -312,13 +320,18 @@ private fun ActiveBudgetCard(
                 Text(
                     "Sisa belum dibagi",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
                 )
                 Text(
                     displayMoney(unallocated, visible),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )
             }
         }
@@ -386,6 +399,7 @@ private fun ActiveBudgetCard(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 softWrap = false,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             )
                         } else {
                             Text(
@@ -395,6 +409,7 @@ private fun ActiveBudgetCard(
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1,
                                 softWrap = false,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             )
                             Text(
                                 "booking ${displayMoney(row.bookedAmount, visible)}",
@@ -402,6 +417,7 @@ private fun ActiveBudgetCard(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 softWrap = false,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             )
                         }
                     }

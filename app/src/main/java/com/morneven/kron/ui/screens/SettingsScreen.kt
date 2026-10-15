@@ -79,9 +79,11 @@ import com.morneven.kron.widget.KronCurrencyManager
 import com.morneven.kron.widget.KronCurrencySyncScheduler
 import com.morneven.kron.widget.WidgetCurrency
 import kotlinx.coroutines.launch
+import androidx.compose.material.icons.automirrored.outlined.ShowChart
 import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import com.morneven.kron.ui.components.KrmRateChartDialog
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import android.widget.Toast
@@ -208,6 +210,7 @@ fun SettingsScreen(
     var showArchive by rememberSaveable { mutableStateOf(false) }
     var showGlossary by rememberSaveable { mutableStateOf(false) }
     var showCurrencyDialog by rememberSaveable { mutableStateOf(false) }
+    var showKrmChartDialog by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val activeAccounts = state.accountBalances
@@ -777,6 +780,18 @@ fun SettingsScreen(
                                     )
                                 }
 
+                                if (curr == WidgetCurrency.KRON) {
+                                    IconButton(
+                                        onClick = { showKrmChartDialog = true },
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Outlined.ShowChart,
+                                            contentDescription = "Lihat grafik pergerakan kurs KRM",
+                                            tint = KronGold,
+                                        )
+                                    }
+                                }
+
                                 RadioButton(
                                     selected = isSelected,
                                     onClick = {
@@ -871,6 +886,12 @@ fun SettingsScreen(
                     Text("Tutup")
                 }
             },
+        )
+    }
+
+    if (showKrmChartDialog) {
+        KrmRateChartDialog(
+            onDismissRequest = { showKrmChartDialog = false },
         )
     }
 }
@@ -1039,7 +1060,13 @@ private fun RecurringRuleCard(
                 Text(rule.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(status, style = MaterialTheme.typography.labelSmall, color = statusColor)
             }
-            Text(displayMoney(rule.amount, valuesVisible), style = MaterialTheme.typography.titleSmall)
+            Text(
+                displayMoney(rule.amount, valuesVisible),
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         Text(
             "${if (rule.direction == "INCOME") "Pemasukan" else "Pengeluaran"} setiap ${rule.intervalCount} ${if (rule.cadence == "YEARLY") "tahun" else "bulan"}",
