@@ -322,9 +322,10 @@ private fun ActiveBudgetCard(
             }
         }
         Spacer(Modifier.height(12.dp))
-        val visibleRows = rows.filter { it.isActive && !(it.periodStatus != PeriodStatus.DRAFT && it.bookedAmount == 0L && it.availableAmount == 0L && it.spentAmount == 0L) }
+        val visibleRows = rows.filter { it.isActive }
         visibleRows.forEach { row ->
             val cat = categoryMap[row.categoryId]
+            val isUnfunded = row.periodStatus != PeriodStatus.DRAFT && row.bookedAmount == 0L && row.availableAmount == 0L && row.spentAmount == 0L && row.plannedAmount > 0L
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -363,21 +364,45 @@ private fun ActiveBudgetCard(
                         }
                     }
                     Column(horizontalAlignment = Alignment.End) {
-                        Text(
-                            displayMoney(row.availableAmount, visible),
-                            color = signedColor(row.availableAmount),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            softWrap = false,
-                        )
-                        Text(
-                            "booking ${displayMoney(row.bookedAmount, visible)}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            softWrap = false,
-                        )
+                        if (isUnfunded) {
+                            Surface(
+                                color = KronGold.copy(alpha = 0.14f),
+                                shape = KronChipShape,
+                                border = BorderStroke(0.6.dp, KronGold.copy(alpha = 0.4f)),
+                            ) {
+                                Text(
+                                    text = "Perlu booking",
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = KronGold,
+                                )
+                            }
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                "rencana ${displayMoney(row.plannedAmount, visible)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                        } else {
+                            Text(
+                                displayMoney(row.availableAmount, visible),
+                                color = signedColor(row.availableAmount),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                            Text(
+                                "booking ${displayMoney(row.bookedAmount, visible)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                        }
                     }
                 }
             }

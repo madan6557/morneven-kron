@@ -40,6 +40,19 @@ import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Devices
+import androidx.compose.material.icons.outlined.Security
+import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.sp
+import com.morneven.kron.ui.components.ActivityStatusTag
+import com.morneven.kron.ui.components.CategoryAvatar
+import com.morneven.kron.ui.components.CategoryIconPicker
+import com.morneven.kron.ui.components.primaryImpact
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
@@ -102,6 +115,7 @@ import com.morneven.kron.data.PeriodStatus
 import com.morneven.kron.data.TransactionDirection
 import com.morneven.kron.data.ReceiptEntity
 import com.morneven.kron.data.ResolutionAudit
+import com.morneven.kron.data.ResolutionAuditDetail
 import com.morneven.kron.evidence.EvidenceHealth
 import com.morneven.kron.evidence.EvidencePackageManager
 import com.morneven.kron.evidence.EvidenceVerificationResult
@@ -705,9 +719,10 @@ fun BudgetDetailDialog(
     onRenameCategory: ((Long, String) -> Unit)? = null,
     onDeleteCategory: ((Long, String) -> Unit)? = null,
     onRestoreCategory: ((Long, Long, Int, String, Long?) -> Unit)? = null,
+    onUpdateCategoryVisual: ((Long, String, Long?) -> Unit)? = null,
 ) {
     val rows = state.allocations.filter { it.periodId == periodId }
-    val visibleRows = rows.filter { it.isActive && !(it.periodStatus != PeriodStatus.DRAFT && it.bookedAmount == 0L && it.availableAmount == 0L && it.spentAmount == 0L) }
+    val visibleRows = rows.filter { it.isActive }
     val periodUsed = rows.sumOf { it.plannedAmount }
     val periodTotal = state.periods.firstOrNull { it.id == periodId }?.plannedTotal ?: periodUsed
     val visibleCategoryIds = remember(visibleRows) { visibleRows.map { it.categoryId }.toSet() }
@@ -740,6 +755,8 @@ fun BudgetDetailDialog(
     var renameValue by rememberSaveable { mutableStateOf("") }
     var deleteCategoryId by rememberSaveable { mutableStateOf<Long?>(null) }
     var deleteNote by rememberSaveable { mutableStateOf("Hapus kategori") }
+    var iconEditCategoryId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var selectedIconKey by rememberSaveable { mutableStateOf("") }
     val keypadHost = remember { CalculatorKeypadHostState() }
 
     @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
@@ -922,12 +939,14 @@ fun BudgetDetailDialog(
                     val isPeriodActiveOrClosed = firstRow.periodStatus != PeriodStatus.DRAFT
                     fun allocEffectivePlanned(alloc: AllocationBalanceRow?): Long {
                         if (alloc == null) return 0L
-                        return if (isPeriodActiveOrClosed && alloc.bookedAmount == 0L && alloc.availableAmount == 0L && alloc.spentAmount == 0L) 0L
-                        else alloc.plannedAmount
+                        return alloc.plannedAmount
                     }
                     val totalPlanned = catRows.sumOf { allocEffectivePlanned(it) }
                     val totalSpent = catRows.sumOf { it.spentAmount }
                     val totalAvailable = catRows.sumOf { it.availableAmount }
+                    val isCategoryUnfunded = firstRow.periodStatus != PeriodStatus.DRAFT &&
+                        catRows.all { it.bookedAmount == 0L && it.availableAmount == 0L && it.spentAmount == 0L } &&
+                        totalPlanned > 0L
                     val hasCash = cAlloc != null && (allocEffectivePlanned(cAlloc) > 0L || cAlloc.availableAmount > 0L || cAlloc.spentAmount > 0L)
                     val hasEBudget = ebAlloc != null && (allocEffectivePlanned(ebAlloc) > 0L || ebAlloc.availableAmount > 0L || ebAlloc.spentAmount > 0L)
                     val isSplit = hasCash && hasEBudget
@@ -936,12 +955,32 @@ fun BudgetDetailDialog(
                         Column(Modifier.fillMaxWidth()) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                if (hasCash) ChannelBadge(FundingChannel.CASH)
-                                if (hasEBudget) ChannelBadge(FundingChannel.EBUDGET)
-                                if (!hasCash && !hasEBudget) ChannelBadge(firstRow.fundingChannel)
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    if (hasCash) ChannelBadge(FundingChannel.CASH)
+                                    if (hasEBudget) ChannelBadge(FundingChannel.EBUDGET)
+                                    if (!hasCash && !hasEBudget) ChannelBadge(firstRow.fundingChannel)
+                                }
+                                if (isCategoryUnfunded) {
+                                    Surface(
+                                        color = KronGold.copy(alpha = 0.14f),
+                                        shape = KronChipShape,
+                                        border = BorderStroke(0.6.dp, KronGold.copy(alpha = 0.4f)),
+                                    ) {
+                                        Text(
+                                            text = "Belum didanai",
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = KronGold,
+                                        )
+                                    }
+                                }
                             }
                             Spacer(Modifier.height(4.dp))
                             Text(categoryName, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -1013,10 +1052,37 @@ fun BudgetDetailDialog(
                                     }
                                 }
                             }
-                            if (!readOnly && (onRenameCategory != null || onDeleteCategory != null)) {
+                            if (!readOnly && (onRenameCategory != null || onDeleteCategory != null || onUpdateCategoryVisual != null)) {
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    if (onRenameCategory != null) TextButton(onClick = { renameCategoryId = categoryId; renameValue = categoryName; deleteCategoryId = null; correctionId = null }) { Text("Ganti nama") }
-                                    if (onDeleteCategory != null) TextButton(onClick = { deleteCategoryId = categoryId; deleteNote = "Arsipkan kategori $categoryName"; renameCategoryId = null; correctionId = null }) { Text("Arsipkan", color = MaterialTheme.colorScheme.error) }
+                                    if (onRenameCategory != null) TextButton(onClick = { renameCategoryId = categoryId; renameValue = categoryName; deleteCategoryId = null; correctionId = null; iconEditCategoryId = null }) { Text("Ganti nama") }
+                                    if (onUpdateCategoryVisual != null) TextButton(onClick = { iconEditCategoryId = categoryId; selectedIconKey = state.categories.firstOrNull { it.id == categoryId }?.icon ?: "category"; renameCategoryId = null; deleteCategoryId = null; correctionId = null }) { Text("Ubah icon") }
+                                    if (onDeleteCategory != null) TextButton(onClick = { deleteCategoryId = categoryId; deleteNote = "Arsipkan kategori $categoryName"; renameCategoryId = null; correctionId = null; iconEditCategoryId = null }) { Text("Arsipkan", color = MaterialTheme.colorScheme.error) }
+                                }
+                            }
+                            if (!readOnly && iconEditCategoryId == categoryId && onUpdateCategoryVisual != null) {
+                                Spacer(Modifier.height(8.dp))
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = KronSubCardShape,
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                                    border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)),
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        Text("Pilih icon untuk $categoryName", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.tertiary)
+                                        CategoryIconPicker(selectedKey = selectedIconKey, onSelectKey = { selectedIconKey = it })
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Button(
+                                                onClick = {
+                                                    onUpdateCategoryVisual(categoryId, selectedIconKey, null)
+                                                    iconEditCategoryId = null
+                                                },
+                                                shape = KronButtonShape,
+                                            ) {
+                                                Text("Simpan icon")
+                                            }
+                                            TextButton(onClick = { iconEditCategoryId = null }) { Text("Batal") }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1670,6 +1736,12 @@ fun AuditDialog(
     val resolutionDetail = auditDetails.asSequence()
         .mapNotNull { ResolutionAudit.parse(it.beforeJson, it.afterJson) }
         .firstOrNull()
+
+    val category = remember(state.categories, event.title) {
+        state.categories.firstOrNull { it.name == event.title }
+    }
+    val eventChannels = state.eventChannels[event.id].orEmpty()
+
     FormDialog(
         "Detail audit",
         onDismiss,
@@ -1680,135 +1752,1016 @@ fun AuditDialog(
             else onRevert(event.id, reason)
         },
     ) {
-        Text(event.title, style = MaterialTheme.typography.titleLarge)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(eventTypeLabel(event.type), color = MaterialTheme.colorScheme.tertiary)
-            Text(event.auditStatus, color = if (event.auditStatus == "Integrity problem") MaterialTheme.colorScheme.error else KronGreen)
-        }
-        val eventChannels = state.eventChannels[event.id].orEmpty()
-        if (eventChannels.isNotEmpty()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                eventChannels.sorted().forEach { ChannelBadge(it) }
-            }
-        }
-        val createdAtTime = java.time.Instant.ofEpochMilli(event.createdAt)
-            .atZone(java.time.ZoneId.systemDefault())
-            .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss", java.util.Locale.forLanguageTag("id-ID")))
-        Text("Tanggal efektif: ${LocalDate.ofEpochDay(event.effectiveEpochDay)}, $createdAtTime")
-        Text("Sumber: ${event.source}")
-        Text("Pelaku: ${event.actor}")
-        Text("Perangkat: ${event.deviceId.take(16)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        AuditHeroCard(
+            event = event,
+            category = category,
+            eventChannels = eventChannels,
+            valuesVisible = state.valuesVisible,
+        )
 
         if (isAttachEvidence && parentEvent != null) {
-            HorizontalDivider()
-            Text("Transaksi induk", style = MaterialTheme.typography.titleMedium)
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(parentEvent.title, style = MaterialTheme.typography.bodyLarge)
-                Text("${eventTypeLabel(parentEvent.type)} · ${LocalDate.ofEpochDay(parentEvent.effectiveEpochDay)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (parentEvent.cashImpact != 0L) Text("Dampak akun: ${displayMoney(parentEvent.cashImpact, state.valuesVisible)}", style = MaterialTheme.typography.bodySmall)
-            }
-        } else {
-            resolutionDetail?.let { detail ->
-                HorizontalDivider()
-                Text("Ringkasan resolusi", style = MaterialTheme.typography.titleMedium)
-                Text("${displayMoney(detail.amount, state.valuesVisible)} · ${detail.channel}", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.tertiary)
-                Text("Akun: ${detail.account}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("Alur dana", style = MaterialTheme.typography.labelLarge)
-                AuditFlowNode("Sumber", detail.source.label, detail.source.detail, detail.source.before, detail.source.after, state.valuesVisible)
-                Text("↓", modifier = Modifier.padding(start = 12.dp), color = MaterialTheme.colorScheme.tertiary)
-                AuditFlowNode("Tujuan", detail.target.label, detail.target.detail, detail.target.before, detail.target.after, state.valuesVisible)
-            }
-            HorizontalDivider()
-            Text("Dampak akun: ${displayMoney(event.cashImpact, state.valuesVisible)}")
-            Text("Dampak Vault: ${displayMoney(event.vaultImpact, state.valuesVisible)}")
-            Text("Dampak rollover: ${displayMoney(event.rolloverImpact, state.valuesVisible)}")
-            Text("Dampak belum dialokasikan: ${displayMoney(event.unallocatedImpact, state.valuesVisible)}")
-            if (resolutionDetail == null) {
-                Text("Dampak kategori: ${displayMoney(event.budgetImpact, state.valuesVisible)}")
-            } else {
-                Text("Mutasi kategori ditampilkan per sumber dan tujuan di atas.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Text("Debit: ${displayMoney(event.ledgerDebit, state.valuesVisible)}")
-            Text("Kredit: ${displayMoney(event.ledgerCredit, state.valuesVisible)}")
+            AuditParentEventCard(
+                parentEvent = parentEvent,
+                valuesVisible = state.valuesVisible,
+            )
         }
 
-        if (event.note.isNotBlank()) Text("Catatan: ${event.note}")
-        HorizontalDivider()
-        Text("Foto bukti (${receipts.size})", style = MaterialTheme.typography.titleMedium)
-        if (receipts.isEmpty()) {
-            Text("Belum ada foto bukti untuk event ini.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } else {
-            receipts.take(10).forEach { receipt ->
-                ReceiptEvidenceItem(receipt, onReceiptPreview, onOpenReceipt)
-            }
-            if (receipts.size > 10) Text("${receipts.size - 10} bukti lain tersedia di Pusat Bukti.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        resolutionDetail?.let { detail ->
+            AuditResolutionCard(
+                detail = detail,
+                valuesVisible = state.valuesVisible,
+            )
         }
-        if (!readOnly && event.type in setOf("INCOME", "EXPENSE", "UNEXPECTED_EXPENSE")) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { onCameraCapture(event.id) }, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Outlined.CameraAlt, contentDescription = null)
-                    Text(" Ambil foto")
-                }
-                OutlinedButton(onClick = { onGalleryPick(event.id) }, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Outlined.PhotoLibrary, contentDescription = null)
-                    Text(" Pilih galeri")
-                }
-            }
-            Text("Foto disalin ke penyimpanan privat dan dienkripsi.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        if (!readOnly) {
-            OutlinedButton(onClick = { onExportEvidence(event.id) }, modifier = Modifier.fillMaxWidth()) {
-                Text("Ekspor paket bukti transaksi")
-            }
-        }
-        if (readOnly) Text("Role Viewer hanya dapat membaca audit transaksi.", color = MaterialTheme.colorScheme.tertiary)
-        else if (lifecycleEvent) Text(
-            if (event.type in setOf("DEBT_OPEN", "DEBT_ARCHIVE")) {
-                "Event tracker hutang bersifat read-only. Gunakan detail hutang untuk melihat riwayatnya."
-            } else {
-                "Event lifecycle bersifat read-only. Gunakan tab Arsip untuk memulihkan atau mengarsipkan kembali."
-            },
-            color = MaterialTheme.colorScheme.tertiary,
+
+        AuditFinancialImpactCard(
+            event = event,
+            resolutionDetail = resolutionDetail,
+            valuesVisible = state.valuesVisible,
         )
-        else if (event.reversedByEventId != null) Text("Event sudah dibatalkan dengan reversal", color = MaterialTheme.colorScheme.error)
-        else if (event.type == "REVERSAL" && onRestoreReversal != null && event.relatedEventId != null) {
-            if (reversalRestored) {
-                Text("Event sudah dipulihkan", color = MaterialTheme.colorScheme.error)
-            } else {
-                var remainingMillis by remember { mutableLongStateOf(0L) }
-                LaunchedEffect(event.id) {
-                    while (true) {
-                        remainingMillis = 7L * 24 * 60 * 60 * 1000 - (System.currentTimeMillis() - event.createdAt)
-                        if (remainingMillis <= 0L) break
-                        delay(60_000L)
+
+        AuditMetadataCard(
+            event = event,
+        )
+
+        AuditEvidenceCard(
+            eventId = event.id,
+            eventType = event.type,
+            receipts = receipts,
+            readOnly = readOnly,
+            onCameraCapture = onCameraCapture,
+            onGalleryPick = onGalleryPick,
+            onExportEvidence = onExportEvidence,
+            onReceiptPreview = onReceiptPreview,
+            onOpenReceipt = onOpenReceipt,
+        )
+
+        AuditActionCard(
+            event = event,
+            readOnly = readOnly,
+            lifecycleEvent = lifecycleEvent,
+            reversalRestored = reversalRestored,
+            onRestoreReversal = onRestoreReversal,
+            correctionMode = correctionMode,
+            onCorrectionModeChange = { correctionMode = it },
+            correctedTitle = correctedTitle,
+            onCorrectedTitleChange = { correctedTitle = it },
+            correctedNote = correctedNote,
+            onCorrectedNoteChange = { correctedNote = it },
+            reason = reason,
+            onReasonChange = { reason = it },
+        )
+    }
+}
+
+@Composable
+private fun AuditHeroCard(
+    event: ActivityRow,
+    category: CategoryEntity?,
+    eventChannels: Set<String>,
+    valuesVisible: Boolean,
+) {
+    val impact = event.primaryImpact()
+    val money = displayMoney(impact, valuesVisible)
+    val reversed = event.reversedByEventId != null
+    val isIntegrityOk = event.auditStatus != "Integrity problem"
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = KronSubCardShape,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CategoryAvatar(
+                    categoryName = category?.name ?: event.title,
+                    iconKey = category?.icon,
+                    colorLong = category?.color,
+                    type = event.type,
+                    size = 46.dp,
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Text(
+                        text = event.title,
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            textDecoration = if (reversed) androidx.compose.ui.text.style.TextDecoration.LineThrough else null,
+                        ),
+                        color = if (reversed) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = if (category != null && category.name != event.title) "${category.name} · ${eventTypeLabel(event.type)}" else eventTypeLabel(event.type),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.tertiary,
+                        )
+                        ActivityStatusTag(event)
                     }
                 }
-                val remainingText = when {
-                    remainingMillis <= 0L -> "Periode pemulihan telah berakhir"
-                    remainingMillis >= 2 * 24 * 60 * 60 * 1000L -> "${remainingMillis / (24 * 60 * 60 * 1000L)} hari tersisa"
-                    remainingMillis >= 24 * 60 * 60 * 1000L -> "1 hari ${remainingMillis % (24 * 60 * 60 * 1000L) / (60 * 60 * 1000L)} jam tersisa"
-                    remainingMillis >= 60 * 60 * 1000L -> "${remainingMillis / (60 * 60 * 1000L)} jam ${remainingMillis % (60 * 60 * 1000L) / (60 * 1000L)} menit tersisa"
-                    else -> "${remainingMillis / (60 * 1000L)} menit tersisa"
+            }
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+                shape = KronFieldShape,
+                border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = "DAMPAK UTAMA",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = if (reversed) "Dibatalkan" else eventTypeLabel(event.type),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                        )
+                    }
+                    Text(
+                        text = money,
+                        color = if (reversed) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f) else signedColor(impact),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
                 }
-                OutlinedButton(
-                    onClick = { onRestoreReversal(event.relatedEventId) },
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (eventChannels.isNotEmpty()) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        eventChannels.sorted().forEach { ChannelBadge(it) }
+                    }
+                } else {
+                    Spacer(Modifier.width(1.dp))
+                }
+
+                val integrityTint = if (isIntegrityOk) KronGreen else MaterialTheme.colorScheme.error
+                Surface(
+                    color = integrityTint.copy(alpha = 0.12f),
+                    shape = KronChipShape,
+                    border = BorderStroke(0.6.dp, integrityTint.copy(alpha = 0.35f)),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = if (isIntegrityOk) Icons.Outlined.CheckCircle else Icons.Outlined.ErrorOutline,
+                            contentDescription = null,
+                            tint = integrityTint,
+                            modifier = Modifier.size(13.dp),
+                        )
+                        Text(
+                            text = if (isIntegrityOk) "Audit Valid" else event.auditStatus,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = integrityTint,
+                        )
+                    }
+                }
+            }
+
+            if (event.note.isNotBlank()) {
+                Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = remainingMillis > 0L,
-                ) { Text("Pulihkan transaksi") }
-                Text(remainingText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                    shape = KronFieldShape,
+                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Edit,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.size(16.dp).padding(top = 2.dp),
+                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "Catatan",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.tertiary,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                text = event.note,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
+                }
             }
         }
-        else {
+    }
+}
+
+@Composable
+private fun AuditParentEventCard(
+    parentEvent: ActivityRow,
+    valuesVisible: Boolean,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = KronSubCardShape,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "TRANSAKSI INDUK",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.tertiary,
+                letterSpacing = 0.8.sp,
+            )
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = KronFieldShape,
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+                border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(parentEvent.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "${eventTypeLabel(parentEvent.type)} · ${LocalDate.ofEpochDay(parentEvent.effectiveEpochDay).format(dialogDateFormat)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (parentEvent.cashImpact != 0L) {
+                        Text(
+                            displayMoney(parentEvent.cashImpact, valuesVisible),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = signedColor(parentEvent.cashImpact),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AuditResolutionCard(
+    detail: ResolutionAuditDetail,
+    valuesVisible: Boolean,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = KronSubCardShape,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = "RINGKASAN RESOLUSI DANA",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    letterSpacing = 0.8.sp,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "${displayMoney(detail.amount, valuesVisible)} · ${detail.channel}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                    Text(
+                        text = "Akun: ${detail.account}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            Text(
+                text = "Alur Mutasi Dana",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+
+            AuditFlowNode("Sumber", detail.source.label, detail.source.detail, detail.source.before, detail.source.after, valuesVisible)
+
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)),
+                    modifier = Modifier.size(28.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "↓",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.tertiary,
+                        )
+                    }
+                }
+            }
+
+            AuditFlowNode("Tujuan", detail.target.label, detail.target.detail, detail.target.before, detail.target.after, valuesVisible)
+        }
+    }
+}
+
+@Composable
+private fun AuditFinancialImpactCard(
+    event: ActivityRow,
+    resolutionDetail: ResolutionAuditDetail?,
+    valuesVisible: Boolean,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = KronSubCardShape,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = "DAMPAK BUKU BESAR & MUTASI",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    letterSpacing = 0.8.sp,
+                )
+                Text(
+                    text = "Distribusi dampak saldo per akun dan pos anggaran.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+                shape = KronFieldShape,
+                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)),
+            ) {
+                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
+                    AuditImpactRow("Dampak Akun Kas/Bank", event.cashImpact, valuesVisible)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.15f))
+                    AuditImpactRow("Dampak Main Vault", event.vaultImpact, valuesVisible)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.15f))
+                    if (resolutionDetail == null) {
+                        AuditImpactRow("Dampak Pos Anggaran", event.budgetImpact, valuesVisible)
+                    } else {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "Dampak Pos Anggaran",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                text = "Lihat alur resolusi di atas",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.tertiary,
+                            )
+                        }
+                    }
+                    if (event.rolloverImpact != 0L) {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.15f))
+                        AuditImpactRow("Dampak Rollover", event.rolloverImpact, valuesVisible)
+                    }
+                    if (event.unallocatedImpact != 0L) {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.15f))
+                        AuditImpactRow("Belum Dialokasikan", event.unallocatedImpact, valuesVisible)
+                    }
+                }
+            }
+
+            val isBalanced = event.ledgerDebit == event.ledgerCredit
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.6f),
+                shape = KronFieldShape,
+                border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)),
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "PEMBUKUAN BERPASANGAN",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Surface(
+                            color = if (isBalanced) KronGreen.copy(alpha = 0.14f) else MaterialTheme.colorScheme.error.copy(alpha = 0.14f),
+                            shape = KronChipShape,
+                            border = BorderStroke(0.6.dp, if (isBalanced) KronGreen.copy(alpha = 0.4f) else MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    imageVector = if (isBalanced) Icons.Outlined.CheckCircle else Icons.Outlined.ErrorOutline,
+                                    contentDescription = null,
+                                    tint = if (isBalanced) KronGreen else MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(12.dp),
+                                )
+                                Text(
+                                    text = if (isBalanced) "Seimbang" else "Tidak Seimbang",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isBalanced) KronGreen else MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column {
+                            Text(
+                                text = "Total Debit",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                text = displayMoney(event.ledgerDebit, valuesVisible),
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = "Total Kredit",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                text = displayMoney(event.ledgerCredit, valuesVisible),
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AuditImpactRow(
+    label: String,
+    amount: Long,
+    valuesVisible: Boolean,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (amount != 0L) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = displayMoney(amount, valuesVisible),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (amount != 0L) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (amount != 0L) signedColor(amount) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+        )
+    }
+}
+
+@Composable
+private fun AuditMetadataCard(
+    event: ActivityRow,
+) {
+    val createdAtTime = java.time.Instant.ofEpochMilli(event.createdAt)
+        .atZone(java.time.ZoneId.systemDefault())
+        .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss", java.util.Locale.forLanguageTag("id-ID")))
+    val effectiveDateStr = LocalDate.ofEpochDay(event.effectiveEpochDay).format(dialogDateFormat)
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = KronSubCardShape,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = "JEJAK AUDIT & METADATA",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.tertiary,
+                letterSpacing = 0.8.sp,
+            )
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                AuditMetaTile(
+                    label = "Tanggal & Waktu",
+                    value = "$effectiveDateStr, $createdAtTime",
+                    icon = Icons.Outlined.CalendarMonth,
+                    modifier = Modifier.weight(1f),
+                )
+                AuditMetaTile(
+                    label = "Pelaku (Actor)",
+                    value = event.actor.ifBlank { "User" },
+                    icon = Icons.Outlined.Person,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                AuditMetaTile(
+                    label = "Sumber Transaksi",
+                    value = event.source,
+                    icon = Icons.Outlined.Security,
+                    modifier = Modifier.weight(1f),
+                )
+                AuditMetaTile(
+                    label = "Perangkat",
+                    value = event.deviceId.take(16).ifBlank { "-" },
+                    icon = Icons.Outlined.Devices,
+                    modifier = Modifier.weight(1f),
+                    isMonospace = true,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AuditMetaTile(
+    label: String,
+    value: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    modifier: Modifier = Modifier,
+    isMonospace: Boolean = false,
+) {
+    Surface(
+        modifier = modifier,
+        shape = KronFieldShape,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.size(16.dp),
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = value,
+                    style = if (isMonospace) MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                    else MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AuditEvidenceCard(
+    eventId: String,
+    eventType: String,
+    receipts: List<ReceiptEntity>,
+    readOnly: Boolean,
+    onCameraCapture: (String) -> Unit,
+    onGalleryPick: (String) -> Unit,
+    onExportEvidence: (String) -> Unit,
+    onReceiptPreview: suspend (ReceiptEntity) -> Bitmap?,
+    onOpenReceipt: (ReceiptEntity) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = KronSubCardShape,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "BUKTI TRANSAKSI",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    letterSpacing = 0.8.sp,
+                )
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = KronChipShape,
+                ) {
+                    Text(
+                        text = "${receipts.size} berkas",
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            if (receipts.isEmpty()) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = KronFieldShape,
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.4f),
+                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.15f)),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 18.dp, horizontal = 16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.PhotoLibrary,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.size(28.dp),
+                        )
+                        Text(
+                            text = "Belum ada foto bukti untuk event ini.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    receipts.take(10).forEach { receipt ->
+                        ReceiptEvidenceItem(receipt, onReceiptPreview, onOpenReceipt)
+                    }
+                    if (receipts.size > 10) {
+                        Text(
+                            text = "${receipts.size - 10} bukti lain tersedia di Pusat Bukti.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            if (!readOnly && eventType in setOf("INCOME", "EXPENSE", "UNEXPECTED_EXPENSE")) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { onCameraCapture(eventId) },
+                        modifier = Modifier.weight(1f),
+                        shape = KronButtonShape,
+                    ) {
+                        Icon(Icons.Outlined.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Ambil foto")
+                    }
+                    OutlinedButton(
+                        onClick = { onGalleryPick(eventId) },
+                        modifier = Modifier.weight(1f),
+                        shape = KronButtonShape,
+                    ) {
+                        Icon(Icons.Outlined.PhotoLibrary, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Pilih galeri")
+                    }
+                }
+                Text(
+                    text = "Foto disalin ke penyimpanan privat dan dienkripsi.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            if (!readOnly) {
+                OutlinedButton(
+                    onClick = { onExportEvidence(eventId) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = KronButtonShape,
+                ) {
+                    Icon(Icons.Outlined.FileDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Ekspor paket bukti transaksi")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AuditActionCard(
+    event: ActivityRow,
+    readOnly: Boolean,
+    lifecycleEvent: Boolean,
+    reversalRestored: Boolean,
+    onRestoreReversal: ((String) -> Unit)?,
+    correctionMode: Boolean,
+    onCorrectionModeChange: (Boolean) -> Unit,
+    correctedTitle: String,
+    onCorrectedTitleChange: (String) -> Unit,
+    correctedNote: String,
+    onCorrectedNoteChange: (String) -> Unit,
+    reason: String,
+    onReasonChange: (String) -> Unit,
+) {
+    if (readOnly) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = KronSubCardShape,
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+            border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)),
+        ) {
+            Row(
+                modifier = Modifier.padding(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Info, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(20.dp))
+                Text("Role Viewer hanya dapat membaca audit transaksi.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.tertiary)
+            }
+        }
+        return
+    }
+
+    if (lifecycleEvent) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = KronSubCardShape,
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+            border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)),
+        ) {
+            Row(
+                modifier = Modifier.padding(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Info, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(20.dp))
+                Text(
+                    text = if (event.type in setOf("DEBT_OPEN", "DEBT_ARCHIVE")) {
+                        "Event tracker hutang bersifat read-only. Gunakan detail hutang untuk melihat riwayatnya."
+                    } else {
+                        "Event lifecycle bersifat read-only. Gunakan tab Arsip untuk memulihkan atau mengarsipkan kembali."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+            }
+        }
+        return
+    }
+
+    if (event.reversedByEventId != null) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = KronSubCardShape,
+            color = MaterialTheme.colorScheme.error.copy(alpha = 0.1f),
+            border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.3f)),
+        ) {
+            Row(
+                modifier = Modifier.padding(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.ErrorOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Transaksi Telah Dibatalkan", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.error)
+                    Text("Event ini sudah dibatalkan dengan reversal dan tidak dapat diubah lagi.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        return
+    }
+
+    if (event.type == "REVERSAL" && onRestoreReversal != null && event.relatedEventId != null) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = KronSubCardShape,
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = "PEMULIHAN TRANSAKSI REVERSAL",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    letterSpacing = 0.8.sp,
+                )
+                if (reversalRestored) {
+                    Text("Event sudah dipulihkan", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                } else {
+                    var remainingMillis by remember { mutableLongStateOf(0L) }
+                    LaunchedEffect(event.id) {
+                        while (true) {
+                            remainingMillis = 7L * 24 * 60 * 60 * 1000 - (System.currentTimeMillis() - event.createdAt)
+                            if (remainingMillis <= 0L) break
+                            delay(60_000L)
+                        }
+                    }
+                    val remainingText = when {
+                        remainingMillis <= 0L -> "Periode pemulihan telah berakhir"
+                        remainingMillis >= 2 * 24 * 60 * 60 * 1000L -> "${remainingMillis / (24 * 60 * 60 * 1000L)} hari tersisa"
+                        remainingMillis >= 24 * 60 * 60 * 1000L -> "1 hari ${remainingMillis % (24 * 60 * 60 * 1000L) / (60 * 60 * 1000L)} jam tersisa"
+                        remainingMillis >= 60 * 60 * 1000L -> "${remainingMillis / (60 * 60 * 1000L)} jam ${remainingMillis % (60 * 60 * 1000L) / (60 * 1000L)} menit tersisa"
+                        else -> "${remainingMillis / (60 * 1000L)} menit tersisa"
+                    }
+                    Button(
+                        onClick = { onRestoreReversal(event.relatedEventId) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = KronButtonShape,
+                        enabled = remainingMillis > 0L,
+                    ) {
+                        Icon(Icons.Outlined.Restore, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Pulihkan transaksi")
+                    }
+                    Text(remainingText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        return
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = KronSubCardShape,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text(
+                text = "TINDAKAN AUDIT & KOREKSI",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.tertiary,
+                letterSpacing = 0.8.sp,
+            )
+
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = !correctionMode, onClick = { correctionMode = false }, label = { Text("Batalkan") })
-                FilterChip(selected = correctionMode, onClick = { correctionMode = true }, label = { Text("Koreksi") })
+                FilterChip(
+                    selected = !correctionMode,
+                    onClick = { onCorrectionModeChange(false) },
+                    label = { Text("Batalkan") },
+                    shape = KronChipShape,
+                )
+                FilterChip(
+                    selected = correctionMode,
+                    onClick = { onCorrectionModeChange(true) },
+                    label = { Text("Koreksi") },
+                    shape = KronChipShape,
+                )
             }
+
             if (correctionMode) {
-                OutlinedTextField(correctedTitle, { correctedTitle = it }, label = { Text("Judul pengganti") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(correctedNote, { correctedNote = it }, label = { Text("Catatan pengganti") }, modifier = Modifier.fillMaxWidth())
-                Text("KRON membuat reversal dan event pengganti. Event lama tidak diubah.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                OutlinedTextField(
+                    value = correctedTitle,
+                    onValueChange = onCorrectedTitleChange,
+                    label = { Text("Judul pengganti") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = KronFieldShape,
+                )
+                OutlinedTextField(
+                    value = correctedNote,
+                    onValueChange = onCorrectedNoteChange,
+                    label = { Text("Catatan pengganti") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = KronFieldShape,
+                )
+                Text(
+                    text = "KRON membuat reversal dan event pengganti. Event lama tidak diubah untuk menjaga integritas jurnal.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            OutlinedTextField(reason, { reason = it }, label = { Text(if (correctionMode) "Alasan koreksi" else "Alasan pembatalan") }, modifier = Modifier.fillMaxWidth())
+
+            OutlinedTextField(
+                value = reason,
+                onValueChange = onReasonChange,
+                label = { Text(if (correctionMode) "Alasan koreksi (wajib diisi)" else "Alasan pembatalan (wajib diisi)") },
+                modifier = Modifier.fillMaxWidth(),
+                shape = KronFieldShape,
+            )
         }
     }
 }
@@ -1824,17 +2777,42 @@ private fun AuditFlowNode(
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+        shape = KronFieldShape,
+        border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)),
     ) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(heading, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
-            Text(label, style = MaterialTheme.typography.bodyLarge)
-            if (detail.isNotBlank()) Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = heading.uppercase(),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+                Text(
+                    text = "${displayMoney(before, valuesVisible)} → ${displayMoney(after, valuesVisible)}",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
             Text(
-                "${displayMoney(before, valuesVisible)} → ${displayMoney(after, valuesVisible)}",
-                style = MaterialTheme.typography.titleSmall,
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
             )
+            if (detail.isNotBlank()) {
+                Text(
+                    text = detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -1853,10 +2831,11 @@ private fun ReceiptEvidenceItem(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = available) { onOpen(receipt) },
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+        shape = KronFieldShape,
+        border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)),
     ) {
-        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             preview?.let { bitmap ->
                 Image(
                     bitmap = bitmap.asImageBitmap(),
@@ -1864,24 +2843,36 @@ private fun ReceiptEvidenceItem(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(156.dp),
+                        .height(160.dp)
+                        .clip(KronFieldShape),
                 )
             }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(receipt.displayName, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(receipt.displayName, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                 if (!available) {
-                    Surface(color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f), shape = MaterialTheme.shapes.extraSmall) {
-                        Text("Belum tersedia", modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                    Surface(color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f), shape = KronChipShape) {
+                        Text("Belum tersedia", modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
                     }
                 }
             }
-            Text(
-                "${receipt.mimeType} · ${receipt.byteSize.coerceAtLeast(0) / 1024} KB · ${receipt.origin}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (available && preview == null) {
-                Text("Ketuk untuk membuka bukti", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "${receipt.mimeType} · ${receipt.byteSize.coerceAtLeast(0) / 1024} KB · ${receipt.origin}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (available) {
+                    Text(
+                        if (preview == null) "Ketuk untuk membuka" else "Buka penuh",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
             }
         }
     }

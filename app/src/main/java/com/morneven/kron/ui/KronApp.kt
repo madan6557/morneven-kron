@@ -2385,6 +2385,7 @@ private fun MainScaffold(
             onRenameCategory = if (readOnly) null else { catId, newName -> authenticateCriticalAction("Ganti nama kategori") { viewModel.renameBudgetCategoryInPeriod(periodId, catId, newName) } },
             onDeleteCategory = if (readOnly) null else { catId, note -> authenticateCriticalAction("Arsipkan kategori") { viewModel.removeBudgetCategory(periodId, catId, note) } },
             onRestoreCategory = if (readOnly) null else { catId, amount, pct, note, approvedTotal -> authenticateCriticalAction("Pulihkan kategori") { viewModel.restoreBudgetCategory(periodId, catId, amount, pct, note, approvedTotal) } },
+            onUpdateCategoryVisual = if (readOnly) null else { catId, iconKey, colorLong -> viewModel.updateCategoryVisual(catId, iconKey, colorLong) },
         )
     }
     historyPortfolioId?.let { portfolioId ->

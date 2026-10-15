@@ -1185,6 +1185,10 @@ class MainViewModel @Inject constructor(
         repository.renameBudgetCategoryInPeriod(periodId, categoryId, newName)
     }
 
+    fun updateCategoryVisual(categoryId: Long, iconKey: String, colorLong: Long? = null) = runAction("Visual kategori diperbarui") {
+        repository.updateCategoryVisual(categoryId, iconKey, colorLong)
+    }
+
     fun removeBudgetCategory(periodId: Long, categoryId: Long, note: String) = runAction("Kategori budget diarsipkan") {
         repository.removeBudgetCategoryFromPeriod(periodId, categoryId, note)
     }

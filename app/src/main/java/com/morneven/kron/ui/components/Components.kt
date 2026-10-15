@@ -47,6 +47,18 @@ import androidx.compose.material.icons.outlined.Restaurant
 import androidx.compose.material.icons.outlined.ShoppingBag
 import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.School
+import androidx.compose.material.icons.outlined.WorkOutline
+import androidx.compose.material.icons.outlined.Coffee
+import androidx.compose.material.icons.outlined.Savings
+import androidx.compose.material.icons.outlined.FitnessCenter
+import androidx.compose.material.icons.outlined.VolunteerActivism
+import androidx.compose.material.icons.outlined.Pets
+import androidx.compose.material.icons.outlined.Flight
+import androidx.compose.material.icons.outlined.CardGiftcard
+import androidx.compose.material.icons.outlined.FamilyRestroom
+import androidx.compose.material.icons.outlined.Build
 import com.morneven.kron.data.ActivityRow
 import com.morneven.kron.data.CategoryEntity
 import com.morneven.kron.ui.theme.KronCardShape
@@ -1022,14 +1034,26 @@ fun ActivityRow.primaryImpact(): Long = when {
 }
 
 fun categoryVisualIcon(iconKey: String?, type: String? = null): ImageVector = when (iconKey?.lowercase()) {
-    "payments" -> Icons.Outlined.Payments
-    "add_card" -> Icons.Outlined.AddCard
-    "shopping_bag" -> Icons.Outlined.ShoppingBag
-    "restaurant" -> Icons.Outlined.Restaurant
-    "directions_car" -> Icons.Outlined.DirectionsCar
-    "receipt" -> Icons.AutoMirrored.Outlined.ReceiptLong
-    "health" -> Icons.Outlined.LocalHospital
-    "movie" -> Icons.Outlined.Movie
+    "payments", "salary" -> Icons.Outlined.Payments
+    "add_card", "card" -> Icons.Outlined.AddCard
+    "shopping_bag", "shopping" -> Icons.Outlined.ShoppingBag
+    "restaurant", "food" -> Icons.Outlined.Restaurant
+    "coffee", "cafe" -> Icons.Outlined.Coffee
+    "directions_car", "transport" -> Icons.Outlined.DirectionsCar
+    "receipt", "bill", "bills" -> Icons.AutoMirrored.Outlined.ReceiptLong
+    "home", "house" -> Icons.Outlined.Home
+    "health", "medical" -> Icons.Outlined.LocalHospital
+    "movie", "entertainment" -> Icons.Outlined.Movie
+    "school", "education" -> Icons.Outlined.School
+    "work", "office" -> Icons.Outlined.WorkOutline
+    "savings", "investment" -> Icons.Outlined.Savings
+    "fitness_center", "sports" -> Icons.Outlined.FitnessCenter
+    "volunteer_activism", "donation" -> Icons.Outlined.VolunteerActivism
+    "pets", "pet" -> Icons.Outlined.Pets
+    "flight", "travel" -> Icons.Outlined.Flight
+    "card_giftcard", "gift" -> Icons.Outlined.CardGiftcard
+    "family_restroom", "family" -> Icons.Outlined.FamilyRestroom
+    "build", "maintenance" -> Icons.Outlined.Build
     "category" -> Icons.Outlined.Category
     else -> when (type) {
         "INCOME" -> Icons.Outlined.ArrowDownward
@@ -1039,6 +1063,89 @@ fun categoryVisualIcon(iconKey: String?, type: String? = null): ImageVector = wh
         "AUTOMATION" -> Icons.Outlined.CalendarMonth
         "SYSTEM", "SECURITY" -> Icons.Outlined.Shield
         else -> Icons.Outlined.Category
+    }
+}
+
+data class CategoryIconOption(
+    val key: String,
+    val label: String,
+    val icon: ImageVector,
+)
+
+val availableCategoryIcons: List<CategoryIconOption> = listOf(
+    CategoryIconOption("restaurant", "Makanan", Icons.Outlined.Restaurant),
+    CategoryIconOption("coffee", "Kopi", Icons.Outlined.Coffee),
+    CategoryIconOption("shopping_bag", "Belanja", Icons.Outlined.ShoppingBag),
+    CategoryIconOption("directions_car", "Transport", Icons.Outlined.DirectionsCar),
+    CategoryIconOption("receipt", "Tagihan", Icons.AutoMirrored.Outlined.ReceiptLong),
+    CategoryIconOption("home", "Rumah", Icons.Outlined.Home),
+    CategoryIconOption("health", "Kesehatan", Icons.Outlined.LocalHospital),
+    CategoryIconOption("movie", "Hiburan", Icons.Outlined.Movie),
+    CategoryIconOption("school", "Edukasi", Icons.Outlined.School),
+    CategoryIconOption("work", "Kerja", Icons.Outlined.WorkOutline),
+    CategoryIconOption("payments", "Gaji", Icons.Outlined.Payments),
+    CategoryIconOption("savings", "Tabungan", Icons.Outlined.Savings),
+    CategoryIconOption("add_card", "Kartu", Icons.Outlined.AddCard),
+    CategoryIconOption("fitness_center", "Olahraga", Icons.Outlined.FitnessCenter),
+    CategoryIconOption("volunteer_activism", "Donasi", Icons.Outlined.VolunteerActivism),
+    CategoryIconOption("pets", "Hewan", Icons.Outlined.Pets),
+    CategoryIconOption("flight", "Travel", Icons.Outlined.Flight),
+    CategoryIconOption("card_giftcard", "Hadiah", Icons.Outlined.CardGiftcard),
+    CategoryIconOption("family_restroom", "Keluarga", Icons.Outlined.FamilyRestroom),
+    CategoryIconOption("build", "Servis", Icons.Outlined.Build),
+    CategoryIconOption("category", "Lainnya", Icons.Outlined.Category),
+)
+
+@Composable
+fun CategoryIconPicker(
+    selectedKey: String,
+    onSelectKey: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = "Pilih icon kategori",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        val chunked = remember { availableCategoryIcons.chunked(7) }
+        chunked.forEach { rowIcons ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                rowIcons.forEach { opt ->
+                    val isSelected = opt.key.equals(selectedKey, ignoreCase = true)
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp)
+                            .clickable { onSelectKey(opt.key) },
+                        shape = KronSubCardShape,
+                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        border = BorderStroke(
+                            if (isSelected) 1.5.dp else 0.6.dp,
+                            if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f),
+                        ),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = opt.icon,
+                                contentDescription = opt.label,
+                                tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    }
+                }
+                val emptySlots = 7 - rowIcons.size
+                repeat(emptySlots) {
+                    Spacer(Modifier.weight(1f))
+                }
+            }
+        }
     }
 }
 

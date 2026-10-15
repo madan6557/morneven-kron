@@ -1,5 +1,12 @@
 # KRON Changelog
 
+## 1.7.18 - 2026-10-15
+
+- Redesign detail audit: tampilan struk teks biasa digantikan dengan tata letak kartu modern dan terstruktur (Hero ringkasan nominal dan status integritas, kartu resolusi mutasi dana antar akun/kanal, kartu rincian dampak finansial dan keseimbangan entri ganda, kartu grid metadata waktu/aktor/sumber, serta kartu manajemen bukti struk/kamera).
+- Perbaikan visibilitas kategori budget belum terdanai: kategori yang gagal dibooking karena kekurangan saldo Vault tetap tampil di daftar kategori aktif dengan status "Perlu booking" dan indikator rencana dana, sehingga sinkron dengan total akumulasi rencana budget.
+- Kustomisasi ikon kategori: penambahan pemilih visual ikon kategori dengan beragam pilihan ikon finansial/aktivitas, didukung sinkronisasi ke database dan audit snapshot.
+- Bump versionCode 109 -> 110 dan versionName 1.7.17 -> 1.7.18.
+
 ## 1.7.17 - 2026-10-01
 
 - Perbaikan tombol switch keyboard pada kolom input (MoneyField): tombol di sisi kanan kolom nominal kini berfungsi sebagai toggle langsung antara keyboard sistem (ikon keyboard) dan keypad kalkulator KRON (ikon kalkulator), lengkap dengan jaminan pemunculan IME sistem Android.

@@ -139,8 +139,8 @@ class BudgetSplitCalculationTest {
     }
 
     @Test
-    fun zeroChannelFilter_hidesEmptyChannelsInActivePeriod() {
-        // Active period: channel with 0 booked, 0 available, 0 spent should be hidden
+    fun unfundedPlannedCategory_staysVisibleWithPerluBookingStatus() {
+        // Active period: channel with planned funds but 0 booked/available/spent stays visible as Perlu booking
         val emptyActiveRow = AllocationBalanceRow(
             id = 1L,
             periodId = 10L,
@@ -161,23 +161,17 @@ class BudgetSplitCalculationTest {
             endEpochDay = 20030L,
         )
 
-        val isVisibleInActivePeriod = emptyActiveRow.isActive && !(
-            emptyActiveRow.periodStatus != "DRAFT" &&
-                emptyActiveRow.bookedAmount == 0L &&
-                emptyActiveRow.availableAmount == 0L &&
-                emptyActiveRow.spentAmount == 0L
-        )
-        assertFalse("0-fund channel in ACTIVE period must be hidden", isVisibleInActivePeriod)
+        assertTrue("Planned category must be active", emptyActiveRow.isActive)
+        val isUnfunded = emptyActiveRow.periodStatus != "DRAFT" &&
+            emptyActiveRow.bookedAmount == 0L &&
+            emptyActiveRow.availableAmount == 0L &&
+            emptyActiveRow.spentAmount == 0L &&
+            emptyActiveRow.plannedAmount > 0L
+        assertTrue("Category with 0 funds in active period is marked unfunded", isUnfunded)
 
-        // DRAFT period: planned channels should remain visible so user sees what is planned
+        // DRAFT period: planned channels stay visible
         val draftRow = emptyActiveRow.copy(periodStatus = "DRAFT")
-        val isVisibleInDraft = draftRow.isActive && !(
-            draftRow.periodStatus != "DRAFT" &&
-                draftRow.bookedAmount == 0L &&
-                draftRow.availableAmount == 0L &&
-                draftRow.spentAmount == 0L
-        )
-        assertTrue("Planned channel in DRAFT period must stay visible", isVisibleInDraft)
+        assertTrue("Planned channel in DRAFT period must stay active", draftRow.isActive)
     }
 
     @Test

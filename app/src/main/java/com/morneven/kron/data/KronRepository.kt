@@ -1515,6 +1515,42 @@ class KronRepository private constructor(
         eventId
     }
 
+    suspend fun updateCategoryVisual(categoryId: Long, iconKey: String, colorLong: Long? = null) = database.withTransaction {
+        val trimmedIcon = iconKey.trim()
+        require(trimmedIcon.isNotBlank()) { "Icon kategori wajib diisi" }
+        val category = requireNotNull(dao.categoryById(categoryId)) { "Kategori tidak ditemukan" }
+        val activeId = activeAccountId()
+        if (category.accountId != null) require(category.accountId == activeId) { "Kategori bukan milik akun aktif" }
+        require(!category.isArchived) { "Kategori sudah diarsipkan" }
+        val updated = category.copy(
+            icon = trimmedIcon,
+            color = colorLong ?: category.color,
+        ).bumpRevision()
+        dao.updateCategory(updated)
+        val eventId = UUID.randomUUID().toString()
+        dao.insertEvent(
+            ActivityEventEntity(
+                eventId,
+                LedgerType.SYSTEM,
+                "Visual kategori diubah",
+                "${category.name}: ${category.icon} -> $trimmedIcon",
+                "USER",
+                LocalDate.now().toEpochDay(),
+                accountId = activeId,
+            ),
+        )
+        dao.insertAudit(
+            AuditSnapshotEntity(
+                eventId = eventId,
+                reason = "Update visual kategori",
+                beforeJson = "{\"categoryId\":$categoryId,\"icon\":\"${category.icon}\"}",
+                afterJson = "{\"categoryId\":$categoryId,\"icon\":\"$trimmedIcon\"}",
+            ),
+        )
+        assertInvariant()
+        eventId
+    }
+
     /** Renaming is period isolated: periods before the current one keep the old category. */
     suspend fun renameBudgetCategoryInPeriod(periodId: Long, categoryId: Long, newName: String) = database.withTransaction {
         val trimmed = newName.trim()
