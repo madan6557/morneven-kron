@@ -25,6 +25,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Edit
@@ -107,6 +108,13 @@ import com.morneven.kron.evidence.EvidenceVerificationResult
 import com.morneven.kron.ui.theme.KronGold
 import com.morneven.kron.ui.theme.KronGreen
 import com.morneven.kron.ui.theme.KronRed
+import com.morneven.kron.ui.theme.KronBlue
+import com.morneven.kron.ui.theme.KronButtonShape
+import com.morneven.kron.ui.theme.KronFieldShape
+import com.morneven.kron.ui.theme.KronChipShape
+import com.morneven.kron.ui.theme.KronSubCardShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.outlined.Payments
 import com.morneven.kron.ui.KronUiState
 import com.morneven.kron.ui.components.CalculatorKeypadHostState
 import com.morneven.kron.ui.components.CalculatorKeypadView
@@ -121,9 +129,6 @@ import com.morneven.kron.ui.components.MoneyField
 import com.morneven.kron.ui.components.parseMoneyInput
 import com.morneven.kron.ui.components.signedColor
 import androidx.compose.ui.text.font.FontWeight
-import com.morneven.kron.ui.theme.KronButtonShape
-import com.morneven.kron.ui.theme.KronFieldShape
-import com.morneven.kron.ui.theme.KronChipShape
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.time.Instant
@@ -2184,8 +2189,69 @@ private fun channelLabel(channel: String): String = if (channel == FundingChanne
 
 @Composable
 private fun ChannelSelector(selected: String, onSelect: (String) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(selected = selected == FundingChannel.CASH, onClick = { onSelect(FundingChannel.CASH) }, label = { Text("Cash") }, shape = KronChipShape)
-        FilterChip(selected = selected == FundingChannel.EBUDGET, onClick = { onSelect(FundingChannel.EBUDGET) }, label = { Text("eBudget") }, shape = KronChipShape)
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        val isCash = selected == FundingChannel.CASH
+        val isEBudget = selected == FundingChannel.EBUDGET
+
+        Surface(
+            modifier = Modifier
+                .weight(1f)
+                .clickable { onSelect(FundingChannel.CASH) },
+            shape = KronSubCardShape,
+            color = if (isCash) KronGold.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceContainerLow,
+            border = BorderStroke(if (isCash) 1.5.dp else 0.8.dp, if (isCash) KronGold else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = KronGold.copy(alpha = 0.2f),
+                    modifier = Modifier.size(26.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(androidx.compose.material.icons.Icons.Outlined.Payments, contentDescription = null, tint = KronGold, modifier = Modifier.size(15.dp))
+                    }
+                }
+                Column {
+                    Text("Cash", style = MaterialTheme.typography.titleSmall, fontWeight = if (isCash) FontWeight.Bold else FontWeight.Medium, color = if (isCash) KronGold else MaterialTheme.colorScheme.onSurface)
+                    Text("Tunai & fisik", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+
+        Surface(
+            modifier = Modifier
+                .weight(1f)
+                .clickable { onSelect(FundingChannel.EBUDGET) },
+            shape = KronSubCardShape,
+            color = if (isEBudget) KronBlue.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceContainerLow,
+            border = BorderStroke(if (isEBudget) 1.5.dp else 0.8.dp, if (isEBudget) KronBlue else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = KronBlue.copy(alpha = 0.2f),
+                    modifier = Modifier.size(26.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(androidx.compose.material.icons.Icons.Outlined.AccountBalanceWallet, contentDescription = null, tint = KronBlue, modifier = Modifier.size(15.dp))
+                    }
+                }
+                Column {
+                    Text("eBudget", style = MaterialTheme.typography.titleSmall, fontWeight = if (isEBudget) FontWeight.Bold else FontWeight.Medium, color = if (isEBudget) KronBlue else MaterialTheme.colorScheme.onSurface)
+                    Text("Bank & e-wallet", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
     }
 }

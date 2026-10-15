@@ -51,9 +51,15 @@ import com.morneven.kron.ui.KronUiState
 import com.morneven.kron.ui.components.ChannelBadge
 import com.morneven.kron.ui.components.EmptyState
 import com.morneven.kron.ui.components.HudCard
+import com.morneven.kron.ui.components.TransactionCardItem
 import com.morneven.kron.ui.components.displayMoney
 import com.morneven.kron.ui.components.eventTypeLabel
 import com.morneven.kron.ui.components.signedColor
+import com.morneven.kron.ui.theme.KronChipShape
+import com.morneven.kron.ui.theme.KronSubCardShape
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -69,6 +75,7 @@ fun ActivityScreen(state: KronUiState, onEvent: (String) -> Unit, modifier: Modi
     val listState = rememberLazyListState()
     val focusManager = LocalFocusManager.current
     val today = LocalDate.now()
+    val categoryMap = remember(state.categories) { state.categories.associateBy { it.name } }
     val shown = remember(state.activities, typeFilter, dateFilter, query, today) {
         val minimumDay = dateFilter.days?.let { today.minusDays((it - 1).toLong()).toEpochDay() }
         state.activities.filter { event ->
@@ -111,13 +118,13 @@ fun ActivityScreen(state: KronUiState, onEvent: (String) -> Unit, modifier: Modi
             Text("Jenis aktivitas", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(end = 12.dp)) {
                 items(ActivityFilter.entries, key = { it.name }) { item ->
-                    FilterChip(selected = typeFilter == item, onClick = { typeFilter = item }, label = { Text(item.label) })
+                    FilterChip(selected = typeFilter == item, onClick = { typeFilter = item }, label = { Text(item.label) }, shape = KronChipShape)
                 }
             }
             Text("Rentang tanggal", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(end = 12.dp)) {
                 items(ActivityDateRange.entries, key = { it.name }) { item ->
-                    FilterChip(selected = dateFilter == item, onClick = { dateFilter = item }, label = { Text(item.label) })
+                    FilterChip(selected = dateFilter == item, onClick = { dateFilter = item }, label = { Text(item.label) }, shape = KronChipShape)
                 }
             }
             Text(
@@ -148,13 +155,41 @@ fun ActivityScreen(state: KronUiState, onEvent: (String) -> Unit, modifier: Modi
             contentType = { if (it is ActivityTimelineItem.Header) "header" else "event" },
         ) { item ->
             when (item) {
-                is ActivityTimelineItem.Header -> Text(
-                    item.label.uppercase(),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.tertiary,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-                is ActivityTimelineItem.Event -> ActivityCard(item.value, state.valuesVisible, state.eventChannels[item.value.id].orEmpty(), onEvent, readOnly)
+                is ActivityTimelineItem.Header -> {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 10.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text(
+                            item.label.uppercase(),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.tertiary,
+                            letterSpacing = 1.sp,
+                        )
+                        HorizontalDivider(
+                            modifier = Modifier.weight(1f),
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f),
+                        )
+                    }
+                }
+                is ActivityTimelineItem.Event -> {
+                    val time = java.time.Instant.ofEpochMilli(item.value.createdAt)
+                        .atZone(java.time.ZoneId.systemDefault())
+                        .format(timeFormat)
+                    TransactionCardItem(
+                        activity = item.value,
+                        category = categoryMap[item.value.title],
+                        valuesVisible = state.valuesVisible,
+                        channels = state.eventChannels[item.value.id].orEmpty(),
+                        timestampText = time,
+                        readOnly = readOnly,
+                        onClick = { onEvent(item.value.id) },
+                    )
+                }
             }
         }
         item { Spacer(Modifier.height(80.dp)) }
@@ -167,6 +202,7 @@ private fun ActivitySearchField(query: String, onQuery: (String) -> Unit, focusM
         value = query,
         onValueChange = onQuery,
         modifier = Modifier.fillMaxWidth(),
+        shape = KronSubCardShape,
         singleLine = true,
         label = { Text("Cari aktivitas") },
         placeholder = { Text("Judul, catatan, tipe, atau sumber") },
@@ -183,109 +219,6 @@ private fun ActivitySearchField(query: String, onQuery: (String) -> Unit, focusM
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
         keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
     )
-}
-
-@Composable
-private fun ActivityCard(event: ActivityRow, valuesVisible: Boolean, channels: Set<String>, onEvent: (String) -> Unit, readOnly: Boolean = false) {
-    val impact = event.primaryImpact()
-    val money = displayMoney(impact, valuesVisible)
-    val reversed = event.reversedByEventId != null
-    val date = LocalDate.ofEpochDay(event.effectiveEpochDay).format(fullDateFormat)
-    val time = java.time.Instant.ofEpochMilli(event.createdAt)
-        .atZone(java.time.ZoneId.systemDefault())
-        .format(timeFormat)
-    HudCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(if (readOnly) Modifier else Modifier.clickable { onEvent(event.id) })
-            .semantics(mergeDescendants = true) { role = Role.Button },
-    ) {
-        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            // Row 1: Title on left (weight 1), Money on right (single-line, non-wrapping)
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top,
-            ) {
-                Text(
-                    event.title,
-                    style = MaterialTheme.typography.titleMedium.copy(textDecoration = if (reversed) TextDecoration.LineThrough else null),
-                    modifier = Modifier.weight(1f).padding(end = 10.dp),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    money,
-                    color = signedColor(impact),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                    maxLines = 1,
-                    softWrap = false,
-                )
-            }
-
-            // Row 2 (if note exists): Dedicated note line
-            if (event.note.isNotBlank()) {
-                Text(
-                    event.note,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-
-            // Row 3: Metadata - Badges/Type and Status on left, Date & Time on right
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f, fill = false).padding(end = 8.dp),
-                ) {
-                    if (channels.isNotEmpty()) {
-                        channels.sorted().forEach { ChannelBadge(it) }
-                    } else {
-                        Text(eventTypeLabel(event.type), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
-                    }
-                    ActivityStatus(event)
-                }
-                Text(
-                    "$date, $time",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    softWrap = false,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ActivityStatus(event: ActivityRow) {
-    val (label, tint) = when {
-        event.reversedByEventId != null -> "BATAL" to MaterialTheme.colorScheme.error
-        event.type == "ARCHIVE" -> "ARSIP" to MaterialTheme.colorScheme.onSurfaceVariant
-        event.type == "RESTORE" || event.type == "RESTORE_REVERSAL" -> "PULIH" to MaterialTheme.colorScheme.tertiary
-        event.source == "SYSTEM" -> "SISTEM" to MaterialTheme.colorScheme.onSurfaceVariant
-        event.source == "AUTOMATION" || event.type == "AUTOMATION" -> "AUTO" to MaterialTheme.colorScheme.tertiary
-        else -> return
-    }
-    Surface(
-        color = tint.copy(alpha = 0.12f),
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(3.dp),
-    ) {
-        Text(
-            label,
-            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = tint,
-        )
-    }
 }
 
 private enum class ActivityFilter(val label: String) {
@@ -359,13 +292,6 @@ private fun ActivityRow.matches(query: String): Boolean {
         eventTypeLabel(type).contains(search, ignoreCase = true)
 }
 
-private fun ActivityRow.primaryImpact(): Long = when {
-    cashImpact != 0L -> cashImpact
-    vaultImpact != 0L -> vaultImpact
-    else -> budgetImpact
-}
-
-private val fullDateFormat = DateTimeFormatter.ofPattern("EEEE, d MMMM yyyy", Locale.forLanguageTag("id-ID"))
 private val groupDateFormat = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.forLanguageTag("id-ID"))
 private val timeFormat = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.forLanguageTag("id-ID"))
 private const val PAGE_SIZE = 50

@@ -17,9 +17,9 @@ import com.morneven.kron.R
 val KronRed = Color(0xFFB94D59)
 val KronRedDark = Color(0xFF7C2D37)
 val KronPurple = Color(0xFF72517F)
-val KronBackground = Color(0xFF120D0F)
-val KronSurface = Color(0xFF1C1518)
-val KronSurfaceHigh = Color(0xFF281E22)
+val KronBackground = Color(0xFF100B0D)
+val KronSurface = Color(0xFF1E1519)
+val KronSurfaceHigh = Color(0xFF281C22)
 val KronText = Color(0xFFF2E9E5)
 val KronMuted = Color(0xFFB7AAA8)
 
@@ -60,8 +60,7 @@ val KronNegative: Color
     @Composable get() = if (LocalKronDarkTheme.current) KronNegativeDark else KronNegativeLight
 
 // Roles left unset fall back to the Material baseline, which is a purple family. Every role the app
-// actually reads is spelled out here so none of that purple reaches a maroon and gold brand. The
-// values that were already defined are unchanged.
+// actually reads is spelled out here so none of that purple reaches a maroon and gold brand.
 private val DarkColors = darkColorScheme(
     primary = KronRed,
     onPrimary = Color.White,
@@ -82,6 +81,11 @@ private val DarkColors = darkColorScheme(
     onSurface = KronText,
     surfaceVariant = KronSurfaceHigh,
     onSurfaceVariant = KronMuted,
+    surfaceContainerLowest = Color(0xFF0C0809),
+    surfaceContainerLow = Color(0xFF160E12),
+    surfaceContainer = Color(0xFF1E1519),
+    surfaceContainerHigh = Color(0xFF281C22),
+    surfaceContainerHighest = Color(0xFF33252B),
     surfaceTint = KronRed,
     inverseSurface = KronText,
     inverseOnSurface = Color(0xFF241B1D),
@@ -116,6 +120,11 @@ private val LightColors = lightColorScheme(
     onSurface = Color(0xFF221A1C),
     surfaceVariant = Color(0xFFEFE2E3),
     onSurfaceVariant = Color(0xFF5A4D50),
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFF8F2F0),
+    surfaceContainer = Color(0xFFF1EAE8),
+    surfaceContainerHigh = Color(0xFFEBE3E0),
+    surfaceContainerHighest = Color(0xFFE5DDD9),
     surfaceTint = Color(0xFF8C2F3C),
     inverseSurface = Color(0xFF37292C),
     inverseOnSurface = Color(0xFFFBEEF0),
@@ -135,13 +144,13 @@ private val Inter = FontFamily(Font(R.font.inter))
 private val KronTypography = androidx.compose.material3.Typography(
     displayLarge = TextStyle(fontFamily = Orbitron, fontWeight = FontWeight.Bold, fontSize = 32.sp, letterSpacing = 0.5.sp),
     displayMedium = TextStyle(fontFamily = Orbitron, fontWeight = FontWeight.Bold, fontSize = 28.sp, letterSpacing = 0.5.sp),
-    displaySmall = TextStyle(fontFamily = Orbitron, fontWeight = FontWeight.SemiBold, fontSize = 24.sp, letterSpacing = 0.4.sp),
-    headlineLarge = TextStyle(fontFamily = Orbitron, fontWeight = FontWeight.Bold, fontSize = 22.sp, letterSpacing = 0.4.sp),
-    headlineMedium = TextStyle(fontFamily = Orbitron, fontWeight = FontWeight.SemiBold, fontSize = 20.sp, letterSpacing = 0.3.sp),
-    headlineSmall = TextStyle(fontFamily = Orbitron, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, letterSpacing = 0.2.sp),
-    titleLarge = TextStyle(fontFamily = Rajdhani, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, letterSpacing = 0.3.sp),
-    titleMedium = TextStyle(fontFamily = Rajdhani, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, letterSpacing = 0.2.sp),
-    titleSmall = TextStyle(fontFamily = Rajdhani, fontWeight = FontWeight.Medium, fontSize = 14.sp, letterSpacing = 0.2.sp),
+    displaySmall = TextStyle(fontFamily = Orbitron, fontWeight = FontWeight.Bold, fontSize = 24.sp, letterSpacing = 0.4.sp),
+    headlineLarge = TextStyle(fontFamily = Rajdhani, fontWeight = FontWeight.Bold, fontSize = 22.sp, letterSpacing = 0.3.sp),
+    headlineMedium = TextStyle(fontFamily = Rajdhani, fontWeight = FontWeight.Bold, fontSize = 20.sp, letterSpacing = 0.3.sp),
+    headlineSmall = TextStyle(fontFamily = Rajdhani, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, letterSpacing = 0.2.sp),
+    titleLarge = TextStyle(fontFamily = Rajdhani, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, letterSpacing = 0.2.sp),
+    titleMedium = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, letterSpacing = 0.1.sp),
+    titleSmall = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Medium, fontSize = 13.5.sp, letterSpacing = 0.1.sp),
     bodyLarge = TextStyle(fontFamily = Inter, fontSize = 15.sp, lineHeight = 21.sp),
     bodyMedium = TextStyle(fontFamily = Inter, fontSize = 13.5.sp, lineHeight = 19.sp),
     bodySmall = TextStyle(fontFamily = Inter, fontSize = 12.sp, lineHeight = 16.sp),
@@ -150,17 +159,19 @@ private val KronTypography = androidx.compose.material3.Typography(
     labelSmall = TextStyle(fontFamily = Rajdhani, fontWeight = FontWeight.Medium, fontSize = 11.sp, letterSpacing = 0.5.sp),
 )
 
-val KronButtonShape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp)
-val KronFieldShape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp)
-val KronCardShape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp)
+val KronButtonShape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+val KronFieldShape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+val KronCardShape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp)
+val KronSubCardShape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
 val KronChipShape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+val KronPillShape = androidx.compose.foundation.shape.RoundedCornerShape(50)
 
 val KronShapes = androidx.compose.material3.Shapes(
     extraSmall = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
     small = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
-    medium = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
-    large = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
-    extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
+    medium = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+    large = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+    extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
 )
 
 @Composable

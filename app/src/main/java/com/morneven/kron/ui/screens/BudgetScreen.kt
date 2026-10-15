@@ -1,16 +1,21 @@
 package com.morneven.kron.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Archive
@@ -24,6 +29,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -34,20 +40,26 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.morneven.kron.data.AllocationBalanceRow
+import com.morneven.kron.data.CategoryEntity
 import com.morneven.kron.data.FundingChannel
 import com.morneven.kron.data.PeriodStatus
 import com.morneven.kron.ui.KronUiState
 import com.morneven.kron.ui.components.BudgetProgress
+import com.morneven.kron.ui.components.CategoryAvatar
 import com.morneven.kron.ui.components.ChannelBadge
 import com.morneven.kron.ui.components.EmptyState
 import com.morneven.kron.ui.components.HudCard
 import com.morneven.kron.ui.components.SectionHeader
 import com.morneven.kron.ui.components.displayMoney
 import com.morneven.kron.ui.components.signedColor
+import com.morneven.kron.ui.theme.KronBlue
 import com.morneven.kron.ui.theme.KronButtonShape
 import com.morneven.kron.ui.theme.KronChipShape
+import com.morneven.kron.ui.theme.KronGold
+import com.morneven.kron.ui.theme.KronSubCardShape
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -72,6 +84,7 @@ fun BudgetScreen(
     modifier: Modifier = Modifier,
 ) {
     var showArchive by remember { mutableStateOf(false) }
+    val categoryMap = remember(state.categories) { state.categories.associateBy { it.id } }
     val latestActivePeriods = state.portfolios.mapNotNull { portfolio ->
         state.allocations
             .filter { it.portfolioId == portfolio.id && !it.portfolioArchived }
@@ -116,30 +129,59 @@ fun BudgetScreen(
 
         if (!showArchive) {
             item {
-                HudCard {
+                HudCard(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
                     SectionHeader("Dana terbooking")
                     Spacer(Modifier.height(10.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         ChannelAmount(FundingChannel.CASH, state.bookedCash, state.valuesVisible, Modifier.weight(1f))
                         ChannelAmount(FundingChannel.EBUDGET, state.bookedEBudget, state.valuesVisible, Modifier.weight(1f))
                     }
-                    Spacer(Modifier.height(12.dp))
-                    Text("Reserve rollover", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.tertiary)
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        ChannelAmount(FundingChannel.CASH, state.rolloverCash, state.valuesVisible, Modifier.weight(1f))
-                        ChannelAmount(FundingChannel.EBUDGET, state.rolloverEBudget, state.valuesVisible, Modifier.weight(1f))
+                    val rollover = state.rolloverCash + state.rolloverEBudget
+                    if (rollover > 0 || !state.valuesVisible) {
+                        Spacer(Modifier.height(12.dp))
+                        Text("Reserve rollover", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(6.dp))
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            ChannelAmount(FundingChannel.CASH, state.rolloverCash, state.valuesVisible, Modifier.weight(1f))
+                            ChannelAmount(FundingChannel.EBUDGET, state.rolloverEBudget, state.valuesVisible, Modifier.weight(1f))
+                        }
                     }
-                    Spacer(Modifier.height(12.dp))
                     if (!readOnly) {
-                        Row(
-                            Modifier.fillMaxWidth().clickable(onClick = onChannelTransfer).padding(vertical = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                        Spacer(Modifier.height(12.dp))
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(onClick = onChannelTransfer),
+                            shape = KronSubCardShape,
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)),
                         ) {
-                            Icon(Icons.Outlined.SwapHoriz, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
-                            Column {
-                                Text("Pindahkan Cash dan eBudget", style = MaterialTheme.typography.labelLarge)
-                                Text("Konversi dana kategori beserta akun nyata", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = KronBlue.copy(alpha = 0.15f),
+                                    modifier = Modifier.size(32.dp),
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(Icons.Outlined.SwapHoriz, contentDescription = null, tint = KronBlue, modifier = Modifier.size(18.dp))
+                                    }
+                                }
+                                Column(Modifier.weight(1f)) {
+                                    Text("Pindahkan Cash dan eBudget", style = MaterialTheme.typography.titleSmall)
+                                    Text("Konversi dana kategori beserta akun nyata", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Icon(
+                                    Icons.AutoMirrored.Outlined.ArrowForward,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                    modifier = Modifier.size(16.dp),
+                                )
                             }
                         }
                     }
@@ -156,6 +198,7 @@ fun BudgetScreen(
                 val periodTotal = period?.plannedTotal ?: rows.sumOf { it.plannedAmount }
                 ActiveBudgetCard(
                     rows = rows,
+                    categoryMap = categoryMap,
                     periodTotal = periodTotal,
                     paused = portfolio.isPaused,
                     rolloverEnabled = portfolio.rolloverEnabled,
@@ -222,6 +265,7 @@ fun BudgetScreen(
 @Composable
 private fun ActiveBudgetCard(
     rows: List<AllocationBalanceRow>,
+    categoryMap: Map<Long, CategoryEntity>,
     periodTotal: Long,
     paused: Boolean,
     rolloverEnabled: Boolean,
@@ -241,15 +285,19 @@ private fun ActiveBudgetCard(
     val available = rows.sumOf { it.availableAmount }
     val booked = rows.sumOf { it.bookedAmount }
     val hasDeficit = rows.any { it.availableAmount < 0 }
-    HudCard(accent = if (hasDeficit) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) {
+    HudCard(
+        accent = if (hasDeficit) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f).padding(end = 8.dp)) {
                 Text(first.portfolioName, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 Spacer(Modifier.height(2.dp))
                 Text("${if (paused) "JEDA" else first.periodStatus.replace('_', ' ')} · ${LocalDate.ofEpochDay(first.startEpochDay).format(indonesianDate)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Text(displayMoney(available, visible), color = signedColor(available), style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, maxLines = 1, softWrap = false)
+            Text(displayMoney(available, visible), color = signedColor(available), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
         }
+        Spacer(Modifier.height(10.dp))
         BudgetProgress(booked, available)
         val plannedCategories = rows.sumOf { it.plannedAmount }
         val unallocated = (periodTotal - plannedCategories).coerceAtLeast(0L)
@@ -269,25 +317,73 @@ private fun ActiveBudgetCard(
                     displayMoney(unallocated, visible),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.primary,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold
                 )
             }
         }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(12.dp))
         val visibleRows = rows.filter { it.isActive && !(it.periodStatus != PeriodStatus.DRAFT && it.bookedAmount == 0L && it.availableAmount == 0L && it.spentAmount == 0L) }
         visibleRows.forEach { row ->
-            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                    ChannelBadge(row.fundingChannel)
-                    Text(row.categoryName, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(displayMoney(row.availableAmount, visible), color = signedColor(row.availableAmount), style = MaterialTheme.typography.titleSmall, maxLines = 1, softWrap = false)
-                    Text("booking ${displayMoney(row.bookedAmount, visible)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, softWrap = false)
+            val cat = categoryMap[row.categoryId]
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 3.dp),
+                shape = KronSubCardShape,
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f).padding(end = 8.dp),
+                    ) {
+                        CategoryAvatar(
+                            categoryName = row.categoryName,
+                            iconKey = cat?.icon,
+                            colorLong = cat?.color,
+                            size = 32.dp,
+                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                row.categoryName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            )
+                            ChannelBadge(row.fundingChannel)
+                        }
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            displayMoney(row.availableAmount, visible),
+                            color = signedColor(row.availableAmount),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                        Text(
+                            "booking ${displayMoney(row.bookedAmount, visible)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                    }
                 }
             }
         }
-        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onDetail, modifier = Modifier.weight(1f), shape = KronButtonShape) { Text("Detail budget") }
             OutlinedButton(onClick = onHistory, modifier = Modifier.weight(1f), shape = KronButtonShape) { Text("Riwayat") }
         }
@@ -319,10 +415,29 @@ private fun ActiveBudgetCard(
 }
 
 @Composable
-private fun ChannelAmount(channel: String, amount: Long, visible: Boolean, modifier: Modifier) {
-    Column(modifier) {
-        ChannelBadge(channel)
-        Text(displayMoney(amount, visible), style = MaterialTheme.typography.titleMedium)
+private fun ChannelAmount(channel: String, amount: Long, visible: Boolean, modifier: Modifier = Modifier) {
+    val isCash = channel == FundingChannel.CASH
+    val color = if (isCash) KronGold else KronBlue
+    Surface(
+        modifier = modifier,
+        shape = KronSubCardShape,
+        color = color.copy(alpha = 0.08f),
+        border = BorderStroke(0.8.dp, color.copy(alpha = 0.35f)),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            ChannelBadge(channel)
+            Text(
+                text = displayMoney(amount, visible),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = color,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
     }
 }
 

@@ -21,7 +21,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Calculate
@@ -30,8 +32,30 @@ import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.outlined.KeyboardHide
 import androidx.compose.material.icons.outlined.Payments
 import androidx.compose.material.icons.automirrored.outlined.Backspace
+import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
+import androidx.compose.material.icons.outlined.AddCard
+import androidx.compose.material.icons.outlined.ArrowDownward
+import androidx.compose.material.icons.outlined.ArrowUpward
+import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.Category
+import androidx.compose.material.icons.outlined.DirectionsCar
+import androidx.compose.material.icons.outlined.LocalHospital
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Movie
+import androidx.compose.material.icons.outlined.RequestQuote
+import androidx.compose.material.icons.outlined.Restaurant
+import androidx.compose.material.icons.outlined.ShoppingBag
+import androidx.compose.material.icons.outlined.SwapHoriz
+import androidx.compose.material.icons.outlined.Shield
+import com.morneven.kron.data.ActivityRow
+import com.morneven.kron.data.CategoryEntity
+import com.morneven.kron.ui.theme.KronCardShape
+import com.morneven.kron.ui.theme.KronSubCardShape
+import com.morneven.kron.ui.theme.KronPillShape
+import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.focus.FocusRequester
@@ -857,17 +881,18 @@ fun wordIdr(value: Long): String {
 @Composable
 fun HudCard(
     modifier: Modifier = Modifier,
-    accent: Color = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f),
+    accent: Color = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f),
+    containerColor: Color = MaterialTheme.colorScheme.surfaceContainer,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Card(
         modifier = modifier,
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = KronCardShape,
+        colors = CardDefaults.cardColors(containerColor = containerColor),
         border = BorderStroke(0.8.dp, accent),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
-        Column(modifier = Modifier.padding(14.dp), content = content)
+        Column(modifier = Modifier.padding(16.dp), content = content)
     }
 }
 
@@ -932,7 +957,10 @@ fun BudgetProgress(booked: Long, available: Long, modifier: Modifier = Modifier)
     }
     LinearProgressIndicator(
         progress = { progress },
-        modifier = modifier.fillMaxWidth().height(4.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .height(6.dp)
+            .clip(RoundedCornerShape(3.dp)),
         color = color,
         trackColor = MaterialTheme.colorScheme.surfaceVariant,
     )
@@ -986,3 +1014,650 @@ fun compactIdr(value: Long): String {
     val number = if (divisor == 1.0) abs.toString() else String.format(Locale.forLanguageTag("id-ID"), "%.1f", abs / divisor).removeSuffix(",0")
     return (if (value < 0) "-" else "") + "Rp $number$suffix"
 }
+
+fun ActivityRow.primaryImpact(): Long = when {
+    cashImpact != 0L -> cashImpact
+    vaultImpact != 0L -> vaultImpact
+    else -> budgetImpact
+}
+
+fun categoryVisualIcon(iconKey: String?, type: String? = null): ImageVector = when (iconKey?.lowercase()) {
+    "payments" -> Icons.Outlined.Payments
+    "add_card" -> Icons.Outlined.AddCard
+    "shopping_bag" -> Icons.Outlined.ShoppingBag
+    "restaurant" -> Icons.Outlined.Restaurant
+    "directions_car" -> Icons.Outlined.DirectionsCar
+    "receipt" -> Icons.AutoMirrored.Outlined.ReceiptLong
+    "health" -> Icons.Outlined.LocalHospital
+    "movie" -> Icons.Outlined.Movie
+    "category" -> Icons.Outlined.Category
+    else -> when (type) {
+        "INCOME" -> Icons.Outlined.ArrowDownward
+        "EXPENSE", "UNEXPECTED_EXPENSE" -> Icons.Outlined.ArrowUpward
+        "TRANSFER", "CHANNEL_TRANSFER" -> Icons.Outlined.SwapHoriz
+        "DEBT_OPEN", "DEBT_PAYMENT" -> Icons.Outlined.RequestQuote
+        "AUTOMATION" -> Icons.Outlined.CalendarMonth
+        "SYSTEM", "SECURITY" -> Icons.Outlined.Shield
+        else -> Icons.Outlined.Category
+    }
+}
+
+fun categoryVisualColor(colorLong: Long?, type: String? = null): Color {
+    if (colorLong != null && colorLong != 0L) {
+        return Color(colorLong)
+    }
+    return when (type) {
+        "INCOME" -> Color(0xFF4CAF7D)
+        "EXPENSE", "UNEXPECTED_EXPENSE" -> Color(0xFFB94D59)
+        "TRANSFER", "CHANNEL_TRANSFER" -> Color(0xFF65A9EF)
+        "DEBT_OPEN", "DEBT_PAYMENT" -> Color(0xFFE2BD4D)
+        "AUTOMATION" -> Color(0xFF8F6CC1)
+        else -> Color(0xFF8A8082)
+    }
+}
+
+@Composable
+fun CategoryAvatar(
+    categoryName: String,
+    iconKey: String? = null,
+    colorLong: Long? = null,
+    type: String? = null,
+    size: androidx.compose.ui.unit.Dp = 40.dp,
+    modifier: Modifier = Modifier,
+) {
+    val color = categoryVisualColor(colorLong, type)
+    val icon = categoryVisualIcon(iconKey, type)
+    Surface(
+        modifier = modifier.size(size),
+        shape = KronSubCardShape,
+        color = color.copy(alpha = 0.12f),
+        border = BorderStroke(0.8.dp, color.copy(alpha = 0.35f)),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = icon,
+                contentDescription = categoryName,
+                tint = color,
+                modifier = Modifier.size(size * 0.52f),
+            )
+        }
+    }
+}
+
+@Composable
+fun ActivityStatusTag(activity: ActivityRow) {
+    val (label, tint) = when {
+        activity.reversedByEventId != null -> "BATAL" to MaterialTheme.colorScheme.error
+        activity.type == "ARCHIVE" -> "ARSIP" to MaterialTheme.colorScheme.onSurfaceVariant
+        activity.type == "RESTORE" || activity.type == "RESTORE_REVERSAL" -> "PULIH" to MaterialTheme.colorScheme.tertiary
+        activity.source == "SYSTEM" -> "SISTEM" to MaterialTheme.colorScheme.onSurfaceVariant
+        activity.source == "AUTOMATION" || activity.type == "AUTOMATION" -> "AUTO" to MaterialTheme.colorScheme.tertiary
+        else -> return
+    }
+    Surface(
+        color = tint.copy(alpha = 0.14f),
+        shape = RoundedCornerShape(4.dp),
+        border = BorderStroke(0.6.dp, tint.copy(alpha = 0.35f)),
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.5.dp),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = tint,
+        )
+    }
+}
+
+@Composable
+fun TransactionCardItem(
+    activity: ActivityRow,
+    category: CategoryEntity? = null,
+    valuesVisible: Boolean = true,
+    channels: Set<String> = emptySet(),
+    timestampText: String? = null,
+    readOnly: Boolean = false,
+    onClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    val impact = activity.primaryImpact()
+    val money = displayMoney(impact, valuesVisible)
+    val reversed = activity.reversedByEventId != null
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .then(if (onClick != null && !readOnly) Modifier.clickable(onClick = onClick) else Modifier),
+        shape = KronSubCardShape,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CategoryAvatar(
+                    categoryName = category?.name ?: activity.title,
+                    iconKey = category?.icon,
+                    colorLong = category?.color,
+                    type = activity.type,
+                    size = 42.dp,
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = activity.title,
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            textDecoration = if (reversed) androidx.compose.ui.text.style.TextDecoration.LineThrough else null,
+                        ),
+                        color = if (reversed) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = if (category != null && category.name != activity.title) "${category.name} · ${eventTypeLabel(activity.type)}" else eventTypeLabel(activity.type),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = money,
+                    color = if (reversed) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f) else signedColor(impact),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+
+            if (activity.note.isNotBlank()) {
+                Text(
+                    text = activity.note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 54.dp),
+                )
+            }
+
+            if (channels.isNotEmpty() || reversed || timestampText != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 54.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f, fill = false),
+                    ) {
+                        channels.sorted().forEach { ChannelBadge(it) }
+                        ActivityStatusTag(activity)
+                    }
+                    if (timestampText != null) {
+                        Text(
+                            text = timestampText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun HeroBalanceCard(
+    totalAssets: Long,
+    cashAssets: Long,
+    eBudgetAssets: Long,
+    vaultCash: Long,
+    vaultEBudget: Long,
+    rollover: Long = 0L,
+    visible: Boolean = true,
+    accountName: String = "",
+    onToggleValues: () -> Unit = {},
+    onExactMoney: ((String, Long) -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    val totalAbs = kotlin.math.abs(totalAssets).toFloat().coerceAtLeast(1f)
+    val cashRatio = (kotlin.math.abs(cashAssets).toFloat() / totalAbs * 100f).roundToInt().coerceIn(0, 100)
+    val eBudgetRatio = (kotlin.math.abs(eBudgetAssets).toFloat() / totalAbs * 100f).roundToInt().coerceIn(0, 100)
+
+    HudCard(
+        modifier = modifier.fillMaxWidth(),
+        accent = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "TOTAL ASET AKTIF",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.5.sp,
+                )
+                if (accountName.isNotBlank()) {
+                    Surface(
+                        shape = KronPillShape,
+                        color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f),
+                        border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.35f)),
+                    ) {
+                        Text(
+                            accountName,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Text(
+            text = displayPrimaryHomeMoney(totalAssets, visible),
+            modifier = Modifier.clickable(
+                enabled = visible && shouldCompactPrimaryHomeMoney(totalAssets),
+                onClick = { onExactMoney?.invoke("Total aset nyata", totalAssets) },
+            ),
+            style = MaterialTheme.typography.displaySmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            softWrap = false,
+        )
+
+        Spacer(Modifier.height(14.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable(
+                        enabled = visible && shouldCompactSecondaryHomeMoney(cashAssets),
+                        onClick = { onExactMoney?.invoke("Total Cash", cashAssets) },
+                    ),
+                shape = KronSubCardShape,
+                color = KronGold.copy(alpha = 0.08f),
+                border = BorderStroke(0.8.dp, KronGold.copy(alpha = 0.35f)),
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        ) {
+                            Icon(Icons.Outlined.Payments, contentDescription = null, tint = KronGold, modifier = Modifier.size(13.dp))
+                            Text("CASH", style = MaterialTheme.typography.labelSmall, color = KronGold, fontWeight = FontWeight.Bold)
+                        }
+                        Text("$cashRatio%", style = MaterialTheme.typography.labelSmall, color = KronGold.copy(alpha = 0.75f))
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = displaySecondaryHomeMoney(cashAssets, visible),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = KronGold,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
+            }
+
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable(
+                        enabled = visible && shouldCompactSecondaryHomeMoney(eBudgetAssets),
+                        onClick = { onExactMoney?.invoke("Total eBudget", eBudgetAssets) },
+                    ),
+                shape = KronSubCardShape,
+                color = KronBlue.copy(alpha = 0.08f),
+                border = BorderStroke(0.8.dp, KronBlue.copy(alpha = 0.35f)),
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        ) {
+                            Icon(Icons.Outlined.AccountBalanceWallet, contentDescription = null, tint = KronBlue, modifier = Modifier.size(13.dp))
+                            Text("EBUDGET", style = MaterialTheme.typography.labelSmall, color = KronBlue, fontWeight = FontWeight.Bold)
+                        }
+                        Text("$eBudgetRatio%", style = MaterialTheme.typography.labelSmall, color = KronBlue.copy(alpha = 0.75f))
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = displaySecondaryHomeMoney(eBudgetAssets, visible),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = KronBlue,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = KronSubCardShape,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.5f),
+            border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)),
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(Icons.Outlined.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(14.dp))
+                        Text("Main Vault (Sisa Belum Dibooking)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+                    }
+                    Text(
+                        text = displaySecondaryHomeMoney(vaultCash + vaultEBudget, visible),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Cash: ${displaySecondaryHomeMoney(vaultCash, visible)}  ·  eBudget: ${displaySecondaryHomeMoney(vaultEBudget, visible)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (rollover > 0 || !visible) {
+                        Text(
+                            "Rollover: ${displaySecondaryHomeMoney(rollover, visible)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.tertiary,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun QuickActionDock(
+    onIncome: () -> Unit,
+    onExpense: () -> Unit,
+    onTransfer: () -> Unit,
+    onDebt: () -> Unit,
+    readOnly: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    if (readOnly) return
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        QuickActionButton(
+            icon = Icons.Outlined.AddCard,
+            label = "Pemasukan",
+            color = KronGreen,
+            onClick = onIncome,
+            modifier = Modifier.weight(1f),
+        )
+        QuickActionButton(
+            icon = Icons.Outlined.Payments,
+            label = "Pengeluaran",
+            color = MaterialTheme.colorScheme.primary,
+            onClick = onExpense,
+            modifier = Modifier.weight(1f),
+        )
+        QuickActionButton(
+            icon = Icons.Outlined.SwapHoriz,
+            label = "Transfer",
+            color = KronBlue,
+            onClick = onTransfer,
+            modifier = Modifier.weight(1f),
+        )
+        QuickActionButton(
+            icon = Icons.Outlined.RequestQuote,
+            label = "Hutang",
+            color = KronGold,
+            onClick = onDebt,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+fun QuickActionButton(
+    icon: ImageVector,
+    label: String,
+    color: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .clickable(onClick = onClick),
+            shape = KronSubCardShape,
+            color = color.copy(alpha = 0.12f),
+            border = BorderStroke(0.8.dp, color.copy(alpha = 0.35f)),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(icon, contentDescription = label, tint = color, modifier = Modifier.size(22.dp))
+            }
+        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            softWrap = false,
+        )
+    }
+}
+
+@Composable
+fun CashFlowCard(
+    income: Long,
+    expense: Long,
+    visible: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
+    val net = income - expense
+    val totalFlow = (income + expense).toFloat().coerceAtLeast(1f)
+    val incomeRatio = if (income + expense > 0) (income.toFloat() / totalFlow).coerceIn(0f, 1f) else 0.5f
+
+    HudCard(
+        modifier = modifier.fillMaxWidth(),
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "ARUS KAS BULAN INI",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                letterSpacing = 1.2.sp,
+            )
+            Surface(
+                shape = KronPillShape,
+                color = (if (net >= 0) KronGreen else MaterialTheme.colorScheme.error).copy(alpha = 0.12f),
+                border = BorderStroke(0.8.dp, (if (net >= 0) KronGreen else MaterialTheme.colorScheme.error).copy(alpha = 0.35f)),
+            ) {
+                Text(
+                    text = "Net: ${displayMoney(net, visible)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = signedColor(net),
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            // Inflow
+            Surface(
+                modifier = Modifier.weight(1f),
+                shape = KronSubCardShape,
+                color = KronGreen.copy(alpha = 0.08f),
+                border = BorderStroke(0.8.dp, KronGreen.copy(alpha = 0.25f)),
+            ) {
+                Row(
+                    modifier = Modifier.padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = KronGreen.copy(alpha = 0.2f),
+                        modifier = Modifier.size(28.dp),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Outlined.ArrowDownward,
+                                contentDescription = null,
+                                tint = KronGreen,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
+                    Column {
+                        Text("Masuk", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            displayMoney(income, visible),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = KronGreen,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                    }
+                }
+            }
+
+            // Outflow
+            Surface(
+                modifier = Modifier.weight(1f),
+                shape = KronSubCardShape,
+                color = MaterialTheme.colorScheme.error.copy(alpha = 0.08f),
+                border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.25f)),
+            ) {
+                Row(
+                    modifier = Modifier.padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.2f),
+                        modifier = Modifier.size(28.dp),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Outlined.ArrowUpward,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
+                    Column {
+                        Text("Keluar", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            displayMoney(expense, visible),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.error,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                    }
+                }
+            }
+        }
+
+        if (income + expense > 0L) {
+            Spacer(Modifier.height(10.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.error.copy(alpha = 0.35f)),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(incomeRatio)
+                        .height(6.dp)
+                        .background(KronGreen),
+                )
+            }
+        }
+    }
+}
+
