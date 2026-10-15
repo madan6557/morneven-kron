@@ -1,5 +1,11 @@
 # KRON Changelog
 
+## 1.7.21 - 2026-10-15
+
+- Perbaikan scoping validasi snapshot Team pada sinkronisasi Private Drive: validasi graph sebelum pemangkasan (TeamSnapshotPruner.validateGraph) kini hanya memeriksa event dan hutang milik akun Team itu sendiri, sehingga keberadaan hutang pada akun privat lain tidak lagi memicu error palsu "Hutang Team milik akun lain". Validasi ketiadaan hutang akun lain ditempatkan pada snapshot yang sudah terisolasi (validateSnapshot).
+- Penyeragaman margin judul seksi dan kartu (Settings, Home, Reports): standarisasi jarak antar SectionHeader dan kartu terkait menjadi 8.dp konsisten di seluruh aplikasi menggunakan Column bertata letak rapi, penambahan SectionHeader untuk seksi "Backup dan pemulihan" di Pengaturan, serta penyesuaian padding SectionHeader.
+- Bump versionCode 112 -> 113 dan versionName 1.7.20 -> 1.7.21.
+
 ## 1.7.20 - 2026-10-15
 
 - Perbaikan loop otorisasi Google Drive: saat menerima HTTP 401 Unauthorized karena akun dicabut atau logout di perangkat lain, KRON kini secara eksplisit membersihkan token kadaluarsa dari cache Google Play Services (clearToken) dan sesi lokal (invalidateToken).

@@ -240,7 +240,7 @@ fun HomeScreen(
 
         if (negative.isNotEmpty() || underfunded.isNotEmpty() || state.unresolvedTotal < 0 || vaultDeficit < 0 || stalledRules.isNotEmpty()) {
             item {
-                Column {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     SectionHeader("Pusat perhatian")
                     HudCard(accent = MaterialTheme.colorScheme.error.copy(alpha = 0.65f)) {
                         if (negative.isNotEmpty()) AttentionRow(
@@ -305,24 +305,28 @@ fun HomeScreen(
             .groupBy { it.portfolioId }
             .entries.take(3)
         if (activeGroups.isNotEmpty()) {
-            item { SectionHeader("Portfolio aktif") }
-            items(activeGroups, key = { it.key }) { (_, allocations) ->
-                val booked = allocations.sumOf { it.bookedAmount }
-                val available = allocations.sumOf { it.availableAmount }
-                HudCard {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(allocations.first().portfolioName, style = MaterialTheme.typography.titleMedium)
-                            Text("${allocations.size} alokasi", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SectionHeader("Portfolio aktif")
+                    activeGroups.forEach { (_, allocations) ->
+                        val booked = allocations.sumOf { it.bookedAmount }
+                        val available = allocations.sumOf { it.availableAmount }
+                        HudCard {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(allocations.first().portfolioName, style = MaterialTheme.typography.titleMedium)
+                                    Text("${allocations.size} alokasi", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Text(displayMoney(available, visible), color = signedColor(available), style = MaterialTheme.typography.titleMedium)
+                            }
+                            Spacer(Modifier.height(12.dp))
+                            BudgetProgress(booked, available)
+                            Spacer(Modifier.height(10.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (allocations.any { it.fundingChannel == FundingChannel.CASH }) ChannelBadge(FundingChannel.CASH)
+                                if (allocations.any { it.fundingChannel == FundingChannel.EBUDGET }) ChannelBadge(FundingChannel.EBUDGET)
+                            }
                         }
-                        Text(displayMoney(available, visible), color = signedColor(available), style = MaterialTheme.typography.titleMedium)
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    BudgetProgress(booked, available)
-                    Spacer(Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (allocations.any { it.fundingChannel == FundingChannel.CASH }) ChannelBadge(FundingChannel.CASH)
-                        if (allocations.any { it.fundingChannel == FundingChannel.EBUDGET }) ChannelBadge(FundingChannel.EBUDGET)
                     }
                 }
             }
@@ -330,33 +334,34 @@ fun HomeScreen(
 
         if (activeRules.isNotEmpty()) {
             item {
-                SectionHeader("Transaksi otomatis berikutnya")
-                Text(
-                    "Pemasukan atau pengeluaran yang akan dicatat KRON otomatis. Revert transaksi tidak membatalkan jadwal ini.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 8.dp),
-                )
-            }
-            items(activeRules.take(3), key = { it.id }) { rule ->
-                HudCard {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Icon(Icons.Outlined.CalendarMonth, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
-                            Column {
-                                Text(rule.title, style = MaterialTheme.typography.titleSmall)
-                                Text(
-                                    if (rule.direction == "INCOME") "Pemasukan otomatis" else "Pengeluaran otomatis",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (rule.direction == "INCOME") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                                )
-                                Text(LocalDate.ofEpochDay(rule.nextEpochDay).format(DateTimeFormatter.ofPattern("d MMM yyyy", Locale.forLanguageTag("id-ID"))), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("Berulang setiap ${rule.intervalCount} ${if (rule.cadence == "YEARLY") "tahun" else "bulan"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SectionHeader("Transaksi otomatis berikutnya")
+                    Text(
+                        "Pemasukan atau pengeluaran yang akan dicatat KRON otomatis. Revert transaksi tidak membatalkan jadwal ini.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    activeRules.take(3).forEach { rule ->
+                        HudCard {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Icon(Icons.Outlined.CalendarMonth, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
+                                    Column {
+                                        Text(rule.title, style = MaterialTheme.typography.titleSmall)
+                                        Text(
+                                            if (rule.direction == "INCOME") "Pemasukan otomatis" else "Pengeluaran otomatis",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (rule.direction == "INCOME") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                        )
+                                        Text(LocalDate.ofEpochDay(rule.nextEpochDay).format(DateTimeFormatter.ofPattern("d MMM yyyy", Locale.forLanguageTag("id-ID"))), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text("Berulang setiap ${rule.intervalCount} ${if (rule.cadence == "YEARLY") "tahun" else "bulan"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+                                    }
+                                }
+                                Text(displayMoney(rule.amount, visible), style = MaterialTheme.typography.labelLarge)
                             }
+                            if (!readOnly) androidx.compose.material3.TextButton(onClick = { onPauseRule(rule.id) }) { Text("Hentikan jadwal") }
                         }
-                        Text(displayMoney(rule.amount, visible), style = MaterialTheme.typography.labelLarge)
                     }
-                    if (!readOnly) androidx.compose.material3.TextButton(onClick = { onPauseRule(rule.id) }) { Text("Hentikan jadwal") }
                 }
             }
         }
@@ -370,16 +375,20 @@ fun HomeScreen(
             )
         }
         if (financialActivities.isNotEmpty()) {
-            item { SectionHeader("Aktivitas terbaru", "Lihat semua", onAllActivities) }
-            items(financialActivities.take(5), key = { it.id }) { activity ->
-                TransactionCardItem(
-                    activity = activity,
-                    category = categoryMap[activity.title],
-                    valuesVisible = visible,
-                    channels = state.eventChannels[activity.id].orEmpty(),
-                    readOnly = readOnly,
-                    onClick = onAllActivities,
-                )
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SectionHeader("Aktivitas terbaru", "Lihat semua", onAllActivities)
+                    financialActivities.take(5).forEach { activity ->
+                        TransactionCardItem(
+                            activity = activity,
+                            category = categoryMap[activity.title],
+                            valuesVisible = visible,
+                            channels = state.eventChannels[activity.id].orEmpty(),
+                            readOnly = readOnly,
+                            onClick = onAllActivities,
+                        )
+                    }
+                }
             }
         }
 

@@ -225,19 +225,23 @@ fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
-            Text("PENGATURAN", style = MaterialTheme.typography.headlineMedium)
-            Text("Akun, keamanan, data, dan tampilan", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("Akun aktif: ${state.activeAccount?.name ?: "Belum ada"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("PENGATURAN", style = MaterialTheme.typography.headlineMedium)
+                Text("Akun, keamanan, data, dan tampilan", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Akun aktif: ${state.activeAccount?.name ?: "Belum ada"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+            }
         }
 
         item {
-            SectionHeader("Akun")
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(end = 12.dp)) {
-                item {
-                    FilterChip(selected = !showArchive, onClick = { showArchive = false }, label = { Text("Aktif (${activeAccounts.size})") })
-                }
-                item {
-                    FilterChip(selected = showArchive, onClick = { showArchive = true }, label = { Text("Arsip (${state.archivedAccounts.size})") })
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionHeader("Akun")
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(end = 12.dp)) {
+                    item {
+                        FilterChip(selected = !showArchive, onClick = { showArchive = false }, label = { Text("Aktif (${activeAccounts.size})") })
+                    }
+                    item {
+                        FilterChip(selected = showArchive, onClick = { showArchive = true }, label = { Text("Arsip (${state.archivedAccounts.size})") })
+                    }
                 }
             }
         }
@@ -247,15 +251,17 @@ fun SettingsScreen(
                 .filter { it.second.isNotEmpty() }
                 .forEach { (title, accounts) ->
                 item {
-                    Text(title, style = MaterialTheme.typography.titleMedium)
-                    AccountCarousel(
-                        accounts = accounts,
-                        state = state,
-                        onEditAccount = onEditAccount,
-                        onArchiveAccount = onArchiveAccount,
-                        onActivateAccount = onActivateAccount,
-                        interactionBlocked = teamSyncing || privateSyncing,
-                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(title, style = MaterialTheme.typography.titleMedium)
+                        AccountCarousel(
+                            accounts = accounts,
+                            state = state,
+                            onEditAccount = onEditAccount,
+                            onArchiveAccount = onArchiveAccount,
+                            onActivateAccount = onActivateAccount,
+                            interactionBlocked = teamSyncing || privateSyncing,
+                        )
+                    }
                 }
             }
             item {
@@ -300,125 +306,134 @@ fun SettingsScreen(
         }
 
         item {
-            SectionHeader("Team Account")
-            HudCard {
-                val account = state.activeAccount
-                val workspace = state.teamWorkspace
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Icon(Icons.Outlined.Group, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            if (account?.sharingMode == AccountSharingMode.TEAM) "Akun Team" else "Akun Privat",
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        Text(
-                            if (workspace == null) {
-                                "Data akun ini hanya tersedia pada ruang privat KRON."
-                            } else {
-                                "Role ${workspace.localRole.lowercase().replaceFirstChar(Char::uppercase)}. " +
-                                    "${state.teamMembers.size} collaborator tersimpan dalam cache Drive."
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                Spacer(Modifier.height(10.dp))
-                if (!BuildConfig.TEAM_ACCOUNT_ENABLED) {
-                    Text(
-                        "Fondasi Team Account terpasang, tetapi aktivasi dikunci sampai uji dua akun Google Drive dan rollback lulus.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.tertiary,
-                    )
-                } else if (account?.sharingMode != AccountSharingMode.TEAM) {
-                    Button(
-                        onClick = { onConvertToTeam?.invoke() },
-                        enabled = onConvertToTeam != null && driveSyncConnected && !teamSyncing && !privateSyncing,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    ) { Text("Ubah menjadi Team") }
-                    TextButton(
-                        onClick = { onJoinTeam?.invoke() },
-                        enabled = onJoinTeam != null && !teamSyncing && !privateSyncing,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionHeader("Team Account")
+                HudCard {
+                    val account = state.activeAccount
+                    val workspace = state.teamWorkspace
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        Icon(Icons.Outlined.Key, contentDescription = null)
-                        Text("Masukkan kode akses")
+                        Icon(Icons.Outlined.Group, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                if (account?.sharingMode == AccountSharingMode.TEAM) "Akun Team" else "Akun Privat",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(
+                                if (workspace == null) {
+                                    "Data akun ini hanya tersedia pada ruang privat KRON."
+                                } else {
+                                    "Role ${workspace.localRole.lowercase().replaceFirstChar(Char::uppercase)}. " +
+                                        "${state.teamMembers.size} collaborator tersimpan dalam cache Drive."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
-                } else if (workspace?.localRole == TeamRole.OWNER) {
-                    Button(
-                        onClick = { onManageCollaborators?.invoke() },
-                        enabled = onManageCollaborators != null && workspace.canShare && !teamSyncing && !privateSyncing,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    ) { Text("Kelola collaborator") }
-                    TextButton(
-                        onClick = { onCreateTeamInvite?.invoke() },
-                        enabled = onCreateTeamInvite != null && workspace.canShare && !teamSyncing && !privateSyncing,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    ) { Text("Buat kode akses") }
-                    TextButton(
-                        onClick = { onConvertToPrivate?.invoke() },
-                        enabled = onConvertToPrivate != null && !teamSyncing && !privateSyncing,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    ) { Text("Kembalikan menjadi privat") }
-                } else {
-                    TextButton(
-                        onClick = { onLeaveTeam?.invoke() },
-                        enabled = onLeaveTeam != null && !teamSyncing && !privateSyncing,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    ) { Text("Tinggalkan Team") }
+                    Spacer(Modifier.height(10.dp))
+                    if (!BuildConfig.TEAM_ACCOUNT_ENABLED) {
+                        Text(
+                            "Fondasi Team Account terpasang, tetapi aktivasi dikunci sampai uji dua akun Google Drive dan rollback lulus.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.tertiary,
+                        )
+                    } else if (account?.sharingMode != AccountSharingMode.TEAM) {
+                        Button(
+                            onClick = { onConvertToTeam?.invoke() },
+                            enabled = onConvertToTeam != null && driveSyncConnected && !teamSyncing && !privateSyncing,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) { Text("Ubah menjadi Team") }
+                        TextButton(
+                            onClick = { onJoinTeam?.invoke() },
+                            enabled = onJoinTeam != null && !teamSyncing && !privateSyncing,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) {
+                            Icon(Icons.Outlined.Key, contentDescription = null)
+                            Text("Masukkan kode akses")
+                        }
+                    } else if (workspace?.localRole == TeamRole.OWNER) {
+                        Button(
+                            onClick = { onManageCollaborators?.invoke() },
+                            enabled = onManageCollaborators != null && workspace.canShare && !teamSyncing && !privateSyncing,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) { Text("Kelola collaborator") }
+                        TextButton(
+                            onClick = { onCreateTeamInvite?.invoke() },
+                            enabled = onCreateTeamInvite != null && workspace.canShare && !teamSyncing && !privateSyncing,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) { Text("Buat kode akses") }
+                        TextButton(
+                            onClick = { onConvertToPrivate?.invoke() },
+                            enabled = onConvertToPrivate != null && !teamSyncing && !privateSyncing,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) { Text("Kembalikan menjadi privat") }
+                    } else {
+                        TextButton(
+                            onClick = { onLeaveTeam?.invoke() },
+                            enabled = onLeaveTeam != null && !teamSyncing && !privateSyncing,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) { Text("Tinggalkan Team") }
+                    }
                 }
             }
         }
 
-        item { SectionHeader("Kapsul") }
         item {
-            HudCard {
-                Button(
-                    onClick = { onCreateCapsule?.invoke() },
-                    enabled = onCreateCapsule != null,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                ) { Text("Buat Kapsul") }
-                Spacer(Modifier.height(8.dp))
-                Button(
-                    onClick = { onOpenCapsule?.invoke() },
-                    enabled = onOpenCapsule != null,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                ) { Text("Buka Kapsul") }
-                Spacer(Modifier.height(8.dp))
-                Row(Modifier.fillMaxWidth()) {
-                    TextButton(
-                        onClick = { onViewSentCapsules?.invoke() },
-                        enabled = onViewSentCapsules != null && capsuleSentCount > 0,
-                        modifier = Modifier.weight(1f),
-                    ) { Text("Dikirim ($capsuleSentCount)") }
-                    TextButton(
-                        onClick = { onViewReceivedCapsules?.invoke() },
-                        enabled = onViewReceivedCapsules != null && capsuleReceivedCount > 0,
-                        modifier = Modifier.weight(1f),
-                    ) { Text("Diterima ($capsuleReceivedCount)") }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionHeader("Kapsul")
+                HudCard {
+                    Button(
+                        onClick = { onCreateCapsule?.invoke() },
+                        enabled = onCreateCapsule != null,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) { Text("Buat Kapsul") }
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = { onOpenCapsule?.invoke() },
+                        enabled = onOpenCapsule != null,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) { Text("Buka Kapsul") }
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth()) {
+                        TextButton(
+                            onClick = { onViewSentCapsules?.invoke() },
+                            enabled = onViewSentCapsules != null && capsuleSentCount > 0,
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Dikirim ($capsuleSentCount)") }
+                        TextButton(
+                            onClick = { onViewReceivedCapsules?.invoke() },
+                            enabled = onViewReceivedCapsules != null && capsuleReceivedCount > 0,
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Diterima ($capsuleReceivedCount)") }
+                    }
                 }
             }
         }
 
         if (state.rules.isNotEmpty()) {
-            item { SectionHeader("Jadwal otomatis") }
-            items(state.rules, key = { "rule-${it.id}" }) { rule ->
-                RecurringRuleCard(
-                    rule = rule,
-                    valuesVisible = state.valuesVisible,
-                    onPause = onPauseRule.takeUnless { activeReadOnly },
-                    onResume = onResumeRule.takeUnless { activeReadOnly },
-                )
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SectionHeader("Jadwal otomatis")
+                    state.rules.forEach { rule ->
+                        RecurringRuleCard(
+                            rule = rule,
+                            valuesVisible = state.valuesVisible,
+                            onPause = onPauseRule.takeUnless { activeReadOnly },
+                            onResume = onResumeRule.takeUnless { activeReadOnly },
+                        )
+                    }
+                }
             }
         }
 
         item {
-            SectionHeader("Privasi dan keamanan")
-            HudCard {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionHeader("Privasi dan keamanan")
+                HudCard {
                 ToggleRow(
                     Icons.Outlined.Lock,
                     "Kunci aplikasi",
@@ -442,136 +457,149 @@ fun SettingsScreen(
                 )
             }
         }
+    }
 
         item {
-            SectionHeader("Sinkronisasi")
-            val teamMode = state.activeAccount?.sharingMode == AccountSharingMode.TEAM
-            val teamStatus = when {
-                teamSyncing -> CloudSyncStatus.SYNCING
-                teamWaitingNetwork -> CloudSyncStatus.WAITING_NETWORK
-                teamSyncFailed -> CloudSyncStatus.FAILED
-                state.teamWorkspace?.status == "SYNCING" -> CloudSyncStatus.SYNCING
-                state.teamWorkspace?.status == "MERGE_PENDING" -> CloudSyncStatus.SYNCING
-                state.teamWorkspace?.status == "WAITING_NETWORK" -> CloudSyncStatus.WAITING_NETWORK
-                state.teamWorkspace?.status == "FAILED" -> CloudSyncStatus.FAILED
-                state.teamWorkspace?.status == "CONFLICT" -> CloudSyncStatus.CONFLICT
-                state.teamWorkspace?.status == "APPLY_PENDING" -> CloudSyncStatus.RESTART_REQUIRED
-                state.teamWorkspace?.status == "AUTH_REQUIRED" -> CloudSyncStatus.NEEDS_AUTHORIZATION
-                state.teamWorkspace?.status == "REVOKED" -> CloudSyncStatus.FAILED
-                state.teamWorkspace?.status == "SYNCED" -> CloudSyncStatus.SYNCED
-                else -> CloudSyncStatus.NOT_CONNECTED
-            }
-            SyncCard(
-                state = SyncCardUiState(
-                    mode = if (teamMode) SyncMode.TEAM else SyncMode.PRIVATE_DRIVE,
-                    status = if (teamMode) teamStatus else cloudBackupState.status,
-                    accountLabel = if (teamMode) teamGoogleAccountLabel else cloudBackupState.accountLabel,
-                    kronAccountName = state.activeAccount?.name,
-                    teamRole = state.teamWorkspace?.localRole,
-                    lastSyncedAt = if (teamMode && teamStatus == CloudSyncStatus.SYNCED) state.teamWorkspace?.updatedAt else cloudBackupState.lastSyncedAt,
-                    wifiOnly = cloudBackupState.wifiOnly,
-                    detail = if (teamMode) {
-                        teamSyncDetail ?: if (state.teamWorkspace?.status == "REVOKED") {
-                            "Snapshot Team telah dihapus oleh Owner atau akses Anda telah dicabut. Data lokal dipertahankan."
-                        } else null
-                    } else cloudBackupState.detail,
-                    busy = if (teamMode) teamSyncing else privateSyncing,
-                ),
-                onConnect = onConnectCloud,
-                onSyncNow = if (teamMode && state.teamWorkspace?.status != "REVOKED") onSyncTeam else onSyncNow,
-                onDisconnect = onDisconnectCloud,
-                onChangeAccount = onChangeCloudAccount,
-                onWifiOnly = onWifiOnly.takeUnless { teamMode },
-                onClearDriveData = onClearDriveData.takeUnless { teamMode },
-            )
-        }
-        item {
-            HudCard {
-                SettingRow(Icons.Outlined.Backup, "Buat .kronbackup", if (activeReadOnly) "Tidak tersedia untuk Viewer" else "Backup terenkripsi untuk pemulihan atau pindah perangkat", onClick = onBackup.takeUnless { activeReadOnly })
-                SettingRow(Icons.Outlined.Restore, "Pulihkan .kronbackup", if (activeReadOnly) "Tidak tersedia untuk Viewer" else "Data diverifikasi sebelum mengganti database aktif", onClick = onRestore.takeUnless { activeReadOnly })
-                SettingRow(Icons.Outlined.VerifiedUser, "Pusat Bukti", "Periksa ledger, ekspor PDF, dan verifikasi paket bukti", onClick = onEvidenceCenter)
-            }
-        }
-
-        item {
-            SectionHeader("Notifikasi")
-            HudCard {
-                ToggleRow(
-                    Icons.Outlined.NotificationsNone,
-                    "Peringatan budget",
-                    "Meminta izin Android hanya saat fitur ini diaktifkan",
-                    state.budgetAlertsEnabled,
-                    onBudgetAlertsChanged ?: {},
-                )
-                SettingRow(
-                    Icons.Outlined.NotificationsNone,
-                    "Pengaturan notifikasi Android",
-                    if (onNotificationSettings == null) "Kelola dari Pengaturan perangkat" else "Atur izin dan privasi notifikasi",
-                    onClick = onNotificationSettings,
-                )
-            }
-        }
-
-        item {
-            SectionHeader("Tampilan")
-            HudCard {
-                Text("Tema", style = MaterialTheme.typography.titleMedium)
-                Text("Pilih tampilan yang nyaman untuk perangkat ini.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                LazyRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(top = 10.dp),
-                ) {
-                    items(listOf(
-                        Triple("DARK", "Gelap", Icons.Outlined.DarkMode),
-                        Triple("LIGHT", "Terang", Icons.Outlined.LightMode),
-                        Triple("SYSTEM", "Sistem", Icons.Outlined.Settings),
-                    ), key = { it.first }) { (key, label, icon) ->
-                        FilterChip(
-                            selected = state.theme == key,
-                            onClick = { onTheme(key) },
-                            label = { Text(label) },
-                            leadingIcon = { Icon(icon, contentDescription = label) },
-                        )
-                    }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionHeader("Sinkronisasi")
+                val teamMode = state.activeAccount?.sharingMode == AccountSharingMode.TEAM
+                val teamStatus = when {
+                    teamSyncing -> CloudSyncStatus.SYNCING
+                    teamWaitingNetwork -> CloudSyncStatus.WAITING_NETWORK
+                    teamSyncFailed -> CloudSyncStatus.FAILED
+                    state.teamWorkspace?.status == "SYNCING" -> CloudSyncStatus.SYNCING
+                    state.teamWorkspace?.status == "MERGE_PENDING" -> CloudSyncStatus.SYNCING
+                    state.teamWorkspace?.status == "WAITING_NETWORK" -> CloudSyncStatus.WAITING_NETWORK
+                    state.teamWorkspace?.status == "FAILED" -> CloudSyncStatus.FAILED
+                    state.teamWorkspace?.status == "CONFLICT" -> CloudSyncStatus.CONFLICT
+                    state.teamWorkspace?.status == "APPLY_PENDING" -> CloudSyncStatus.RESTART_REQUIRED
+                    state.teamWorkspace?.status == "AUTH_REQUIRED" -> CloudSyncStatus.NEEDS_AUTHORIZATION
+                    state.teamWorkspace?.status == "REVOKED" -> CloudSyncStatus.FAILED
+                    state.teamWorkspace?.status == "SYNCED" -> CloudSyncStatus.SYNCED
+                    else -> CloudSyncStatus.NOT_CONNECTED
                 }
-                SettingRow(
-                    Icons.Outlined.Widgets,
-                    "Widget Layar Utama",
-                    "Pasang widget saldo dan transaksi cepat ke layar utama",
-                    onClick = {
-                        val pinned = KronWidgetManager.pinWidgetToHomeScreen(context)
-                        if (!pinned) {
-                            Toast.makeText(
-                                context,
-                                "Launcher tidak mendukung pin otomatis. Silakan pasang dari menu widget home screen.",
-                                Toast.LENGTH_LONG,
-                            ).show()
-                        }
-                    },
+                SyncCard(
+                    state = SyncCardUiState(
+                        mode = if (teamMode) SyncMode.TEAM else SyncMode.PRIVATE_DRIVE,
+                        status = if (teamMode) teamStatus else cloudBackupState.status,
+                        accountLabel = if (teamMode) teamGoogleAccountLabel else cloudBackupState.accountLabel,
+                        kronAccountName = state.activeAccount?.name,
+                        teamRole = state.teamWorkspace?.localRole,
+                        lastSyncedAt = if (teamMode && teamStatus == CloudSyncStatus.SYNCED) state.teamWorkspace?.updatedAt else cloudBackupState.lastSyncedAt,
+                        wifiOnly = cloudBackupState.wifiOnly,
+                        detail = if (teamMode) {
+                            teamSyncDetail ?: if (state.teamWorkspace?.status == "REVOKED") {
+                                "Snapshot Team telah dihapus oleh Owner atau akses Anda telah dicabut. Data lokal dipertahankan."
+                            } else null
+                        } else cloudBackupState.detail,
+                        busy = if (teamMode) teamSyncing else privateSyncing,
+                    ),
+                    onConnect = onConnectCloud,
+                    onSyncNow = if (teamMode && state.teamWorkspace?.status != "REVOKED") onSyncTeam else onSyncNow,
+                    onDisconnect = onDisconnectCloud,
+                    onChangeAccount = onChangeCloudAccount,
+                    onWifiOnly = onWifiOnly.takeUnless { teamMode },
+                    onClearDriveData = onClearDriveData.takeUnless { teamMode },
                 )
-                val defaultCurrency = KronWidgetManager.getDefaultCurrency(context)
-                SettingRow(
-                    Icons.Outlined.Payments,
-                    "Mata Uang",
-                    "Mata uang: ${defaultCurrency.displayName} • Ketuk untuk ubah atau sinkronkan kurs online",
-                    onClick = { showCurrencyDialog = true },
-                )
+            }
+        }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionHeader("Backup dan pemulihan")
+                HudCard {
+                    SettingRow(Icons.Outlined.Backup, "Buat .kronbackup", if (activeReadOnly) "Tidak tersedia untuk Viewer" else "Backup terenkripsi untuk pemulihan atau pindah perangkat", onClick = onBackup.takeUnless { activeReadOnly })
+                    SettingRow(Icons.Outlined.Restore, "Pulihkan .kronbackup", if (activeReadOnly) "Tidak tersedia untuk Viewer" else "Data diverifikasi sebelum mengganti database aktif", onClick = onRestore.takeUnless { activeReadOnly })
+                    SettingRow(Icons.Outlined.VerifiedUser, "Pusat Bukti", "Periksa ledger, ekspor PDF, dan verifikasi paket bukti", onClick = onEvidenceCenter)
+                }
             }
         }
 
         item {
-            SectionHeader("Integritas keuangan")
-            LedgerIntegrityCard(
-                report = ledgerIntegrity,
-                running = ledgerIntegrityRunning,
-                valuesVisible = state.valuesVisible,
-                onRun = onRunLedgerIntegrityCheck,
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionHeader("Notifikasi")
+                HudCard {
+                    ToggleRow(
+                        Icons.Outlined.NotificationsNone,
+                        "Peringatan budget",
+                        "Meminta izin Android hanya saat fitur ini diaktifkan",
+                        state.budgetAlertsEnabled,
+                        onBudgetAlertsChanged ?: {},
+                    )
+                    SettingRow(
+                        Icons.Outlined.NotificationsNone,
+                        "Pengaturan notifikasi Android",
+                        if (onNotificationSettings == null) "Kelola dari Pengaturan perangkat" else "Atur izin dan privasi notifikasi",
+                        onClick = onNotificationSettings,
+                    )
+                }
+            }
+        }
+
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionHeader("Tampilan")
+                HudCard {
+                    Text("Tema", style = MaterialTheme.typography.titleMedium)
+                    Text("Pilih tampilan yang nyaman untuk perangkat ini.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(top = 10.dp),
+                    ) {
+                        items(listOf(
+                            Triple("DARK", "Gelap", Icons.Outlined.DarkMode),
+                            Triple("LIGHT", "Terang", Icons.Outlined.LightMode),
+                            Triple("SYSTEM", "Sistem", Icons.Outlined.Settings),
+                        ), key = { it.first }) { (key, label, icon) ->
+                            FilterChip(
+                                selected = state.theme == key,
+                                onClick = { onTheme(key) },
+                                label = { Text(label) },
+                                leadingIcon = { Icon(icon, contentDescription = label) },
+                            )
+                        }
+                    }
+                    SettingRow(
+                        Icons.Outlined.Widgets,
+                        "Widget Layar Utama",
+                        "Pasang widget saldo dan transaksi cepat ke layar utama",
+                        onClick = {
+                            val pinned = KronWidgetManager.pinWidgetToHomeScreen(context)
+                            if (!pinned) {
+                                Toast.makeText(
+                                    context,
+                                    "Launcher tidak mendukung pin otomatis. Silakan pasang dari menu widget home screen.",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        },
+                    )
+                    val defaultCurrency = KronWidgetManager.getDefaultCurrency(context)
+                    SettingRow(
+                        Icons.Outlined.Payments,
+                        "Mata Uang",
+                        "Mata uang: ${defaultCurrency.displayName} • Ketuk untuk ubah atau sinkronkan kurs online",
+                        onClick = { showCurrencyDialog = true },
+                    )
+                }
+            }
+        }
+
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionHeader("Integritas keuangan")
+                LedgerIntegrityCard(
+                    report = ledgerIntegrity,
+                    running = ledgerIntegrityRunning,
+                    valuesVisible = state.valuesVisible,
+                    onRun = onRunLedgerIntegrityCheck,
+                )
+            }
         }
         item {
-            SectionHeader("Tentang")
-            HudCard {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionHeader("Tentang")
+                HudCard {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Icon(Icons.Outlined.Security, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
                     Column(Modifier.weight(1f)) {
@@ -605,9 +633,10 @@ fun SettingsScreen(
                     )
                 }
             }
-            Spacer(Modifier.height(80.dp))
         }
+        Spacer(Modifier.height(80.dp))
     }
+}
 
     if (showGlossary) {
         AlertDialog(

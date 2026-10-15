@@ -41,6 +41,8 @@ class TeamSnapshotPrunerTest {
             assertEquals(0, scalar(db, "SELECT COUNT(*) FROM journal_seals"))
             assertEquals(0, scalar(db, "SELECT COUNT(*) FROM team_members"))
             assertEquals(0, scalar(db, "SELECT COUNT(*) FROM receipts WHERE localPath IS NOT NULL"))
+            assertEquals(0, scalar(db, "SELECT COUNT(*) FROM debts WHERE accountId=2"))
+            assertEquals(0, scalar(db, "SELECT COUNT(*) FROM debt_entries WHERE accountId=2"))
             assertFalse(db.rawQuery("PRAGMA foreign_key_check", null).use { it.moveToFirst() })
         }
         assertFalse(file.readText(StandardCharsets.ISO_8859_1).contains(PRIVATE_MARKER))
@@ -97,6 +99,8 @@ class TeamSnapshotPrunerTest {
             execSQL("INSERT INTO receipts(id,eventId,localPath,storageId,displayName,mimeType,byteSize,sha256,encryptionNonce,encryptionVersion,createdAt,capturedAt,latitude,longitude,origin,evidenceEventId) VALUES(1,'event-team',?,'receipt-team','Team receipt','image/jpeg',1,?,NULL,0,1,NULL,NULL,NULL,'CAMERA','event-team')", arrayOf(PRIVATE_MARKER, "b".repeat(64)))
             execSQL("INSERT INTO team_members(permissionId,accountId,email,displayName,role,status,refreshedAt) VALUES('private-member',2,?,NULL,'VIEWER','ACTIVE',1)", arrayOf(PRIVATE_MARKER))
             execSQL("INSERT INTO actor_profiles(id,displayName,updatedAt) VALUES(1,?,1)", arrayOf(PRIVATE_MARKER))
+            execSQL("INSERT INTO debts(id,accountId,role,counterparty,title,principalOriginal,principalOutstanding,interestOutstanding,interestRateBps,interestIntervalMonths,interestIntervalUnit,interestAnchorEpochDay,dueEpochDay,status,createdAt,revision,updatedAt,lastWriterId,syncId) VALUES('debt-private',2,'BORROWER','Bank','Kredit',100,100,0,0,1,'MONTHS',1,NULL,'OPEN',1,0,1,NULL,'debt-private')")
+            execSQL("INSERT INTO debt_entries(id,debtId,accountId,eventId,type,principalAmount,interestAmount,fundingSource,effectiveEpochDay,note,createdAt) VALUES('entry-private','debt-private',2,'event-private','BORROW',100,0,'EXTERNAL',1,'',1)")
             execSQL("INSERT INTO sync_state(id,datasetId,deviceId,accountSubject,accountEmail,localGeneration,lastSyncedGeneration,parentSnapshotId,lastSnapshotId,conflictRemoteFileId,lastSyncedAt,status,lastError,disabledDueToBilling,updatedAt) VALUES(1,'private-dataset','private-device',?,?,0,0,NULL,NULL,NULL,NULL,'DISCONNECTED',NULL,0,1)", arrayOf(PRIVATE_MARKER, PRIVATE_MARKER))
             if (crossAccountCash) {
                 execSQL("INSERT INTO cash_journal_lines(id,eventId,accountId,fundingChannel,amount) VALUES(1,'event-team',2,'CASH',1)")

@@ -909,9 +909,16 @@ fun HudCard(
 }
 
 @Composable
-fun SectionHeader(title: String, action: String? = null, onAction: (() -> Unit)? = null) {
+fun SectionHeader(
+    title: String,
+    action: String? = null,
+    onAction: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp, bottom = 0.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -924,6 +931,7 @@ fun SectionHeader(title: String, action: String? = null, onAction: (() -> Unit)?
         }
     }
 }
+
 
 @Composable
 fun ChannelBadge(channel: String) {

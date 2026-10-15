@@ -245,8 +245,9 @@ fun ReportsScreen(
         }
 
         item {
-            SectionHeader("Rentang analitik")
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(end = 12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionHeader("Rentang analitik")
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(end = 12.dp)) {
                 items(ReportRange.entries, key = { it.name }) { item ->
                     FilterChip(
                         selected = range == item,
@@ -322,6 +323,7 @@ fun ReportsScreen(
                 )
             }
         }
+    }
 
         item {
             HudCard {

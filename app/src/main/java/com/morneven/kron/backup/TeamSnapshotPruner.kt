@@ -94,7 +94,7 @@ internal object TeamSnapshotPruner {
         val accountId = scope.accountId.toString()
         val eventScope = "SELECT id FROM activity_events WHERE accountId=$accountId"
         fun empty(sql: String, message: String) = require(scalar(db, sql) == 0L) { message }
-        empty("SELECT COUNT(*) FROM budget_periods p WHERE p.plannedTotal < 0 OR p.plannedTotal < (SELECT COALESCE(SUM(a.plannedAmount),0) FROM allocations a WHERE a.periodId=p.id)", "Total budget snapshot Team tidak valid")
+        empty("SELECT COUNT(*) FROM budget_periods p JOIN portfolios f ON f.id=p.portfolioId WHERE f.accountId=$accountId AND (p.plannedTotal < 0 OR p.plannedTotal < (SELECT COALESCE(SUM(a.plannedAmount),0) FROM allocations a WHERE a.periodId=p.id))", "Total budget snapshot Team tidak valid")
         empty("SELECT COUNT(*) FROM cash_journal_lines WHERE eventId IN ($eventScope) AND accountId<>$accountId", "Cash event Team menyentuh akun lain")
         empty("SELECT COUNT(*) FROM budget_journal_lines WHERE eventId IN ($eventScope) AND accountId<>$accountId", "Budget event Team menyentuh akun lain")
         empty("SELECT COUNT(*) FROM ledger_lines WHERE eventId IN ($eventScope) AND accountId IS NOT NULL AND accountId<>$accountId", "Ledger event Team menyentuh akun lain")
@@ -111,8 +111,8 @@ internal object TeamSnapshotPruner {
         empty("SELECT COUNT(*) FROM ledger_lines WHERE eventId IN ($eventScope) AND categoryId IS NOT NULL AND categoryId NOT IN (SELECT id FROM categories WHERE accountId=$accountId)", "Ledger Team memakai kategori akun lain")
         empty("SELECT COUNT(*) FROM recurring_occurrences WHERE ruleId IN (SELECT id FROM recurring_rules WHERE accountId=$accountId) AND eventId NOT IN ($eventScope)", "Occurrence Team merujuk event akun lain")
         empty("SELECT COUNT(*) FROM receipts WHERE eventId IN ($eventScope) AND evidenceEventId IS NOT NULL AND evidenceEventId NOT IN ($eventScope)", "Bukti Team merujuk akun lain")
-        empty("SELECT COUNT(*) FROM debts WHERE accountId<>$accountId", "Hutang Team milik akun lain")
-        empty("SELECT COUNT(*) FROM debt_entries e LEFT JOIN debts d ON d.id=e.debtId LEFT JOIN activity_events a ON a.id=e.eventId WHERE d.id IS NULL OR a.id IS NULL OR e.accountId<>$accountId OR d.accountId<>$accountId OR a.accountId<>$accountId", "Riwayat hutang Team tidak scoped")
+        empty("SELECT COUNT(*) FROM debt_entries e JOIN debts d ON d.id=e.debtId WHERE e.eventId IN ($eventScope) AND (e.accountId<>$accountId OR d.accountId<>$accountId)", "Hutang event Team menyentuh akun lain")
+        empty("SELECT COUNT(*) FROM debt_entries e WHERE e.debtId IN (SELECT id FROM debts WHERE accountId=$accountId) AND (e.accountId<>$accountId OR e.eventId NOT IN ($eventScope))", "Riwayat hutang Team tidak scoped")
     }
 
     private fun scopeCategories(db: SQLiteDatabase, accountId: Long) {
@@ -147,6 +147,8 @@ internal object TeamSnapshotPruner {
             "Snapshot Team memuat kategori akun lain"
         }
         require(scalar(db, "SELECT COUNT(*) FROM receipts WHERE localPath IS NOT NULL") == 0L) { "Snapshot Team memuat path lokal" }
+        require(scalar(db, "SELECT COUNT(*) FROM debts WHERE accountId<>${scope.accountId}") == 0L) { "Snapshot Team memuat hutang akun lain" }
+        require(scalar(db, "SELECT COUNT(*) FROM debt_entries WHERE accountId<>${scope.accountId}") == 0L) { "Snapshot Team memuat riwayat hutang akun lain" }
         require(scalar(db, "SELECT COUNT(*) FROM team_members") == 0L) { "Snapshot Team memuat cache collaborator" }
         require(scalar(db, "SELECT COUNT(*) FROM sync_state WHERE accountSubject IS NOT NULL OR accountEmail IS NOT NULL") == 0L) {
             "Snapshot Team memuat identitas sync privat"
