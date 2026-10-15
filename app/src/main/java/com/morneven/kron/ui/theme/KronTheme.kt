@@ -32,13 +32,13 @@ val KronMuted = Color(0xFFB7AAA8)
  * channel badges, the signed money figures and every section heading.
  */
 val KronGoldDark = Color(0xFFE2BD4D)
-val KronGoldLight = Color(0xFFA87B05)
+val KronGoldLight = Color(0xFFB58500)
 val KronGreenDark = Color(0xFF57B58C)
-val KronGreenLight = Color(0xFF0D8A52)
+val KronGreenLight = Color(0xFF099252)
 val KronBlueDark = Color(0xFF65A9EF)
 val KronBlueLight = Color(0xFF1565C0)
 private val KronNegativeDark = Color(0xFFFF796E)
-private val KronNegativeLight = Color(0xFFD32F2F)
+private val KronNegativeLight = Color(0xFFE02D3C)
 
 /** True while the KRON theme is painting its dark palette. */
 val LocalKronDarkTheme = androidx.compose.runtime.staticCompositionLocalOf { true }
@@ -98,41 +98,41 @@ private val DarkColors = darkColorScheme(
     scrim = Color.Black,
 )
 
-// The Swiss Executive Alabaster light palette for high-end personal wealth management.
-// Clean pure surfaces, deep imperial bordeaux, authentic royal gold, vibrant emerald, and crisp contrast.
+// The After Dawn light palette: warm morning sunrise glow, vivid financial jewel tones, and luminous depth.
+// Warm dawn linen canvas, crisp diamond-white cards, sunrise amber gold, vivid spring emerald, and dawn crimson.
 private val LightColors = lightColorScheme(
-    primary = Color(0xFF9B1D31),
+    primary = Color(0xFFA61C34),
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFFCEBED),
-    onPrimaryContainer = Color(0xFF4A0A17),
+    primaryContainer = Color(0xFFFFE8EB),
+    onPrimaryContainer = Color(0xFF4A0512),
     inversePrimary = Color(0xFFFFB3BC),
-    secondary = Color(0xFF5E4E63),
+    secondary = Color(0xFF6B4E71),
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFFF1EBF3),
-    onSecondaryContainer = Color(0xFF26182B),
-    tertiary = Color(0xFF9E6F05),
+    secondaryContainer = Color(0xFFF3E7F7),
+    onSecondaryContainer = Color(0xFF2B1430),
+    tertiary = Color(0xFFB58500),
     onTertiary = Color.White,
-    tertiaryContainer = Color(0xFFFEF3D6),
-    onTertiaryContainer = Color(0xFF332000),
-    background = Color(0xFFEBF0F5),
-    onBackground = Color(0xFF111827),
+    tertiaryContainer = Color(0xFFFFF0C2),
+    onTertiaryContainer = Color(0xFF382600),
+    background = Color(0xFFF5F2EA),
+    onBackground = Color(0xFF1A1416),
     surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF111827),
-    surfaceVariant = Color(0xFFE2E8F0),
-    onSurfaceVariant = Color(0xFF5F6B7A),
+    onSurface = Color(0xFF1A1416),
+    surfaceVariant = Color(0xFFEDE4D6),
+    onSurfaceVariant = Color(0xFF695E63),
     surfaceContainerLowest = Color(0xFFFFFFFF),
-    surfaceContainerLow = Color(0xFFF8FAFC),
+    surfaceContainerLow = Color(0xFFFAF7F2),
     surfaceContainer = Color(0xFFFFFFFF),
-    surfaceContainerHigh = Color(0xFFEDF2F7),
-    surfaceContainerHighest = Color(0xFFE2E8F0),
-    surfaceTint = Color(0xFF9B1D31),
-    inverseSurface = Color(0xFF1E232B),
-    inverseOnSurface = Color(0xFFF1F4F8),
-    outline = Color(0xFF94A3B8),
-    outlineVariant = Color(0xFFCBD5E1),
-    error = Color(0xFFD32F2F),
+    surfaceContainerHigh = Color(0xFFEFE8DD),
+    surfaceContainerHighest = Color(0xFFE5DDD0),
+    surfaceTint = Color(0xFFA61C34),
+    inverseSurface = Color(0xFF261D1E),
+    inverseOnSurface = Color(0xFFF8F0EC),
+    outline = Color(0xFF9E9180),
+    outlineVariant = Color(0xFFDED3C2),
+    error = Color(0xFFE02D3C),
     onError = Color.White,
-    errorContainer = Color(0xFFFEECEB),
+    errorContainer = Color(0xFFFFECEB),
     onErrorContainer = Color(0xFF4C0805),
     scrim = Color.Black,
 )
@@ -181,12 +181,17 @@ fun KronTheme(theme: String, content: @Composable () -> Unit) {
         "SYSTEM" -> isSystemInDarkTheme()
         else -> true
     }
+    val colors = if (dark) DarkColors else LightColors
     androidx.compose.runtime.CompositionLocalProvider(LocalKronDarkTheme provides dark) {
         MaterialTheme(
-            colorScheme = if (dark) DarkColors else LightColors,
+            colorScheme = colors,
             typography = KronTypography,
             shapes = KronShapes,
-            content = content,
-        )
+        ) {
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.material3.LocalContentColor provides colors.onBackground,
+                content = content,
+            )
+        }
     }
 }

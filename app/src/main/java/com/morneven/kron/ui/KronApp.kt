@@ -1119,10 +1119,10 @@ private fun MainScaffold(
                 } else {
                     Brush.verticalGradient(
                         colors = listOf(
-                            Color(0xFFFBF1F3),
-                            Color(0xFFF3F6F9),
-                            Color(0xFFEBF0F5),
-                            Color(0xFFEBF0F5),
+                            Color(0xFFFFF0EC),
+                            Color(0xFFFAF4ED),
+                            Color(0xFFF5F2EA),
+                            Color(0xFFF5F2EA),
                         ),
                         startY = 0f,
                         endY = 1400f,
@@ -1130,6 +1130,7 @@ private fun MainScaffold(
                 }
             ),
         containerColor = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onBackground,
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
             Column {

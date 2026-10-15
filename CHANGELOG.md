@@ -1,5 +1,13 @@
 # KRON Changelog
 
+## 1.7.28 - 2026-10-16
+
+- Perbaikan bug teks judul hitam pada mode gelap: menyelesaikan kebocoran nilai bawaan LocalContentColor pada Scaffold dan tema aplikasi saat menggunakan latar gradien transparan, menjamin seluruh teks judul dialog, kartu, dan layar memiliki warna tegas (onSurface / onBackground) yang kontras tinggi dan mudah dibaca pada mode gelap.
+- Inspeksi langsung titik grafik kurs KRON tanpa perlu scroll: kartu inspeksi audit titik (KrmPointInspectionCard) kini tampil langsung di bawah grafik kurs saat pengguna mengetuk atau menggeser kurva, menampilkan tanggal dan waktu rekaman hingga detik, nilai tukar 1 KRM, delta per langkah terhadap titik sebelumnya, perubahan kumulatif terhadap awal rentang, serta tombol navigasi panah kiri/kanan untuk berpindah titik secara presisi tanpa terpotong batas 15 data atau mengharuskan scroll ke bawah.
+- Indikator tooltip mengambang dan sumbu waktu grafik kurs: penambahan label mengambang (floating tooltip) pada kanvas grafik di titik sentuh serta sumbu waktu ringkas (KrmChartTimeAxis) di bawah grafik yang menyajikan penanda tanggal awal, tengah, dan akhir rentang waktu.
+- Palet mode terang After Dawn: pembaruan skema warna mode terang terinspirasi kehangatan fajar (After Dawn), memadukan kanvas linen hangat bergradien aurora matahari terbit (#FFF0EC -> #FAF4ED -> #F5F2EA), kartu mengambang putih murni dengan kedalaman bayangan taktil, aksen emas fajar (Sunrise Amber Gold #B58500), hijau semi segar (Vivid Spring Emerald #099252), biru langit fajar (Morning Sky Cerulean #1565C0), dan merah koral fajar (Sunrise Coral Red #E02D3C).
+- Bump versionCode 119 -> 120 dan versionName 1.7.27 -> 1.7.28.
+
 ## 1.7.27 - 2026-10-16
 
 - Eliminasi efek flat putih melompong dengan kanvas atmosferik bergradien: menambahkan gradien atmosferik halus pada latar scaffold aplikasi (dari semburat rose champagne mewah di bagian header hingga kanvas cool slate kokoh di bawah), membebaskan tampilan dari kekosongan kanvas putih datar.

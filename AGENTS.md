@@ -29,9 +29,11 @@ CI akan menolak commit tanpa trailer.
 
 - Increase `versionCode`, `versionName`, and the version shown inside the app for every release.
 - Update `CHANGELOG.md` and archive the APK, SHA-256 checksum, Room schemas, R8 mapping, commit, and Git tag.
+- Release notes in `CHANGELOG.md` and Telegram broadcasts must be concise and punchy like Play Store "What's New" notes (singkat, padat, to the point), highlighting user benefits and key improvements without lengthy technical jargon.
 - Do not mark a release complete until migration tests, backup round trips, financial invariants, lint, release build, signature verification, and install-over-previous smoke tests pass.
 - A release that cannot prove compatibility with the previous production APK is blocked.
 - Release signing is automatic: `assembleRelease` signs the APK via the Gradle signing config (`kron-release.jks`). No manual `jarsigner` step needed. The signed APK is at `app/build/outputs/apk/release/KRON-<version>.apk`.
+- After completing a release build and archiving artifacts, broadcast the signed APK and patch notes to the Telegram topic KRON using `python tools/send_release_telegram.py`. When asked to publish, send to the public group (Federasi INF) using `python tools/send_release_telegram.py --publish`.
 
 ## Encryption key continuity and data-loss prevention
 

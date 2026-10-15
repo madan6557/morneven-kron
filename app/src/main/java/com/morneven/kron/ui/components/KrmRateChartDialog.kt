@@ -22,6 +22,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.ShowChart
 import androidx.compose.material.icons.automirrored.outlined.TrendingDown
 import androidx.compose.material.icons.automirrored.outlined.TrendingUp
@@ -58,7 +60,9 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -67,6 +71,7 @@ import com.morneven.kron.ui.theme.KronGold
 import com.morneven.kron.ui.theme.KronGreen
 import com.morneven.kron.ui.theme.KronPillShape
 import com.morneven.kron.ui.theme.KronSubCardShape
+import com.morneven.kron.ui.theme.LocalKronDarkTheme
 import com.morneven.kron.widget.KrmRateHistoryEntry
 import com.morneven.kron.widget.KronCurrencyManager
 import java.text.DecimalFormat
@@ -196,6 +201,7 @@ fun KrmRateChartDialog(
                             "KRON",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
                             "Mata uang Morneven (KRM)",
@@ -207,7 +213,11 @@ fun KrmRateChartDialog(
                     }
                 }
                 IconButton(onClick = onDismissRequest) {
-                    Icon(Icons.Outlined.Close, contentDescription = "Tutup dialog")
+                    Icon(
+                        Icons.Outlined.Close,
+                        contentDescription = "Tutup dialog",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                    )
                 }
             }
         },
@@ -351,7 +361,7 @@ fun KrmRateChartDialog(
                                 ) {
                                     Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
                                         Text("Mulai", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        Text(customStart.format(shortDateFormatter), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                        Text(customStart.format(shortDateFormatter), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
                                     }
                                 }
 
@@ -368,7 +378,7 @@ fun KrmRateChartDialog(
                                 ) {
                                     Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
                                         Text("Sampai", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        Text(customEnd.format(shortDateFormatter), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                        Text(customEnd.format(shortDateFormatter), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
                                     }
                                 }
                             }
@@ -378,7 +388,7 @@ fun KrmRateChartDialog(
 
                 // Interactive Chart
                 item {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -392,9 +402,10 @@ fun KrmRateChartDialog(
                             )
                             if (selectedIndex != null) {
                                 Text(
-                                    "Ketuk lagi untuk reset pilihan",
+                                    "Reset pilihan",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = KronGold,
+                                    fontWeight = FontWeight.Bold,
                                     modifier = Modifier.clickable { selectedIndex = null },
                                 )
                             }
@@ -406,15 +417,68 @@ fun KrmRateChartDialog(
                             border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)),
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            KrmLineChart(
-                                history = history,
-                                selectedIndex = selectedIndex,
-                                onSelectIndex = { selectedIndex = it },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(180.dp)
-                                    .padding(vertical = 12.dp, horizontal = 12.dp),
+                            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                                KrmLineChart(
+                                    history = history,
+                                    selectedIndex = selectedIndex,
+                                    onSelectIndex = { selectedIndex = it },
+                                    idrFormatter = idrFormatter,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(180.dp),
+                                )
+                                Spacer(Modifier.height(6.dp))
+                                KrmChartTimeAxis(
+                                    history = history,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 4.dp),
+                                )
+                            }
+                        }
+
+                        if (selectedIndex != null && selectedIndex!! in history.indices) {
+                            val selEntry = history[selectedIndex!!]
+                            val prevEntry = if (selectedIndex!! > 0) history[selectedIndex!! - 1] else null
+                            KrmPointInspectionCard(
+                                entry = selEntry,
+                                prevEntry = prevEntry,
+                                initialRate = initialRate,
+                                index = selectedIndex!!,
+                                totalCount = history.size,
+                                minRate = minRate,
+                                maxRate = maxRate,
+                                idrFormatter = idrFormatter,
+                                deltaFormatter = deltaFormatter,
+                                onPrev = if (selectedIndex!! > 0) { { selectedIndex = selectedIndex!! - 1 } } else null,
+                                onNext = if (selectedIndex!! < history.size - 1) { { selectedIndex = selectedIndex!! + 1 } } else null,
+                                onClose = { selectedIndex = null },
                             )
+                        } else {
+                            Surface(
+                                shape = KronSubCardShape,
+                                color = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.5f),
+                                border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Outlined.ShowChart,
+                                        contentDescription = null,
+                                        tint = KronGold,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Text(
+                                        "Ketuk atau geser kurva untuk melihat detail kurs, waktu, dan perubahan per titik.",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -425,6 +489,7 @@ fun KrmRateChartDialog(
                         "Riwayat Data Terakhir",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                 }
 
@@ -470,6 +535,7 @@ fun KrmRateChartDialog(
                                     "Rp ${idrFormatter.format(entry.rate.roundToInt())}",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                 )
                             }
 
@@ -555,6 +621,7 @@ private fun StatMiniBox(label: String, value: String, modifier: Modifier = Modif
             value,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             softWrap = false,
             overflow = TextOverflow.Ellipsis,
@@ -567,11 +634,13 @@ private fun KrmLineChart(
     history: List<KrmRateHistoryEntry>,
     selectedIndex: Int?,
     onSelectIndex: (Int?) -> Unit,
+    idrFormatter: DecimalFormat,
     modifier: Modifier = Modifier,
 ) {
     val goldColor = KronGold
     val gridColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)
     val pointCount = history.size
+    val textMeasurer = rememberTextMeasurer()
 
     val rates = history.map { it.rate }
     val rawMin = rates.minOrNull() ?: KronCurrencyManager.KRM_BASE_IDR
@@ -723,7 +792,7 @@ private fun KrmLineChart(
             val selY = getY(history[selectedIndex].rate)
 
             drawLine(
-                color = goldColor.copy(alpha = 0.6f),
+                color = goldColor.copy(alpha = 0.7f),
                 start = Offset(selX, padTop),
                 end = Offset(selX, yBot),
                 strokeWidth = 1.5.dp.toPx(),
@@ -731,8 +800,8 @@ private fun KrmLineChart(
             )
 
             drawCircle(
-                color = goldColor.copy(alpha = 0.3f),
-                radius = 10.dp.toPx(),
+                color = goldColor.copy(alpha = 0.35f),
+                radius = 11.dp.toPx(),
                 center = Offset(selX, selY),
             )
             drawCircle(
@@ -745,6 +814,341 @@ private fun KrmLineChart(
                 radius = 3.dp.toPx(),
                 center = Offset(selX, selY),
             )
+
+            // On-canvas floating rate badge
+            val rateText = "Rp ${idrFormatter.format(history[selectedIndex].rate.roundToInt())}"
+            val textLayout = textMeasurer.measure(
+                text = rateText,
+                style = androidx.compose.ui.text.TextStyle(
+                    color = Color.White,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                ),
+            )
+            val padH = 6.dp.toPx()
+            val padV = 3.dp.toPx()
+            val badgeW = textLayout.size.width + padH * 2
+            val badgeH = textLayout.size.height + padV * 2
+
+            val badgeY = if (selY - badgeH - 8f >= padTop) {
+                selY - badgeH - 8f
+            } else {
+                selY + 8f
+            }
+            val badgeX = (selX - badgeW / 2f).coerceIn(padLeft, w - padRight - badgeW)
+
+            drawRoundRect(
+                color = Color(0xFF1E1519).copy(alpha = 0.92f),
+                topLeft = Offset(badgeX, badgeY),
+                size = androidx.compose.ui.geometry.Size(badgeW, badgeH),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+            )
+            drawRoundRect(
+                color = goldColor.copy(alpha = 0.6f),
+                topLeft = Offset(badgeX, badgeY),
+                size = androidx.compose.ui.geometry.Size(badgeW, badgeH),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+                style = Stroke(width = 1.dp.toPx()),
+            )
+            drawText(
+                textLayoutResult = textLayout,
+                topLeft = Offset(badgeX + padH, badgeY + padV),
+            )
+        }
+    }
+}
+
+@Composable
+private fun KrmChartTimeAxis(
+    history: List<KrmRateHistoryEntry>,
+    modifier: Modifier = Modifier,
+) {
+    if (history.isEmpty()) return
+    val shortDateFormatter = remember {
+        DateTimeFormatter.ofPattern("d MMM yyyy", Locale.forLanguageTag("id-ID"))
+    }
+
+    val firstMs = history.first().timestampMs
+    val lastMs = history.last().timestampMs
+    val diffDays = (lastMs - firstMs) / (24L * 60L * 60L * 1000L)
+
+    val formatTime: (Long) -> String = { ms ->
+        val zdt = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault())
+        if (diffDays <= 2) {
+            zdt.format(DateTimeFormatter.ofPattern("d MMM HH:mm", Locale.forLanguageTag("id-ID")))
+        } else {
+            zdt.format(shortDateFormatter)
+        }
+    }
+
+    val startLabel = formatTime(firstMs)
+    val endLabel = formatTime(lastMs)
+    val midLabel = if (history.size > 2) formatTime(history[history.size / 2].timestampMs) else null
+
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = startLabel,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 10.sp,
+        )
+        if (midLabel != null && midLabel != startLabel && midLabel != endLabel) {
+            Text(
+                text = midLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                fontSize = 10.sp,
+            )
+        }
+        Text(
+            text = endLabel,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 10.sp,
+        )
+    }
+}
+
+@Composable
+private fun KrmPointInspectionCard(
+    entry: KrmRateHistoryEntry,
+    prevEntry: KrmRateHistoryEntry?,
+    initialRate: Double,
+    index: Int,
+    totalCount: Int,
+    minRate: Double,
+    maxRate: Double,
+    idrFormatter: DecimalFormat,
+    deltaFormatter: DecimalFormat,
+    onPrev: (() -> Unit)?,
+    onNext: (() -> Unit)?,
+    onClose: () -> Unit,
+) {
+    val isDark = LocalKronDarkTheme.current
+    val dateTimeFormatter = remember {
+        DateTimeFormatter.ofPattern("EEEE, d MMMM yyyy, HH:mm:ss", Locale.forLanguageTag("id-ID"))
+    }
+    val pointZdt = Instant.ofEpochMilli(entry.timestampMs).atZone(ZoneId.systemDefault())
+    val pointDateStr = pointZdt.format(dateTimeFormatter)
+
+    val stepDelta = if (prevEntry != null) entry.rate - prevEntry.rate else 0.0
+    val stepDeltaPercent = if (prevEntry != null && prevEntry.rate > 0.0) (stepDelta / prevEntry.rate * 100.0) else 0.0
+    val isStepPos = stepDelta >= 0.0
+    val stepColor = if (stepDelta == 0.0) MaterialTheme.colorScheme.onSurfaceVariant else if (isStepPos) KronGreen else MaterialTheme.colorScheme.error
+
+    val cumDelta = entry.rate - initialRate
+    val cumDeltaPercent = if (initialRate > 0.0) (cumDelta / initialRate * 100.0) else 0.0
+    val isCumPos = cumDelta >= 0.0
+    val cumColor = if (cumDelta == 0.0) MaterialTheme.colorScheme.onSurfaceVariant else if (isCumPos) KronGreen else MaterialTheme.colorScheme.error
+
+    Surface(
+        shape = KronSubCardShape,
+        color = if (isDark) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f) else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, KronGold.copy(alpha = if (isDark) 0.5f else 0.8f)),
+        shadowElevation = if (isDark) 0.dp else 3.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            // Header: Title + point counter + prev/next step buttons + close button
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .background(KronGold.copy(alpha = 0.16f), RoundedCornerShape(8.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.ShowChart,
+                            contentDescription = null,
+                            tint = KronGold,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    Column {
+                        Text(
+                            "Inspeksi Titik Riwayat",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = KronGold,
+                        )
+                        Text(
+                            "Titik ${index + 1} dari $totalCount data",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp,
+                        )
+                    }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    IconButton(
+                        onClick = { onPrev?.invoke() },
+                        enabled = onPrev != null,
+                        modifier = Modifier.size(30.dp),
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.KeyboardArrowLeft,
+                            contentDescription = "Titik sebelumnya",
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    IconButton(
+                        onClick = { onNext?.invoke() },
+                        enabled = onNext != null,
+                        modifier = Modifier.size(30.dp),
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                            contentDescription = "Titik berikutnya",
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    IconButton(
+                        onClick = onClose,
+                        modifier = Modifier.size(30.dp),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Close,
+                            contentDescription = "Tutup inspeksi",
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
+
+            // Main Rate & Date
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = "1 KRM = Rp ${idrFormatter.format(entry.rate.roundToInt())}",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = pointDateStr,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            // Metrics row: Perubahan vs Titik Sebelumnya & Perubahan vs Awal Rentang
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Surface(
+                    shape = KronSubCardShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.45f),
+                    border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            "VS TITIK SEBELUMNYA",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 9.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (prevEntry != null) {
+                            val sign = if (isStepPos) "+" else ""
+                            Text(
+                                text = "$sign${deltaFormatter.format(stepDeltaPercent)}% ($sign${idrFormatter.format(stepDelta.roundToInt())})",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold,
+                                color = stepColor,
+                            )
+                        } else {
+                            Text(
+                                text = "Titik Awal",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+
+                Surface(
+                    shape = KronSubCardShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.45f),
+                    border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            "VS AWAL RENTANG",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 9.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        val sign = if (isCumPos) "+" else ""
+                        Text(
+                            text = "$sign${deltaFormatter.format(cumDeltaPercent)}% ($sign${idrFormatter.format(cumDelta.roundToInt())})",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = cumColor,
+                        )
+                    }
+                }
+            }
+
+            // Min/Max indicator tag if applicable
+            if (entry.rate == maxRate && entry.rate != minRate) {
+                Surface(
+                    shape = KronPillShape,
+                    color = KronGold.copy(alpha = 0.12f),
+                    border = BorderStroke(0.8.dp, KronGold.copy(alpha = 0.35f)),
+                ) {
+                    Text(
+                        text = "★ Nilai Tertinggi dalam rentang terpilih",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = KronGold,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                }
+            } else if (entry.rate == minRate && entry.rate != maxRate) {
+                Surface(
+                    shape = KronPillShape,
+                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
+                    border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.35f)),
+                ) {
+                    Text(
+                        text = "▼ Nilai Terendah dalam rentang terpilih",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                }
+            }
         }
     }
 }
