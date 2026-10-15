@@ -1,5 +1,11 @@
 # KRON Changelog
 
+## 1.7.24 - 2026-10-15
+
+- Pembersihan UI dan penambahan filter rentang waktu grafik KRON: menyederhanakan judul dialog menjadi "KRON" dan deskripsi bersih tanpa teks berlebih, menghilangkan tombol simulasi pasar dan tombol reset buatan, serta menambahkan filter rentang waktu (7 hari, 30 hari, 90 hari, 1 tahun, dan Custom dengan pemilih tanggal interaktif) untuk memfilter titik fluktuasi kurs yang ditampilkan pada grafik kanvas.
+- Rentang "Bulan ini" sebagai default laporan utama: menambahkan pilihan rentang waktu "Bulan ini" dan menjadikannya default pada layar Laporan dengan transisi adaptif (pada 7 hari pertama bulan baru menampilkan data penuh bulan sebelumnya, dan setelah 1 minggu atau mulai tanggal 8 menampilkan akumulasi sejak tanggal 1 bulan berjalan hingga hari ini) lengkap dengan perbandingan periode sebelumnya yang proporsional.
+- Bump versionCode 115 -> 116 dan versionName 1.7.23 -> 1.7.24.
+
 ## 1.7.23 - 2026-10-15
 
 - Perekaman riwayat perubahan kurs KRM: penambahan pencatatan kronologis pergerakan nilai tukar Kron Morneven ke penyimpanan terkelola dengan batas jendela data optimal, mencatat waktu dan nominal pergerakan setiap kali fluktuasi sintetis pasar terjadi.

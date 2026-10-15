@@ -1,6 +1,5 @@
 package com.morneven.kron.ui.components
 
-import android.content.Context
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -10,41 +9,42 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ShowChart
 import androidx.compose.material.icons.automirrored.outlined.TrendingDown
 import androidx.compose.material.icons.automirrored.outlined.TrendingUp
-import androidx.compose.material.icons.outlined.AutoGraph
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,12 +59,10 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
-import com.morneven.kron.ui.theme.KronButtonShape
 import com.morneven.kron.ui.theme.KronGold
 import com.morneven.kron.ui.theme.KronGreen
 import com.morneven.kron.ui.theme.KronPillShape
@@ -74,10 +72,20 @@ import com.morneven.kron.widget.KronCurrencyManager
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.roundToInt
+
+private enum class KrmChartRange(val label: String, val days: Int) {
+    SEVEN_DAYS("7 hari", 7),
+    THIRTY_DAYS("30 hari", 30),
+    NINETY_DAYS("90 hari", 90),
+    ONE_YEAR("1 tahun", 365),
+    CUSTOM("Custom", 0),
+}
 
 @Composable
 fun KrmRateChartDialog(
@@ -85,8 +93,42 @@ fun KrmRateChartDialog(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    var history by remember { mutableStateOf(KronCurrencyManager.getKrmRateHistory(context)) }
+    val allHistory = remember { KronCurrencyManager.getKrmRateHistory(context) }
     var selectedIndex by remember { mutableStateOf<Int?>(null) }
+    var selectedRange by rememberSaveable { mutableStateOf(KrmChartRange.THIRTY_DAYS) }
+
+    val today = remember { LocalDate.now() }
+    var customStartDay by rememberSaveable { mutableLongStateOf(today.minusDays(29).toEpochDay()) }
+    var customEndDay by rememberSaveable { mutableLongStateOf(today.toEpochDay()) }
+    var pickingStart by rememberSaveable { mutableStateOf(true) }
+    var showDatePicker by rememberSaveable { mutableStateOf(false) }
+
+    val customStart = LocalDate.ofEpochDay(customStartDay)
+    val customEnd = LocalDate.ofEpochDay(customEndDay)
+
+    val (startMs, endMs) = remember(selectedRange, customStartDay, customEndDay) {
+        when (selectedRange) {
+            KrmChartRange.CUSTOM -> {
+                val s = customStart.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                val e = customEnd.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() - 1L
+                s to e
+            }
+            else -> {
+                val now = System.currentTimeMillis()
+                val s = now - (selectedRange.days.toLong() * 24L * 60L * 60L * 1000L)
+                s to now
+            }
+        }
+    }
+
+    val history = remember(allHistory, startMs, endMs) {
+        val filtered = allHistory.filter { it.timestampMs in startMs..endMs }
+        if (filtered.isEmpty() && allHistory.isNotEmpty()) {
+            listOf(allHistory.last())
+        } else {
+            filtered
+        }
+    }
 
     val symbols = remember {
         DecimalFormatSymbols(Locale.forLanguageTag("id-ID")).apply {
@@ -102,8 +144,11 @@ fun KrmRateChartDialog(
     val dateFormatter = remember {
         DateTimeFormatter.ofPattern("d MMM HH:mm", Locale.forLanguageTag("id-ID"))
     }
+    val shortDateFormatter = remember {
+        DateTimeFormatter.ofPattern("d MMM yyyy", Locale.forLanguageTag("id-ID"))
+    }
 
-    val currentPoint = history.lastOrNull() ?: KrmRateHistoryEntry(System.currentTimeMillis(), KronCurrencyManager.KRM_BASE_IDR)
+    val currentPoint = history.lastOrNull() ?: allHistory.lastOrNull() ?: KrmRateHistoryEntry(System.currentTimeMillis(), KronCurrencyManager.KRM_BASE_IDR)
     val displayPoint = selectedIndex?.let { history.getOrNull(it) } ?: currentPoint
 
     val rates = history.map { it.rate }
@@ -111,7 +156,7 @@ fun KrmRateChartDialog(
     val maxRate = rates.maxOrNull() ?: currentPoint.rate
     val avgRate = if (rates.isNotEmpty()) rates.average() else currentPoint.rate
 
-    val initialRate = history.firstOrNull()?.rate ?: KronCurrencyManager.KRM_BASE_IDR
+    val initialRate = history.firstOrNull()?.rate ?: currentPoint.rate
     val totalDeltaNominal = currentPoint.rate - initialRate
     val totalDeltaPercent = if (initialRate > 0.0) (totalDeltaNominal / initialRate * 100.0) else 0.0
 
@@ -129,7 +174,7 @@ fun KrmRateChartDialog(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Surface(
                         shape = RoundedCornerShape(8.dp),
@@ -148,12 +193,12 @@ fun KrmRateChartDialog(
                     }
                     Column {
                         Text(
-                            "Fluktuasi Kurs KRON",
-                            style = MaterialTheme.typography.titleMedium,
+                            "KRON",
+                            style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            "Mata uang Morneven (KRM) · Sintetis tanpa batas atas",
+                            "Mata uang Morneven (KRM)",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -211,7 +256,7 @@ fun KrmRateChartDialog(
                                 )
                             }
 
-                            // Trend badge vs initial
+                            // Trend badge vs initial point in selected range
                             val isPos = totalDeltaNominal >= 0.0
                             val badgeColor = if (isPos) KronGreen else MaterialTheme.colorScheme.error
                             val sign = if (isPos) "+" else ""
@@ -269,6 +314,68 @@ fun KrmRateChartDialog(
                     }
                 }
 
+                // Range Selector (7 hari, 30 hari, 90 hari, 1 tahun, Custom)
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            contentPadding = PaddingValues(horizontal = 2.dp),
+                        ) {
+                            items(KrmChartRange.entries, key = { it.name }) { item ->
+                                FilterChip(
+                                    selected = selectedRange == item,
+                                    onClick = {
+                                        selectedRange = item
+                                        selectedIndex = null
+                                    },
+                                    label = { Text(item.label) },
+                                )
+                            }
+                        }
+
+                        if (selectedRange == KrmChartRange.CUSTOM) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Surface(
+                                    shape = KronSubCardShape,
+                                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                    border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            pickingStart = true
+                                            showDatePicker = true
+                                        },
+                                ) {
+                                    Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                                        Text("Mulai", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(customStart.format(shortDateFormatter), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+
+                                Surface(
+                                    shape = KronSubCardShape,
+                                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                    border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            pickingStart = false
+                                            showDatePicker = true
+                                        },
+                                ) {
+                                    Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                                        Text("Sampai", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(customEnd.format(shortDateFormatter), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Interactive Chart
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -308,42 +415,6 @@ fun KrmRateChartDialog(
                                     .height(180.dp)
                                     .padding(vertical = 12.dp, horizontal = 12.dp),
                             )
-                        }
-                    }
-                }
-
-                // Action buttons: simulate tick and reset
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Button(
-                            onClick = {
-                                KronCurrencyManager.refreshKronFluctuation(context)
-                                history = KronCurrencyManager.getKrmRateHistory(context)
-                                selectedIndex = null
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = KronButtonShape,
-                            colors = ButtonDefaults.buttonColors(containerColor = KronGold),
-                        ) {
-                            Icon(Icons.Outlined.AutoGraph, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Simulasikan Pasar", color = Color.Black, fontWeight = FontWeight.Bold)
-                        }
-
-                        OutlinedButton(
-                            onClick = {
-                                KronCurrencyManager.clearKrmRateHistory(context)
-                                history = KronCurrencyManager.getKrmRateHistory(context)
-                                selectedIndex = null
-                            },
-                            shape = KronButtonShape,
-                        ) {
-                            Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Reset")
                         }
                     }
                 }
@@ -438,6 +509,31 @@ fun KrmRateChartDialog(
             }
         },
     )
+
+    if (showDatePicker) {
+        val selectedDate = if (pickingStart) customStart else customEnd
+        val picker = rememberDatePickerState(
+            initialSelectedDateMillis = selectedDate.atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli(),
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    picker.selectedDateMillis?.let { millis ->
+                        val date = Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate()
+                        if (pickingStart) {
+                            customStartDay = minOf(date, customEnd).toEpochDay()
+                        } else {
+                            customEndDay = maxOf(date, customStart).toEpochDay()
+                        }
+                    }
+                    selectedIndex = null
+                    showDatePicker = false
+                }) { Text("Pilih") }
+            },
+            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Batal") } },
+        ) { DatePicker(picker) }
+    }
 }
 
 @Composable
@@ -537,7 +633,6 @@ private fun KrmLineChart(
         drawLine(gridColor, Offset(padLeft, yBot), Offset(w - padRight, yBot), 1f, pathEffect = dashedEffect)
 
         if (pointCount < 2) {
-            // Draw single horizontal point
             val y = padTop + plotH * 0.5f
             drawLine(goldColor, Offset(padLeft, y), Offset(w - padRight, y), strokeWidth = 3f, cap = StrokeCap.Round)
             drawCircle(goldColor, radius = 6f, center = Offset(w * 0.5f, y))
@@ -570,7 +665,6 @@ private fun KrmLineChart(
             val curX = getX(i)
             val curY = getY(history[i].rate)
 
-            // Smooth cubic bezier segment
             val cX1 = (prevX + curX) / 2f
             val cY1 = prevY
             val cX2 = (prevX + curX) / 2f
@@ -628,7 +722,6 @@ private fun KrmLineChart(
             val selX = getX(selectedIndex)
             val selY = getY(history[selectedIndex].rate)
 
-            // Vertical guideline
             drawLine(
                 color = goldColor.copy(alpha = 0.6f),
                 start = Offset(selX, padTop),
@@ -637,7 +730,6 @@ private fun KrmLineChart(
                 pathEffect = dashedEffect,
             )
 
-            // Outer ring and center dot
             drawCircle(
                 color = goldColor.copy(alpha = 0.3f),
                 radius = 10.dp.toPx(),

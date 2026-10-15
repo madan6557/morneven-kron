@@ -155,7 +155,7 @@ fun ReportsScreen(
     readOnly: Boolean = false,
 ) {
     val visible = state.valuesVisible
-    var range by rememberSaveable { mutableStateOf(ReportRange.THIRTY_DAYS) }
+    var range by rememberSaveable { mutableStateOf(ReportRange.THIS_MONTH) }
     var mode by rememberSaveable { mutableStateOf(ReportMode.CUMULATIVE) }
     var series by rememberSaveable { mutableStateOf(ReportSeries.ALL) }
     var channel by rememberSaveable { mutableStateOf(ReportChannel.ALL) }
@@ -175,8 +175,40 @@ fun ReportsScreen(
     val debtInterest = debtSummary.interest
     val customStart = LocalDate.ofEpochDay(customStartDay)
     val customEnd = LocalDate.ofEpochDay(customEndDay)
-    val end = if (range == ReportRange.CUSTOM) customEnd else today
-    val start = if (range == ReportRange.CUSTOM) customStart else end.minusDays((range.days - 1).toLong())
+    val dateComparison = remember(range, today, customStartDay, customEndDay) {
+        when (range) {
+            ReportRange.THIS_MONTH -> {
+                if (today.dayOfMonth <= 7) {
+                    val prevMonth = YearMonth.from(today).minusMonths(1)
+                    val s = prevMonth.atDay(1)
+                    val e = prevMonth.atEndOfMonth()
+                    val pMonth = prevMonth.minusMonths(1)
+                    DateRangeComparison(s, e, pMonth.atDay(1), pMonth.atEndOfMonth())
+                } else {
+                    val curMonth = YearMonth.from(today)
+                    val s = curMonth.atDay(1)
+                    val e = today
+                    val prevMonth = curMonth.minusMonths(1)
+                    DateRangeComparison(s, e, prevMonth.atDay(1), prevMonth.atDay(minOf(today.dayOfMonth, prevMonth.lengthOfMonth())))
+                }
+            }
+            ReportRange.CUSTOM -> {
+                val s = customStart
+                val e = customEnd
+                val days = (e.toEpochDay() - s.toEpochDay() + 1L).coerceAtLeast(1L)
+                DateRangeComparison(s, e, s.minusDays(days), s.minusDays(1))
+            }
+            else -> {
+                val e = today
+                val s = e.minusDays((range.days - 1).toLong())
+                DateRangeComparison(s, e, s.minusDays(range.days.toLong()), s.minusDays(1))
+            }
+        }
+    }
+    val start = dateComparison.start
+    val end = dateComparison.end
+    val prevStart = dateComparison.prevStart
+    val prevEnd = dateComparison.prevEnd
     val channelAware = eventChannels.isNotEmpty()
     val cashFlowEvents = remember(state.activities, start, end, channel, eventChannels) {
         state.activities.filter { event ->
@@ -200,13 +232,6 @@ fun ReportsScreen(
     val income = cashFlowEvents.sumOf { event -> event.cashImpact.coerceAtLeast(0L) }
     val expense = cashFlowEvents.sumOf { event -> (-event.cashImpact).coerceAtLeast(0L) }
     val net = income - expense
-    val prevDays = if (range == ReportRange.CUSTOM) {
-        (end.toEpochDay() - start.toEpochDay() + 1L).toInt()
-    } else {
-        range.days
-    }
-    val prevStart = start.minusDays(prevDays.toLong())
-    val prevEnd = start.minusDays(1)
     val prevCashFlowEvents = remember(state.activities, prevStart, prevEnd, channel, eventChannels) {
         state.activities.filter { event ->
             val date = LocalDate.ofEpochDay(event.effectiveEpochDay)
@@ -242,7 +267,11 @@ fun ReportsScreen(
     }
     var unexpectedExpanded by rememberSaveable { mutableStateOf(false) }
     val money: (Long) -> String = { value -> displayMoney(value, visible) }
-    val rangeLabel = if (range == ReportRange.CUSTOM) "${shortDate(start)} sampai ${shortDate(end)}" else range.label.lowercase()
+    val rangeLabel = when (range) {
+        ReportRange.CUSTOM -> "${shortDate(start)} sampai ${shortDate(end)}"
+        ReportRange.THIS_MONTH -> if (today.dayOfMonth <= 7) "bulan lalu (${shortDate(start)} - ${shortDate(end)})" else "bulan ini (${shortDate(start)} - ${shortDate(end)})"
+        else -> range.label.lowercase()
+    }
 
     LazyColumn(
         modifier = modifier,
@@ -654,7 +683,15 @@ private enum class ReportMode(val label: String) {
     CASH_FLOW("Arus kas"),
 }
 
+private data class DateRangeComparison(
+    val start: LocalDate,
+    val end: LocalDate,
+    val prevStart: LocalDate,
+    val prevEnd: LocalDate,
+)
+
 private enum class ReportRange(val label: String, val days: Int) {
+    THIS_MONTH("Bulan ini", 0),
     SEVEN_DAYS("7 hari", 7),
     THIRTY_DAYS("30 hari", 30),
     NINETY_DAYS("90 hari", 90),
