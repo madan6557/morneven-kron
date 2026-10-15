@@ -746,10 +746,16 @@ fun SettingsScreen(
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
+                                val isKron = curr == WidgetCurrency.KRON
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
                                     color = if (isSelected) KronGold.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
-                                    modifier = Modifier.size(40.dp),
+                                    border = if (isKron) BorderStroke(1.dp, KronGold.copy(alpha = 0.5f)) else null,
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .then(
+                                            if (isKron) Modifier.clickable { showKrmChartDialog = true } else Modifier
+                                        ),
                                 ) {
                                     Box(
                                         contentAlignment = Alignment.Center,
@@ -758,7 +764,7 @@ fun SettingsScreen(
                                         Text(
                                             text = curr.shortCode,
                                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                            color = if (isSelected) KronGold else MaterialTheme.colorScheme.onSurface,
+                                            color = if (isSelected || isKron) KronGold else MaterialTheme.colorScheme.onSurface,
                                         )
                                     }
                                 }
@@ -780,17 +786,6 @@ fun SettingsScreen(
                                     )
                                 }
 
-                                if (curr == WidgetCurrency.KRON) {
-                                    IconButton(
-                                        onClick = { showKrmChartDialog = true },
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.AutoMirrored.Outlined.ShowChart,
-                                            contentDescription = "Lihat grafik pergerakan kurs KRM",
-                                            tint = KronGold,
-                                        )
-                                    }
-                                }
 
                                 RadioButton(
                                     selected = isSelected,

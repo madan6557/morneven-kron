@@ -28,6 +28,11 @@ import androidx.compose.material.icons.outlined.AccountBalance
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
+import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.FileDownload
@@ -55,7 +60,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.contentDescription
@@ -423,35 +430,54 @@ fun ReportsScreen(
                         FilterChip(selected = showTable, onClick = { showTable = true }, label = { Text("Tabel") })
                     }
                     if (!showTable) {
-                        ChartLegend(effectiveSeries)
+                        ChartLegend(effectiveSeries, mode)
                         Spacer(Modifier.height(8.dp))
                         CashFlowChart(
                             buckets = buckets,
                             series = effectiveSeries,
+                            mode = mode,
                             selected = selectedPoint,
                             valuesVisible = visible,
                             onSelect = { selectedPoint = it },
                         )
                         Spacer(Modifier.height(8.dp))
                         if (selectedPoint in buckets.indices) {
-                            val detailBucket = if (mode == ReportMode.CUMULATIVE) {
-                                CashFlowBucket(
-                                    key = rawBuckets[selectedPoint].key,
-                                    label = rawBuckets[selectedPoint].label,
-                                    income = rawBuckets[selectedPoint].income,
-                                    expense = rawBuckets[selectedPoint].expense,
-                                    explicitNet = buckets[selectedPoint].net,
-                                )
-                            } else {
-                                buckets[selectedPoint]
-                            }
-                            BucketDetails(detailBucket, money)
-                        } else {
-                            Text(
-                                if (buckets.isEmpty()) "Belum ada cash flow pada rentang ini" else "Tekan grafik untuk melihat rincian periode",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            val bucket = buckets[selectedPoint]
+                            val rawBucket = if (mode == ReportMode.CUMULATIVE && selectedPoint in rawBuckets.indices) rawBuckets[selectedPoint] else null
+                            ChartPointAuditDetails(
+                                bucket = bucket,
+                                rawBucket = rawBucket,
+                                mode = mode,
+                                selectedIndex = selectedPoint,
+                                totalPoints = buckets.size,
+                                money = money,
+                                cashFlowEvents = cashFlowEvents,
+                                onClose = { selectedPoint = -1 },
                             )
+                        } else {
+                            Surface(
+                                shape = KronSubCardShape,
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.Info,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Text(
+                                        if (buckets.isEmpty()) "Belum ada cash flow pada rentang ini" else "Ketuk titik pada grafik untuk mengaudit tanggal & mutasi transaksi",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -989,12 +1015,14 @@ private fun ReportValueRow(label: String, value: String, color: Color) {
 }
 
 @Composable
-private fun ChartLegend(series: ReportSeries) {
-    val entries = when (series) {
-        ReportSeries.ALL -> listOf("Masuk" to KronGreen, "Keluar" to MaterialTheme.colorScheme.error, "Net" to KronGold)
-        ReportSeries.INCOME -> listOf("Masuk" to KronGreen)
-        ReportSeries.EXPENSE -> listOf("Keluar" to MaterialTheme.colorScheme.error)
-        ReportSeries.NET -> listOf("Net" to KronGold)
+private fun ChartLegend(series: ReportSeries, mode: ReportMode) {
+    val entries = when {
+        mode == ReportMode.CUMULATIVE -> listOf("Akumulasi Net" to KronGold)
+        series == ReportSeries.ALL -> listOf("Masuk" to KronGreen, "Keluar" to MaterialTheme.colorScheme.error)
+        series == ReportSeries.INCOME -> listOf("Masuk" to KronGreen)
+        series == ReportSeries.EXPENSE -> listOf("Keluar" to MaterialTheme.colorScheme.error)
+        series == ReportSeries.NET -> listOf("Net" to KronGold)
+        else -> listOf("Net" to KronGold)
     }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
         entries.forEach { (label, color) ->
@@ -1062,10 +1090,13 @@ private fun AssetRow(channel: String, value: Long, money: (Long) -> String) {
 private fun CashFlowChart(
     buckets: List<CashFlowBucket>,
     series: ReportSeries,
+    mode: ReportMode,
     selected: Int,
     valuesVisible: Boolean,
     onSelect: (Int) -> Unit,
 ) {
+    val isBarChart = mode == ReportMode.CASH_FLOW
+
     val visibleSeries = when (series) {
         ReportSeries.ALL -> listOf(
             buckets.map { it.income } to KronGreen,
@@ -1076,51 +1107,396 @@ private fun CashFlowChart(
         ReportSeries.EXPENSE -> listOf(buckets.map { it.expense } to MaterialTheme.colorScheme.error)
         ReportSeries.NET -> listOf(buckets.map { it.net } to KronGold)
     }
-    val values = visibleSeries.flatMap { it.first }
-    val minimum = minOf(0L, values.minOrNull() ?: 0L)
-    val maximum = maxOf(0L, values.maxOrNull() ?: 0L)
+
+    val minimum = if (isBarChart) {
+        if (series == ReportSeries.NET) {
+            minOf(0L, buckets.minOfOrNull { it.net } ?: 0L)
+        } else {
+            0L
+        }
+    } else {
+        val values = visibleSeries.flatMap { it.first }
+        minOf(0L, values.minOrNull() ?: 0L)
+    }
+
+    val maximum = if (isBarChart) {
+        when (series) {
+            ReportSeries.ALL -> maxOf(0L, buckets.maxOfOrNull { maxOf(it.income, it.expense) } ?: 0L)
+            ReportSeries.INCOME -> maxOf(0L, buckets.maxOfOrNull { it.income } ?: 0L)
+            ReportSeries.EXPENSE -> maxOf(0L, buckets.maxOfOrNull { it.expense } ?: 0L)
+            ReportSeries.NET -> maxOf(0L, buckets.maxOfOrNull { it.net } ?: 0L)
+        }
+    } else {
+        val values = visibleSeries.flatMap { it.first }
+        maxOf(0L, values.maxOrNull() ?: 0L)
+    }
+
     val span = (maximum - minimum).coerceAtLeast(1L)
     val grid = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
     val selectedColor = MaterialTheme.colorScheme.onSurface
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val errorColor = MaterialTheme.colorScheme.error
+    val greenColor = KronGreen
+    val goldColor = KronGold
     val accessibilityLabel = if (valuesVisible) {
-        "Grafik cash flow dengan ${buckets.size} periode. Gunakan tampilan tabel untuk membaca seluruh nilai."
+        if (isBarChart) {
+            "Grafik batang cash flow dengan ${buckets.size} periode."
+        } else {
+            "Grafik garis cash flow dengan ${buckets.size} periode. Gunakan tampilan tabel untuk membaca seluruh nilai."
+        }
     } else {
         "Grafik cash flow dengan nilai disembunyikan."
     }
-    Canvas(
-        Modifier
-            .fillMaxWidth()
-            .height(180.dp)
-            .semantics { contentDescription = accessibilityLabel }
-            .pointerInput(buckets) {
-                detectTapGestures { offset ->
-                    if (buckets.isNotEmpty()) {
-                        val denominator = size.width.coerceAtLeast(1)
-                        onSelect(((offset.x / denominator) * buckets.lastIndex).roundToInt().coerceIn(0, buckets.lastIndex))
+
+    Column(Modifier.fillMaxWidth()) {
+        Canvas(
+            Modifier
+                .fillMaxWidth()
+                .height(180.dp)
+                .semantics { contentDescription = accessibilityLabel }
+                .pointerInput(buckets, isBarChart) {
+                    detectTapGestures { offset ->
+                        if (buckets.isNotEmpty()) {
+                            val denominator = size.width.coerceAtLeast(1)
+                            val index = if (isBarChart) {
+                                ((offset.x / denominator) * buckets.size).toInt().coerceIn(0, buckets.lastIndex)
+                            } else {
+                                ((offset.x / denominator) * buckets.lastIndex).roundToInt().coerceIn(0, buckets.lastIndex)
+                            }
+                            onSelect(index)
+                        }
+                    }
+                },
+        ) {
+            repeat(4) { index ->
+                val y = size.height * index / 3f
+                drawLine(grid, Offset(0f, y), Offset(size.width, y), 1f)
+            }
+            val zeroY = size.height - ((0L - minimum).toFloat() / span.toFloat()) * size.height
+            drawLine(grid.copy(alpha = 0.45f), Offset(0f, zeroY), Offset(size.width, zeroY), 2f)
+            if (buckets.isEmpty()) return@Canvas
+
+            if (isBarChart) {
+                val slotW = size.width / buckets.size.toFloat()
+
+                if (selected in buckets.indices) {
+                    val selX = selected * slotW + slotW / 2f
+                    drawLine(
+                        color = primaryColor.copy(alpha = 0.55f),
+                        start = Offset(selX, 0f),
+                        end = Offset(selX, size.height),
+                        strokeWidth = 1.5f,
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f),
+                    )
+                }
+
+                buckets.forEachIndexed { index, bucket ->
+                    val slotCenter = index * slotW + slotW / 2f
+                    val isSelected = index == selected
+                    val alpha = if (selected == -1 || isSelected) 0.95f else 0.45f
+
+                    when (series) {
+                        ReportSeries.ALL -> {
+                            val totalBarW = (slotW * 0.75f).coerceIn(4f, 26f)
+                            val singleBarW = (totalBarW / 2f).coerceAtLeast(2f)
+                            val gap = 1f
+
+                            val incY = zeroY - (bucket.income.toFloat() / span.toFloat()) * size.height
+                            val incH = (zeroY - incY).coerceAtLeast(if (bucket.income > 0) 2f else 0f)
+                            if (incH > 0f) {
+                                drawRoundRect(
+                                    color = greenColor.copy(alpha = alpha),
+                                    topLeft = Offset(slotCenter - totalBarW / 2f, incY),
+                                    size = Size(singleBarW - gap, incH),
+                                    cornerRadius = CornerRadius(3f, 3f),
+                                )
+                            }
+
+                            val expY = zeroY - (bucket.expense.toFloat() / span.toFloat()) * size.height
+                            val expH = (zeroY - expY).coerceAtLeast(if (bucket.expense > 0) 2f else 0f)
+                            if (expH > 0f) {
+                                drawRoundRect(
+                                    color = errorColor.copy(alpha = alpha),
+                                    topLeft = Offset(slotCenter - totalBarW / 2f + singleBarW, expY),
+                                    size = Size(singleBarW - gap, expH),
+                                    cornerRadius = CornerRadius(3f, 3f),
+                                )
+                            }
+                        }
+                        ReportSeries.INCOME -> {
+                            val barW = (slotW * 0.65f).coerceIn(3f, 22f)
+                            val incY = zeroY - (bucket.income.toFloat() / span.toFloat()) * size.height
+                            val incH = (zeroY - incY).coerceAtLeast(if (bucket.income > 0) 2f else 0f)
+                            if (incH > 0f) {
+                                drawRoundRect(
+                                    color = greenColor.copy(alpha = alpha),
+                                    topLeft = Offset(slotCenter - barW / 2f, incY),
+                                    size = Size(barW, incH),
+                                    cornerRadius = CornerRadius(3f, 3f),
+                                )
+                            }
+                        }
+                        ReportSeries.EXPENSE -> {
+                            val barW = (slotW * 0.65f).coerceIn(3f, 22f)
+                            val expY = zeroY - (bucket.expense.toFloat() / span.toFloat()) * size.height
+                            val expH = (zeroY - expY).coerceAtLeast(if (bucket.expense > 0) 2f else 0f)
+                            if (expH > 0f) {
+                                drawRoundRect(
+                                    color = errorColor.copy(alpha = alpha),
+                                    topLeft = Offset(slotCenter - barW / 2f, expY),
+                                    size = Size(barW, expH),
+                                    cornerRadius = CornerRadius(3f, 3f),
+                                )
+                            }
+                        }
+                        ReportSeries.NET -> {
+                            val barW = (slotW * 0.65f).coerceIn(3f, 22f)
+                            val netY = size.height - ((bucket.net - minimum).toFloat() / span.toFloat()) * size.height
+                            val topY = minOf(zeroY, netY)
+                            val bottomY = maxOf(zeroY, netY)
+                            val barH = (bottomY - topY).coerceAtLeast(if (bucket.net != 0L) 2f else 0f)
+                            val color = if (bucket.net >= 0) greenColor else errorColor
+                            if (barH > 0f) {
+                                drawRoundRect(
+                                    color = color.copy(alpha = alpha),
+                                    topLeft = Offset(slotCenter - barW / 2f, topY),
+                                    size = Size(barW, barH),
+                                    cornerRadius = CornerRadius(3f, 3f),
+                                )
+                            }
+                        }
                     }
                 }
-            },
-    ) {
-        repeat(4) { index ->
-            val y = size.height * index / 3f
-            drawLine(grid, Offset(0f, y), Offset(size.width, y), 1f)
-        }
-        val zeroY = size.height - ((0L - minimum).toFloat() / span.toFloat()) * size.height
-        drawLine(grid.copy(alpha = 0.45f), Offset(0f, zeroY), Offset(size.width, zeroY), 2f)
-        if (buckets.isEmpty()) return@Canvas
-        val step = if (buckets.size == 1) size.width else size.width / buckets.lastIndex
-        visibleSeries.forEach { (seriesValues, color) ->
-            val coordinates = seriesValues.mapIndexed { index, value ->
-                Offset(
-                    x = index * step,
-                    y = size.height - ((value - minimum).toFloat() / span.toFloat()) * size.height,
-                )
-            }
-            coordinates.zipWithNext().forEach { (lineStart, lineEnd) -> drawLine(color, lineStart, lineEnd, 3.2f) }
-            coordinates.forEachIndexed { index, point ->
-                if (buckets.size <= 31 || index == selected) {
-                    drawCircle(if (index == selected) selectedColor else color, if (index == selected) 6.5f else 3f, point)
+            } else {
+                val step = if (buckets.size == 1) size.width else size.width / buckets.lastIndex
+
+                if (selected in buckets.indices && buckets.isNotEmpty()) {
+                    val selX = if (buckets.size == 1) size.width * 0.5f else selected * step
+                    drawLine(
+                        color = primaryColor.copy(alpha = 0.55f),
+                        start = Offset(selX, 0f),
+                        end = Offset(selX, size.height),
+                        strokeWidth = 1.5f,
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f),
+                    )
                 }
+
+                visibleSeries.forEach { (seriesValues, color) ->
+                    val coordinates = seriesValues.mapIndexed { index, value ->
+                        Offset(
+                            x = index * step,
+                            y = size.height - ((value - minimum).toFloat() / span.toFloat()) * size.height,
+                        )
+                    }
+                    coordinates.zipWithNext().forEach { (lineStart, lineEnd) -> drawLine(color, lineStart, lineEnd, 3.2f) }
+                    coordinates.forEachIndexed { index, point ->
+                        if (buckets.size <= 31 || index == selected) {
+                            drawCircle(if (index == selected) selectedColor else color, if (index == selected) 6.5f else 3f, point)
+                        }
+                    }
+                }
+            }
+        }
+
+        if (buckets.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            ChartTimeAxis(buckets = buckets, selected = selected)
+        }
+    }
+}
+
+@Composable
+private fun ChartTimeAxis(
+    buckets: List<CashFlowBucket>,
+    selected: Int,
+) {
+    if (buckets.isEmpty()) return
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val indices = when {
+            buckets.size <= 2 -> buckets.indices.toList()
+            buckets.size in 3..6 -> listOf(0, buckets.size / 2, buckets.lastIndex)
+            else -> listOf(
+                0,
+                (buckets.size - 1) / 3,
+                ((buckets.size - 1) * 2) / 3,
+                buckets.lastIndex,
+            )
+        }
+        indices.forEach { index ->
+            val bucket = buckets[index]
+            val isPointSelected = index == selected
+            Text(
+                text = compactAxisLabel(bucket),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = if (isPointSelected) FontWeight.Bold else FontWeight.Normal,
+                color = if (isPointSelected) KronGold else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChartPointAuditDetails(
+    bucket: CashFlowBucket,
+    rawBucket: CashFlowBucket?,
+    mode: ReportMode,
+    selectedIndex: Int,
+    totalPoints: Int,
+    money: (Long) -> String,
+    cashFlowEvents: List<ActivityRow>,
+    onClose: () -> Unit,
+) {
+    val isDaily = bucket.key.startsWith("D:")
+    val epochDay = if (isDaily) bucket.key.removePrefix("D:").toLongOrNull() else null
+    val isMonthly = bucket.key.startsWith("M:")
+    val monthStr = if (isMonthly) bucket.key.removePrefix("M:") else null
+
+    val dayEvents = remember(cashFlowEvents, epochDay, monthStr) {
+        when {
+            epochDay != null -> cashFlowEvents.filter { it.effectiveEpochDay == epochDay }
+            monthStr != null -> cashFlowEvents.filter {
+                YearMonth.from(LocalDate.ofEpochDay(it.effectiveEpochDay)).toString() == monthStr
+            }
+            else -> emptyList()
+        }
+    }
+
+    Surface(
+        shape = KronSubCardShape,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .background(KronGold.copy(alpha = 0.15f), RoundedCornerShape(8.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Outlined.CalendarMonth,
+                            contentDescription = null,
+                            tint = KronGold,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    Column {
+                        Text(
+                            bucket.label,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            "Titik ${selectedIndex + 1} dari $totalPoints periode",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = onClose,
+                    modifier = Modifier.size(28.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.Close,
+                        contentDescription = "Tutup audit tanggal",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
+
+            val displayIncome = if (mode == ReportMode.CUMULATIVE && rawBucket != null) rawBucket.income else bucket.income
+            val displayExpense = if (mode == ReportMode.CUMULATIVE && rawBucket != null) rawBucket.expense else bucket.expense
+            val netOfPeriod = displayIncome - displayExpense
+
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                ReportValueRow("Masuk pada tanggal ini", money(displayIncome), KronGreen)
+                ReportValueRow("Keluar pada tanggal ini", money(displayExpense), MaterialTheme.colorScheme.error)
+                ReportValueRow("Net mutasi", money(netOfPeriod), if (netOfPeriod >= 0) KronGreen else MaterialTheme.colorScheme.error)
+                if (mode == ReportMode.CUMULATIVE) {
+                    ReportValueRow("Akumulasi net s.d. tanggal ini", money(bucket.net), KronGold)
+                }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
+
+            if (dayEvents.isNotEmpty()) {
+                Text(
+                    "Transaksi tercatat (${dayEvents.size}):",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    dayEvents.forEach { event ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            val title = event.note.takeIf { it.isNotBlank() } ?: when (event.type) {
+                                "INCOME" -> "Pemasukan"
+                                "EXPENSE" -> "Pengeluaran"
+                                "TRANSFER" -> "Transfer"
+                                "UNEXPECTED_EXPENSE" -> "Pengeluaran Tak Terduga"
+                                "OPENING_BALANCE" -> "Saldo Awal"
+                                "DEBT_OPEN" -> "Pencatatan Hutang"
+                                else -> event.type
+                            }
+                            Text(
+                                title,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            val isPositive = event.cashImpact > 0
+                            val sign = if (isPositive) "+" else if (event.cashImpact < 0) "-" else ""
+                            Text(
+                                "$sign${money(abs(event.cashImpact))}",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isPositive) KronGreen else if (event.cashImpact < 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                        }
+                    }
+                }
+            } else {
+                Text(
+                    if (isDaily) "Tidak ada mutasi finansial pada tanggal ini." else "Tidak ada transaksi tercatat pada bulan ini.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -1128,4 +1504,15 @@ private fun CashFlowChart(
 
 private val monthFormat = DateTimeFormatter.ofPattern("MMM yyyy", Locale.forLanguageTag("id-ID"))
 private val dateFormat = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.forLanguageTag("id-ID"))
+private val axisDateFormatter = DateTimeFormatter.ofPattern("d MMM", Locale.forLanguageTag("id-ID"))
 private fun shortDate(date: LocalDate): String = date.format(dateFormat)
+
+private fun compactAxisLabel(bucket: CashFlowBucket): String {
+    if (bucket.key.startsWith("D:")) {
+        val epochDay = bucket.key.removePrefix("D:").toLongOrNull()
+        if (epochDay != null) {
+            return LocalDate.ofEpochDay(epochDay).format(axisDateFormatter)
+        }
+    }
+    return bucket.label
+}

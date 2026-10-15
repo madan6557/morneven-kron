@@ -1,5 +1,13 @@
 # KRON Changelog
 
+## 1.7.25 - 2026-10-15
+
+- Grafik batang untuk mode arus kas: penyajian grafik visual pada mode Arus kas kini menggunakan diagram batang (bar chart) berujung melengkung modern (berdampingan hijau-merah untuk semua transaksi, atau batang tunggal untuk pemasukan, pengeluaran, dan net), sedangkan mode Akumulasi net tetap mempertahankan grafik garis tren kontinu.
+- Penanda tanggal sumbu X dan kartu inspeksi audit harian: penambahan label tanggal ringkas (contoh: 1 Okt, 15 Okt) di sepanjang sumbu X di bawah grafik laporan, garis indikator vertikal putus-putus pada titik terpilih, serta kartu detail audit interaktif lengkap yang menampilkan tanggal, posisi periode, rincian masuk/keluar/net, akumulasi net, dan daftar transaksi penyumbang mutasi harian secara transparan.
+- Ikon lencana Kr interaktif sebagai pembuka grafik kurs: menggantikan tombol ikon grafik terpisah di sisi kanan baris pengaturan mata uang KRON yang terlalu sesak dengan menjadikan lencana ikon "Kr" di sebelah kiri langsung dapat diklik (dengan aksen border emas halus), menjaga kelapangan baris dan imunitas pergeseran layout.
+- Integrasi kurs KRON dan riwayat ke dalam paket backup: data nilai tukar sintetis KRM beserta riwayat pergerakannya kini diekspor ke manifest backup privat dan dipulihkan secara atomik saat proses restore paket selesai.
+- Bump versionCode 116 -> 117 dan versionName 1.7.24 -> 1.7.25.
+
 ## 1.7.24 - 2026-10-15
 
 - Pembersihan UI dan penambahan filter rentang waktu grafik KRON: menyederhanakan judul dialog menjadi "KRON" dan deskripsi bersih tanpa teks berlebih, menghilangkan tombol simulasi pasar dan tombol reset buatan, serta menambahkan filter rentang waktu (7 hari, 30 hari, 90 hari, 1 tahun, dan Custom dengan pemilih tanggal interaktif) untuk memfilter titik fluktuasi kurs yang ditampilkan pada grafik kanvas.

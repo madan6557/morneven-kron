@@ -262,6 +262,41 @@ object KronCurrencyManager {
         saveKrmRateHistory(context, initial)
     }
 
+    /**
+     * Serializes current KRM exchange rate and history into a backup JSON object.
+     */
+    fun exportBackupData(context: Context): JSONObject {
+        val rate = getKrmIdrRate(context)
+        val history = getKrmRateHistory(context)
+        val historyArray = JSONArray()
+        for (entry in history) {
+            val obj = JSONObject()
+            obj.put("time", entry.timestampMs)
+            obj.put("rate", entry.rate)
+            historyArray.put(obj)
+        }
+        return JSONObject()
+            .put("krmIdrRate", rate)
+            .put("krmRateHistory", historyArray)
+    }
+
+    /**
+     * Restores KRM exchange rate and history from backup JSON object.
+     */
+    fun restoreBackupData(context: Context, json: JSONObject) {
+        val rate = json.optDouble("krmIdrRate", -1.0)
+        val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
+        val editor = prefs.edit()
+        if (rate > 0.0 && rate.isFinite()) {
+            editor.putString(KEY_KRM_IDR_RATE, rate.toString())
+        }
+        val historyArray = json.optJSONArray("krmRateHistory")
+        if (historyArray != null && historyArray.length() > 0) {
+            editor.putString(KEY_KRM_HISTORY, historyArray.toString())
+        }
+        editor.apply()
+    }
+
     // ------------------------------------------------------------------
     // Staleness and auto-sync
     // ------------------------------------------------------------------

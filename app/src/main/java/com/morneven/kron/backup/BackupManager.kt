@@ -25,6 +25,7 @@ import com.morneven.kron.sync.ConflictPreview
 import com.morneven.kron.sync.ConflictPreviewBuilder
 import com.morneven.kron.team.TeamAtomicSwap
 import com.morneven.kron.team.TeamKeyStore
+import com.morneven.kron.widget.KronCurrencyManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
 import java.io.ByteArrayInputStream
@@ -508,6 +509,9 @@ class BackupManager @Inject constructor(
                 manifest.put("scope", "TEAM")
                 manifest.put("teamId", it.teamId)
             }
+            if (teamScope == null) {
+                manifest.put("currencyData", KronCurrencyManager.exportBackupData(context))
+            }
             val checksumIndex = buildString {
                 append(DATABASE_ENTRY).append('\t').append(databaseSha).append('\t').append(databaseBytes).append('\n')
                 attachments.forEach { attachment ->
@@ -621,6 +625,9 @@ class BackupManager @Inject constructor(
                 .put("stagedAt", Instant.now().toString())
             syncDirectoryStatic(requireNotNull(pending.parentFile))
             writeTextAndSync(File(pending, READY_FILE), ready.toString())
+            extracted.manifest.optJSONObject("currencyData")?.let { currencyData ->
+                writeTextAndSync(File(pending, CURRENCY_DATA_FILE), currencyData.toString())
+            }
         } catch (error: Throwable) {
             installedRecoveryKeys.forEach { teamKeyStore.clear(it) }
             throw error
@@ -1857,6 +1864,7 @@ class BackupManager @Inject constructor(
         private const val TEAM_RECOVERY_VERSION = 1
         private const val TEAM_KEY_BYTES = 32
         private const val READY_FILE = "ready.json"
+        private const val CURRENCY_DATA_FILE = "currency-data.json"
         private const val TRANSACTION_FILE = "swap.json"
         private const val PREPARED_MARKER = "prepared"
         private const val LIVE_MOVED_MARKER = "live_moved"
@@ -1892,7 +1900,7 @@ class BackupManager @Inject constructor(
             val paths = restoreSwapPaths(context, pending)
 
             if (paths.committedMarker.exists()) {
-                finalizeCommittedRestore(paths)
+                finalizeCommittedRestore(context, paths)
                 return true
             }
 
@@ -1943,6 +1951,7 @@ class BackupManager @Inject constructor(
                     "Checksum lampiran terpasang tidak cocok"
                 }
                 writeMarker(paths.committedMarker)
+                finalizeCurrencyRestore(context, paths.pending)
                 true
             }.onFailure { restoreError ->
                 runCatching { rollbackIncompleteRestore(paths, metadata) }
@@ -2061,7 +2070,8 @@ class BackupManager @Inject constructor(
             deleteChildRecursively(paths.pending, paths.pending.parentFile ?: error("Lokasi restore tidak valid"))
         }
 
-        private fun finalizeCommittedRestore(paths: RestoreSwapPaths) {
+        private fun finalizeCommittedRestore(context: Context, paths: RestoreSwapPaths) {
+            finalizeCurrencyRestore(context, paths.pending)
             deletePath(paths.oldDatabase)
             deletePath(paths.oldWal)
             deletePath(paths.oldShm)
@@ -2069,6 +2079,16 @@ class BackupManager @Inject constructor(
             deletePath(paths.newDatabase)
             deletePath(paths.newReceipts)
             deleteChildRecursively(paths.pending, paths.pending.parentFile ?: error("Lokasi restore tidak valid"))
+        }
+
+        private fun finalizeCurrencyRestore(context: Context, pending: File) {
+            val currencyFile = File(pending, CURRENCY_DATA_FILE)
+            if (currencyFile.isFile) {
+                runCatching {
+                    val json = JSONObject(currencyFile.readText(Charsets.UTF_8))
+                    KronCurrencyManager.restoreBackupData(context, json)
+                }
+            }
         }
 
         private fun restoreFile(old: File, live: File, existedBefore: Boolean) {
