@@ -66,6 +66,7 @@ import com.morneven.kron.data.CategoryEntity
 import com.morneven.kron.ui.theme.KronCardShape
 import com.morneven.kron.ui.theme.KronSubCardShape
 import com.morneven.kron.ui.theme.KronPillShape
+import com.morneven.kron.ui.theme.LocalKronDarkTheme
 import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
@@ -899,12 +900,16 @@ fun HudCard(
     containerColor: Color = MaterialTheme.colorScheme.surfaceContainer,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val isDark = LocalKronDarkTheme.current
     Card(
         modifier = modifier,
         shape = KronCardShape,
         colors = CardDefaults.cardColors(containerColor = containerColor),
-        border = BorderStroke(0.8.dp, accent),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        border = BorderStroke(
+            width = if (isDark) 0.8.dp else 1.dp,
+            color = if (isDark) accent else accent.copy(alpha = 0.35f),
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isDark) 2.dp else 3.5.dp),
     ) {
         Column(modifier = Modifier.padding(16.dp), content = content)
     }
@@ -1248,13 +1253,18 @@ fun TransactionCardItem(
     val money = displayMoney(impact, valuesVisible)
     val reversed = activity.reversedByEventId != null
 
+    val isDark = LocalKronDarkTheme.current
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .then(if (onClick != null && !readOnly) Modifier.clickable(onClick = onClick) else Modifier),
         shape = KronSubCardShape,
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)),
+        color = if (isDark) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            width = if (isDark) 0.6.dp else 0.8.dp,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.25f else 0.70f),
+        ),
+        shadowElevation = if (isDark) 0.dp else 1.5.dp,
     ) {
         Column(
             modifier = Modifier
@@ -1366,9 +1376,10 @@ fun HeroBalanceCard(
     val cashRatio = (kotlin.math.abs(cashAssets).toFloat() / totalAbs * 100f).roundToInt().coerceIn(0, 100)
     val eBudgetRatio = (kotlin.math.abs(eBudgetAssets).toFloat() / totalAbs * 100f).roundToInt().coerceIn(0, 100)
 
+    val isDark = LocalKronDarkTheme.current
     HudCard(
         modifier = modifier.fillMaxWidth(),
-        accent = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+        accent = if (isDark) MaterialTheme.colorScheme.primary.copy(alpha = 0.35f) else KronGold.copy(alpha = 0.45f),
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
     ) {
         Row(
@@ -1682,6 +1693,7 @@ fun QuickActionButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val isDark = LocalKronDarkTheme.current
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1693,8 +1705,9 @@ fun QuickActionButton(
                 .height(48.dp)
                 .clickable(onClick = onClick),
             shape = KronSubCardShape,
-            color = color.copy(alpha = 0.12f),
-            border = BorderStroke(0.8.dp, color.copy(alpha = 0.35f)),
+            color = if (isDark) color.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surface,
+            border = BorderStroke(if (isDark) 0.8.dp else 1.dp, color.copy(alpha = if (isDark) 0.35f else 0.45f)),
+            shadowElevation = if (isDark) 0.dp else 2.dp,
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(icon, contentDescription = label, tint = color, modifier = Modifier.size(22.dp))

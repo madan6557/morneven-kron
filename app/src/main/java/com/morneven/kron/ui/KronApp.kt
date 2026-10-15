@@ -175,6 +175,8 @@ import com.morneven.kron.capsule.CapsuleDriveScopeProbe
 import com.morneven.kron.team.TeamDriveScopeProbe
 import com.morneven.kron.team.TeamScopeProbeResult
 import com.morneven.kron.ui.theme.KronTheme
+import com.morneven.kron.ui.theme.LocalKronDarkTheme
+import androidx.compose.ui.graphics.Brush
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -1102,7 +1104,32 @@ private fun MainScaffold(
     LaunchedEffect(manualRestoreReady) {
         if (manualRestoreReady) restartRequired = true
     }
-        Scaffold(
+    val isDark = LocalKronDarkTheme.current
+    Scaffold(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                if (isDark) {
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.background,
+                            MaterialTheme.colorScheme.background,
+                        ),
+                    )
+                } else {
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0xFFFBF1F3),
+                            Color(0xFFF3F6F9),
+                            Color(0xFFEBF0F5),
+                            Color(0xFFEBF0F5),
+                        ),
+                        startY = 0f,
+                        endY = 1400f,
+                    )
+                }
+            ),
+        containerColor = Color.Transparent,
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
             Column {

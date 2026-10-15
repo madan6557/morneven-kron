@@ -90,6 +90,7 @@ import com.morneven.kron.ui.components.signedColor
 import com.morneven.kron.ui.theme.KronGold
 import com.morneven.kron.ui.theme.KronGreen
 import com.morneven.kron.ui.theme.KronSubCardShape
+import com.morneven.kron.ui.theme.LocalKronDarkTheme
 import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
@@ -817,11 +818,13 @@ private fun ReportKpiCard(
     modifier: Modifier = Modifier,
     indicator: (@Composable () -> Unit)? = null,
 ) {
+    val isDark = LocalKronDarkTheme.current
     Surface(
         modifier = modifier,
         shape = KronSubCardShape,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-        border = BorderStroke(1.dp, color.copy(alpha = 0.25f)),
+        color = if (isDark) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f) else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, color.copy(alpha = if (isDark) 0.25f else 0.40f)),
+        shadowElevation = if (isDark) 0.dp else 1.5.dp,
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -1367,10 +1370,12 @@ private fun ChartPointAuditDetails(
         }
     }
 
+    val isDark = LocalKronDarkTheme.current
     Surface(
         shape = KronSubCardShape,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+        color = if (isDark) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f) else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.70f)),
+        shadowElevation = if (isDark) 0.dp else 2.dp,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(

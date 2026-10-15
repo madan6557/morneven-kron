@@ -1,5 +1,11 @@
 # KRON Changelog
 
+## 1.7.27 - 2026-10-16
+
+- Eliminasi efek flat putih melompong dengan kanvas atmosferik bergradien: menambahkan gradien atmosferik halus pada latar scaffold aplikasi (dari semburat rose champagne mewah di bagian header hingga kanvas cool slate kokoh di bawah), membebaskan tampilan dari kekosongan kanvas putih datar.
+- Peningkatan kedalaman taktil dan elevasi kartu: kartu utama (HudCard) kini memiliki elevasi bayangan nyata (3.5.dp) dan border berdefinisi tegas terhadap kanvas slate (#EBF0F5), kartu total aset dibingkai border emas bangsawan (Royal Amber Gold), tombol tindakan cepat bertransformasi menjadi tombol mengambang putih dengan bayangan 2.dp dan border berwarna kanal, serta kartu transaksi dan KPI laporan tampil timbul dengan bayangan halus.
+- Bump versionCode 118 -> 119 dan versionName 1.7.26 -> 1.7.27.
+
 ## 1.7.26 - 2026-10-15
 
 - Perombakan total palet mode terang (Swiss Executive Alabaster): menghilangkan rona kusam pinkish-mauve pada latar belakang dan kartu, menggantikannya dengan kanvas platinum alabaster bersih (#F6F8FA) dan kartu putih kristal (#FFFFFF) beraksen garis batas hairline platinum halus (#E2E6EA).
