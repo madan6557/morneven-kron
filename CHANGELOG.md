@@ -1,5 +1,10 @@
 # KRON Changelog
 
+## 1.7.19 - 2026-10-15
+
+- Penataan layout shift-proof Main Vault: menghilangkan teks keterangan dalam kurung pada judul Main Vault, memisahkan rincian Cash dan eBudget secara proporsional ke kolom terpisah, serta menempatkan dana Rollover pada baris mandiri sehingga tidak lagi bertumpuk atau terpotong pada layar ponsel.
+- Bump versionCode 110 -> 111 dan versionName 1.7.18 -> 1.7.19.
+
 ## 1.7.18 - 2026-10-15
 
 - Redesign detail audit: tampilan struk teks biasa digantikan dengan tata letak kartu modern dan terstruktur (Hero ringkasan nominal dan status integritas, kartu resolusi mutasi dana antar akun/kanal, kartu rincian dampak finansial dan keseimbangan entri ganda, kartu grid metadata waktu/aktor/sumber, serta kartu manajemen bukti struk/kamera).
