@@ -3,6 +3,7 @@ package com.morneven.kron.widget
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.random.Random
 
 class KronCurrencyTest {
 
@@ -60,6 +61,102 @@ class KronCurrencyTest {
     }
 
     @Test
+    fun testRollKrmFluctuationFourTiersAndWaveContinuation() {
+        val rng = Random(42L)
+        var rate = 1200.0
+        var waveDir = true
+        var waveTicks = 0
+        var lastDir = true
+        var sawWaveTrigger = false
+        var sawWaveStep = false
+
+        repeat(250) {
+            val wasInWave = waveTicks > 0
+            val roll = KronCurrencyManager.rollKrmFluctuation(
+                waveTicksRemaining = waveTicks,
+                waveDirection = waveDir,
+                lastDirection = lastDir,
+                tierRoll = rng.nextDouble(),
+                directionRoll = rng.nextDouble(),
+            )
+            rate = KronCurrencyManager.nextKrmIdrRate(rate, roll.magnitude, roll.increase)
+            assertTrue(rate >= 100.0)
+            if (!wasInWave && roll.nextWaveTicks > 0) {
+                sawWaveTrigger = true
+                assertTrue(roll.nextWaveTicks in 2..5)
+            }
+            if (wasInWave) {
+                sawWaveStep = true
+                assertEquals(waveTicks - 1, roll.nextWaveTicks)
+            }
+            waveDir = roll.nextWaveDirection
+            waveTicks = roll.nextWaveTicks
+            lastDir = roll.increase
+        }
+
+        assertTrue("Expected at least one incident wave trigger over 250 ticks", sawWaveTrigger)
+        assertTrue("Expected wave continuation step to execute", sawWaveStep)
+    }
+
+    @Test
+    fun testParseTradingViewSpotRates() {
+        val payload = """
+            {"totalCount":4,"data":[
+                {"s":"FX_IDC:USDIDR","d":[17168.4]},
+                {"s":"FX_IDC:EURIDR","d":[20219.9]},
+                {"s":"FX_IDC:SGDIDR","d":[13468.9]},
+                {"s":"FX_IDC:JPYIDR","d":[107.88]}
+            ]}
+        """.trimIndent()
+        val parsed = KronCurrencyManager.parseTradingViewResponse(payload)
+        assertEquals(4, parsed.size)
+        assertEquals(17168.4, parsed[WidgetCurrency.USD]!!, 0.01)
+        assertEquals(20219.9, parsed[WidgetCurrency.EUR]!!, 0.01)
+        assertEquals(13468.9, parsed[WidgetCurrency.SGD]!!, 0.01)
+        assertEquals(107.88, parsed[WidgetCurrency.JPY]!!, 0.01)
+    }
+
+    @Test
+    fun testParseCoinGeckoCrossRates() {
+        val payload = """
+            {"rates":{
+                "idr":{"name":"Indonesian Rupiah","unit":"Rp","value":1280000000.0,"type":"fiat"},
+                "usd":{"name":"US Dollar","unit":"$","value":74555.6,"type":"fiat"},
+                "eur":{"name":"Euro","unit":"€","value":63304.0,"type":"fiat"},
+                "sgd":{"name":"Singapore Dollar","unit":"S$","value":95033.7,"type":"fiat"},
+                "jpy":{"name":"Japanese Yen","unit":"¥","value":11865035.0,"type":"fiat"}
+            }}
+        """.trimIndent()
+        val parsed = KronCurrencyManager.parseCoinGeckoResponse(payload)
+        assertEquals(4, parsed.size)
+        assertEquals(17168.4, parsed[WidgetCurrency.USD]!!, 0.5)
+        assertEquals(20219.9, parsed[WidgetCurrency.EUR]!!, 0.5)
+        assertEquals(13468.9, parsed[WidgetCurrency.SGD]!!, 0.5)
+        assertEquals(107.88, parsed[WidgetCurrency.JPY]!!, 0.05)
+    }
+
+    @Test
+    fun testParseUsdPivotRatesPrecision() {
+        val cdnPayload = """
+            {"date":"2026-10-16","usd":{"idr":17155.3489,"eur":0.84955,"sgd":1.2738,"jpy":159.1066}}
+        """.trimIndent()
+        val parsedCdn = KronCurrencyManager.parseUsdPivotResponse(cdnPayload)
+        assertEquals(4, parsedCdn.size)
+        assertEquals(17155.35, parsedCdn[WidgetCurrency.USD]!!, 0.05)
+        assertEquals(17155.3489 / 0.84955, parsedCdn[WidgetCurrency.EUR]!!, 0.05)
+        assertEquals(17155.3489 / 1.2738, parsedCdn[WidgetCurrency.SGD]!!, 0.05)
+        assertEquals(17155.3489 / 159.1066, parsedCdn[WidgetCurrency.JPY]!!, 0.05)
+
+        val erApiPayload = """
+            {"result":"success","rates":{"IDR":17148.29,"EUR":0.8496,"SGD":1.2733,"JPY":159.09}}
+        """.trimIndent()
+        val parsedEr = KronCurrencyManager.parseUsdPivotResponse(erApiPayload)
+        assertEquals(4, parsedEr.size)
+        assertEquals(17148.29, parsedEr[WidgetCurrency.USD]!!, 0.05)
+        assertEquals(17148.29 / 0.8496, parsedEr[WidgetCurrency.EUR]!!, 0.05)
+    }
+
+    @Test
     fun testFormatCurrencyAmountKRM() {
         // Hidden balance masking
         val hidden = KronCurrencyManager.formatCurrencyAmount(1200L, WidgetCurrency.KRON, visible = false)
@@ -103,10 +200,10 @@ class KronCurrencyTest {
 
     @Test
     fun testCurrencyApiEndpointsConfigured() {
-        assertEquals(2, KronCurrencyManager.API_URLS.size)
+        assertEquals(4, KronCurrencyManager.API_URLS.size)
         assertTrue(KronCurrencyManager.API_URLS.all { it.startsWith("https://") })
+        assertTrue(KronCurrencyManager.API_URLS.any { it.contains("jsdelivr.net") })
         assertTrue(KronCurrencyManager.API_URLS.any { it.contains("open.er-api.com") })
-        assertTrue(KronCurrencyManager.API_URLS.any { it.contains("exchangerate-api.com") })
     }
 
     @Test

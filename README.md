@@ -1,35 +1,35 @@
 # KRON
 
-Current release: KRON 1.7.28.
+Current release: KRON 1.7.29.
 
-KRON adalah aplikasi manajemen keuangan pribadi dan tim Android *local-first* dengan arsitektur bebas backend (*zero backend server*). KRON dirancang untuk pencatatan transaksi presisi tinggi (pemasukan, pengeluaran, transfer), alokasi RAB multi-periode, manajemen hutang/piutang, otomatisasi aturan berulang, audit *immutable*, laporan interaktif visual, kolaborasi akun Team di Google Drive, serta backup terenkripsi tingkat militer.
+KRON adalah aplikasi manajemen keuangan pribadi dan tim di Android dengan arsitektur *local-first* tanpa server backend. KRON mendukung pencatatan transaksi (pemasukan, pengeluaran, transfer), alokasi RAB multi-periode, manajemen hutang/piutang, jadwal transaksi berulang, audit *append-only*, laporan grafik, kolaborasi akun Team melalui Google Drive, dan backup lokal terenkripsi.
 
 ## Fitur Utama
 
-- **Model Dana Dwi-Kanal**: Setiap akun mengelola dua kanal saldo fisik dan digital: `Cash` dan `eBudget`.
-- **Main Vault & Budgeting**: Menyimpan dana likuid bebas sebelum dialokasikan ke pos kategori budget dengan fleksibilitas komposisi kanal.
-- **Akun Team & Kolaborasi Drive**: Sinkronisasi multi-perangkat antar anggota tim secara terdesentralisasi melalui snapshot terenkripsi di Google Drive privat tanpa perantara server pihak ketiga.
-- **Manajemen Hutang & Piutang**: Pencatatan counterparty, tanggal jatuh tempo, histori cicilan, dan rekapitulasi posisi piutang/hutang.
-- **Grafik Interaktif & Laporan Finansial**: Visualisasi arus kas harian/bulanan dengan diagram batang (Bar Chart) adaptif, grafik tren akumulasi net kontinu, penanda tanggal sumbu X, serta kartu audit detail transaksi per titik.
-- **Mata Uang KRON (KRM) & Grafik Kurs**: Mata uang sintetis Morneven dengan fluktuasi pasar, pencatatan kronologis riwayat nilai tukar, filter rentang multi-periode (7 hari, 30 hari, 90 hari, 1 tahun, Custom), label mengambang (floating tooltip), serta kartu inspeksi titik real-time.
-- **Widget Layar Utama Android**: Widget interaktif di homescreen untuk intip saldo cepat, aksi instan catat transaksi, dan toggle privasi sensor saldo.
-- **Tema Ganda Profesional**: Mode gelap *Evening* yang imersif dan mode terang *After Dawn* dengan kanvas hangat bergradien aurora fajar serta elevasi kartu bertingkat.
-- **Evaluator Rumus Terintegrasi**: Kalkulator cepat langsung pada baris nominal input transaksi.
+- **Model Dana Dwi-Kanal**: Setiap akun mengelola dua kanal saldo: `Cash` dan `eBudget`.
+- **Main Vault & Budgeting**: Menyimpan dana likuid di Main Vault sebelum dialokasikan ke kategori budget per periode.
+- **Akun Team & Kolaborasi Drive**: Sinkronisasi multi-perangkat antar anggota tim melalui snapshot terenkripsi di Google Drive pengguna.
+- **Manajemen Hutang & Piutang**: Pencatatan pihak terkait, jatuh tempo, bunga opsional, histori cicilan, dan status pelunasan.
+- **Grafik & Laporan Finansial**: Ringkasan arus kas harian/bulanan dengan grafik batang dan garis akumulasi net, filter periode, serta rincian transaksi per titik tanggal.
+- **Multi-Mata Uang & Grafik Kurs**: Konversi tampilan widget ke IDR, KRM (Kron Morneven), USD, EUR, SGD, dan JPY. Mendukung pembaruan kurs pasar setiap 30 menit, simulasi fluktuasi 4-tingkat dan gelombang pasar untuk KRM, serta grafik riwayat kurs hingga 1 tahun untuk seluruh mata uang.
+- **Widget Layar Utama Android**: Widget untuk memantau saldo, mengganti mata uang tampilan, menyembunyikan nominal, dan membuka dialog transaksi cepat.
+- **Tema Gelap & Terang**: Pilihan tema gelap (*Evening*), tema terang (*After Dawn*), atau mengikuti pengaturan sistem.
+- **Kalkulator Input Nominal**: Kalkulator bawaan pada kolom input nominal transaksi.
 
 ## Arsitektur & Integritas Finansial
 
-- **Double-Entry General Ledger**: Seluruh pergerakan finansial dicatat secara *append-only*. Reversal atau koreksi tidak pernah menghapus data lama, melainkan menerbitkan entri penyeimbang baru.
-- **Financial Invariant Check**: Integritas total saldo, kanal Cash, kanal eBudget, alokasi budget, dan batas kas diverifikasi secara otomatis pada setiap transaksi.
-- **Virtualisasi Render Lazy**: Antarmuka timeline transaksi menggunakan pemuatan bertahap berbasis *lazy column* sehingga tetap responsif pada data ribuan jurnal.
+- **Double-Entry General Ledger**: Seluruh mutasi finansial dicatat secara *append-only*. Koreksi atau pembatalan menggunakan entri jurnal pembalik (*reversal*) tanpa menghapus data historis.
+- **Financial Invariant Check**: Keseimbangan total saldo, kanal Cash, kanal eBudget, dan alokasi budget diperiksa pada setiap transaksi.
+- **Render List Bertahap**: Daftar riwayat transaksi dimuat menggunakan `LazyColumn` agar tetap ringan saat jumlah jurnal bertambah.
 
 ## Data dan Keamanan
 
-- **Enkripsi Database Tingkat Lanjut**: Room database schema 20 dienkripsi penuh menggunakan SQLCipher 4 dengan passphrase bytes acak yang dibungkus oleh Android Keystore (`kron.database.wrap.v1`).
-- **Paket Backup Terenkripsi**: Format `.kronbackup` diamankan dengan AES-256-GCM dan derivasi kunci PBKDF2-HMAC-SHA256 (600.000 iterasi), mencakup data transaksi, foto bukti, pengaturan, serta riwayat kurs KRON.
-- **Pusat Bukti & Rantai Segel (Hash Chain)**: Foto struk/bukti transaksi disimpan terenkripsi di penyimpanan privat, diverifikasi dengan tanda tangan digital ECDSA P-256, dan dapat diekspor ke format arsip `.kronevidence` maupun dokumen audit PDF.
-- **Privasi Total**: KRON beroperasi sepenuhnya di perangkat pengguna (*local-first*). Tidak menggunakan analitik pelacak, iklan, Firebase, atau dependensi cloud berbayar.
+- **Enkripsi Database**: Database Room (schema 20) dienkripsi menggunakan SQLCipher 4 dengan kunci yang dibungkus melalui Android Keystore (`kron.database.wrap.v1`).
+- **Paket Backup Terenkripsi**: File `.kronbackup` dienkripsi menggunakan AES-256-GCM dan PBKDF2-HMAC-SHA256 (600.000 iterasi), mencakup database, foto bukti, pengaturan, dan riwayat kurs.
+- **Pusat Bukti & Rantai Hash**: Lampiran bukti transaksi disimpan terenkripsi, ditandatangani dengan ECDSA P-256, dan dapat diekspor ke `.kronevidence` atau PDF.
+- **Privasi Lokal**: Berjalan penuh di perangkat tanpa analitik pelacak, iklan, atau layanan cloud berbayar.
 
-Aturan kompatibilitas LTS terdapat pada [AGENTS.md](AGENTS.md). Perubahan pada integrasi Drive wajib mengikuti [Drive Sync Change Control](docs/DRIVE_SYNC_CHANGE_CONTROL.md). KRON 1.0.21 adalah baseline kompatibilitas permanen yang wajib selalu dapat di-upgrade tanpa kehilangan data.
+Aturan kompatibilitas rilis terdapat pada [AGENTS.md](AGENTS.md). Perubahan pada integrasi Drive mengikuti [Drive Sync Change Control](docs/DRIVE_SYNC_CHANGE_CONTROL.md). KRON 1.0.21 adalah baseline kompatibilitas permanen yang wajib dapat di-upgrade tanpa kehilangan data.
 
 ## Build
 
@@ -46,7 +46,7 @@ Perintah verifikasi pengujian:
 .\gradlew.bat :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin :app:lintDebug :app:assembleRelease
 ```
 
-File APK release yang ditandatangani otomatis dihasilkan pada:
-`app/build/outputs/apk/release/KRON-1.7.28.apk`
+File APK release yang ditandatangani dihasilkan pada:
+`app/build/outputs/apk/release/KRON-1.7.29.apk`
 
-Konfigurasi tanda tangan rilis dibaca dari `%USERPROFILE%/.android/kron-signing.properties`. Konfigurasi OAuth opsional untuk integrasi Google Drive dijelaskan pada [OAUTH_SETUP.md](OAUTH_SETUP.md). Jangan pernah menyimpan file signing key, password, token, client secret, atau data finansial ke dalam repositori.
+Konfigurasi tanda tangan rilis dibaca dari `%USERPROFILE%/.android/kron-signing.properties`. Konfigurasi OAuth opsional untuk Google Drive dijelaskan pada [OAUTH_SETUP.md](OAUTH_SETUP.md). Jangan menyimpan file signing key, password, token, client secret, atau data finansial ke dalam repositori.

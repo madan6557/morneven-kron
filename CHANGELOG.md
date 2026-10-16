@@ -1,53 +1,53 @@
 # KRON Changelog
 
+## 1.7.29 - 2026-10-16
+
+- Perbaikan akurasi kurs mata uang asing (USD, EUR, SGD, JPY) sesuai pasar.
+- Grafik riwayat kurs hingga 1 tahun untuk semua mata uang.
+- Dinamika fluktuasi kurs KRM yang lebih bervariasi.
+- Penanganan mode offline pada pembaruan kurs dan grafik.
+- Perapian teks aplikasi dan dokumentasi.
+
 ## 1.7.28 - 2026-10-16
 
-- Perbaikan bug teks judul hitam pada mode gelap: menyelesaikan kebocoran nilai bawaan LocalContentColor pada Scaffold dan tema aplikasi saat menggunakan latar gradien transparan, menjamin seluruh teks judul dialog, kartu, dan layar memiliki warna tegas (onSurface / onBackground) yang kontras tinggi dan mudah dibaca pada mode gelap.
-- Inspeksi langsung titik grafik kurs KRON tanpa perlu scroll: kartu inspeksi audit titik (KrmPointInspectionCard) kini tampil langsung di bawah grafik kurs saat pengguna mengetuk atau menggeser kurva, menampilkan tanggal dan waktu rekaman hingga detik, nilai tukar 1 KRM, delta per langkah terhadap titik sebelumnya, perubahan kumulatif terhadap awal rentang, serta tombol navigasi panah kiri/kanan untuk berpindah titik secara presisi tanpa terpotong batas 15 data atau mengharuskan scroll ke bawah.
-- Indikator tooltip mengambang dan sumbu waktu grafik kurs: penambahan label mengambang (floating tooltip) pada kanvas grafik di titik sentuh serta sumbu waktu ringkas (KrmChartTimeAxis) di bawah grafik yang menyajikan penanda tanggal awal, tengah, dan akhir rentang waktu.
-- Palet mode terang After Dawn: pembaruan skema warna mode terang terinspirasi kehangatan fajar (After Dawn), memadukan kanvas linen hangat bergradien aurora matahari terbit (#FFF0EC -> #FAF4ED -> #F5F2EA), kartu mengambang putih murni dengan kedalaman bayangan taktil, aksen emas fajar (Sunrise Amber Gold #B58500), hijau semi segar (Vivid Spring Emerald #099252), biru langit fajar (Morning Sky Cerulean #1565C0), dan merah koral fajar (Sunrise Coral Red #E02D3C).
-- Bump versionCode 119 -> 120 dan versionName 1.7.27 -> 1.7.28.
+- Perbaikan warna teks judul pada mode gelap.
+- Kartu detail titik langsung tampil di bawah grafik kurs tanpa perlu scroll.
+- Penambahan label kurs mengambang dan tanggal sumbu X pada grafik kurs.
+- Penyesuaian palet warna mode terang After Dawn.
 
 ## 1.7.27 - 2026-10-16
 
-- Eliminasi efek flat putih melompong dengan kanvas atmosferik bergradien: menambahkan gradien atmosferik halus pada latar scaffold aplikasi (dari semburat rose champagne mewah di bagian header hingga kanvas cool slate kokoh di bawah), membebaskan tampilan dari kekosongan kanvas putih datar.
-- Peningkatan kedalaman taktil dan elevasi kartu: kartu utama (HudCard) kini memiliki elevasi bayangan nyata (3.5.dp) dan border berdefinisi tegas terhadap kanvas slate (#EBF0F5), kartu total aset dibingkai border emas bangsawan (Royal Amber Gold), tombol tindakan cepat bertransformasi menjadi tombol mengambang putih dengan bayangan 2.dp dan border berwarna kanal, serta kartu transaksi dan KPI laporan tampil timbul dengan bayangan halus.
-- Bump versionCode 118 -> 119 dan versionName 1.7.26 -> 1.7.27.
+- Penambahan gradien latar halus pada tema terang.
+- Penyesuaian bayangan dan garis tepi kartu pada tema terang.
 
 ## 1.7.26 - 2026-10-15
 
-- Perombakan total palet mode terang (Swiss Executive Alabaster): menghilangkan rona kusam pinkish-mauve pada latar belakang dan kartu, menggantikannya dengan kanvas platinum alabaster bersih (#F6F8FA) dan kartu putih kristal (#FFFFFF) beraksen garis batas hairline platinum halus (#E2E6EA).
-- Elevasi warna brand dan aksen finansial profesional: memperkaya warna primer KRON menjadi Imperial Bordeaux (#9B1D31) dengan kontras tinggi (>7:1), menghidupkan kembali aksen emas menjadi Royal Amber Gold (#A87B05 / #9E6F05) untuk judul seksi dan kanal Cash, menerapkan hijau zamrud segar (#0D8A52) untuk mutasi masuk dan saldo sehat, biru safir (#1565C0) untuk eBudget, serta tipografi Obsidian Ink (#111827) untuk keterbacaan angka finansial yang tajam dan presisi.
-- Bump versionCode 117 -> 118 dan versionName 1.7.25 -> 1.7.26.
+- Perbaikan warna latar dan kartu pada tema terang.
+- Peningkatan kontras warna aksen Cash, eBudget, dan indikator mutasi.
 
 ## 1.7.25 - 2026-10-15
 
-- Grafik batang untuk mode arus kas: penyajian grafik visual pada mode Arus kas kini menggunakan diagram batang (bar chart) berujung melengkung modern (berdampingan hijau-merah untuk semua transaksi, atau batang tunggal untuk pemasukan, pengeluaran, dan net), sedangkan mode Akumulasi net tetap mempertahankan grafik garis tren kontinu.
-- Penanda tanggal sumbu X dan kartu inspeksi audit harian: penambahan label tanggal ringkas (contoh: 1 Okt, 15 Okt) di sepanjang sumbu X di bawah grafik laporan, garis indikator vertikal putus-putus pada titik terpilih, serta kartu detail audit interaktif lengkap yang menampilkan tanggal, posisi periode, rincian masuk/keluar/net, akumulasi net, dan daftar transaksi penyumbang mutasi harian secara transparan.
-- Ikon lencana Kr interaktif sebagai pembuka grafik kurs: menggantikan tombol ikon grafik terpisah di sisi kanan baris pengaturan mata uang KRON yang terlalu sesak dengan menjadikan lencana ikon "Kr" di sebelah kiri langsung dapat diklik (dengan aksen border emas halus), menjaga kelapangan baris dan imunitas pergeseran layout.
-- Integrasi kurs KRON dan riwayat ke dalam paket backup: data nilai tukar sintetis KRM beserta riwayat pergerakannya kini diekspor ke manifest backup privat dan dipulihkan secara atomik saat proses restore paket selesai.
-- Bump versionCode 116 -> 117 dan versionName 1.7.24 -> 1.7.25.
+- Grafik batang untuk mode arus kas pada halaman Laporan.
+- Penambahan label tanggal sumbu X dan rincian transaksi harian pada Laporan.
+- Pintasan grafik kurs dengan mengetuk simbol mata uang di Pengaturan.
+- Penyimpanan nilai tukar dan riwayat kurs ke dalam file `.kronbackup`.
 
 ## 1.7.24 - 2026-10-15
 
-- Pembersihan UI dan penambahan filter rentang waktu grafik KRON: menyederhanakan judul dialog menjadi "KRON" dan deskripsi bersih tanpa teks berlebih, menghilangkan tombol simulasi pasar dan tombol reset buatan, serta menambahkan filter rentang waktu (7 hari, 30 hari, 90 hari, 1 tahun, dan Custom dengan pemilih tanggal interaktif) untuk memfilter titik fluktuasi kurs yang ditampilkan pada grafik kanvas.
-- Rentang "Bulan ini" sebagai default laporan utama: menambahkan pilihan rentang waktu "Bulan ini" dan menjadikannya default pada layar Laporan dengan transisi adaptif (pada 7 hari pertama bulan baru menampilkan data penuh bulan sebelumnya, dan setelah 1 minggu atau mulai tanggal 8 menampilkan akumulasi sejak tanggal 1 bulan berjalan hingga hari ini) lengkap dengan perbandingan periode sebelumnya yang proporsional.
-- Bump versionCode 115 -> 116 dan versionName 1.7.23 -> 1.7.24.
+- Penambahan filter rentang waktu (7 hari, 30 hari, 90 hari, 1 tahun, Custom) pada grafik kurs.
+- Rentang "Bulan ini" menjadi tampilan bawaan halaman Laporan.
 
 ## 1.7.23 - 2026-10-15
 
-- Perekaman riwayat perubahan kurs KRM: penambahan pencatatan kronologis pergerakan nilai tukar Kron Morneven ke penyimpanan terkelola dengan batas jendela data optimal, mencatat waktu dan nominal pergerakan setiap kali fluktuasi sintetis pasar terjadi.
-- Grafik visual fluktuasi kurs KRON: penambahan tombol grafik di samping opsi mata uang KRON pada dialog pengaturan mata uang, membuka dialog visual interaktif dengan grafik garis kanvas dinamis (Canvas line chart), arsiran gradien emas, ringkasan metrik statistik (kurs terkini, persentase tren, nilai terendah, rata-rata, dan tertinggi), kemampuan inspeksi sentuh titik data, tombol simulasi pergerakan pasar langsung, serta tabel riwayat data.
-- Imunitas pergeseran layout (shift-proof) menyeluruh: penguncian tinggi grid berpasangan dengan IntrinsicSize.Min dan fillMaxHeight pada kartu Masuk/Keluar Laporan dan Arus Kas Beranda; slot indikator perubahan tetap berukuran minimum 18.dp agar ada atau tidaknya indikator tidak mengubah tinggi kartu; proteksi overflow dan pencegahan pelipatan baris teks (maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) pada seluruh tampilan angka; serta normalisasi baris Rollover agar tinggi kartu tidak melompat saat menyembunyikan atau menampilkan nilai.
-- Bump versionCode 114 -> 115 dan versionName 1.7.22 -> 1.7.23.
+- Pencatatan riwayat dan grafik pergerakan kurs KRON.
+- Perapian ukuran kartu saldo dan laporan agar tidak bergeser saat nilai disembunyikan.
 
 ## 1.7.22 - 2026-10-15
 
-- Desain profesional menu Laporan dan Pengaturan: perombakan metrik KPI cash flow menjadi grid 2 kolom modern untuk Masuk dan Keluar lengkap dengan indikator perubahan persentase dan nominal, penambahan hero banner Net Cash Flow/Perubahan dengan warna bertanda (signed color) dan ikon dompet, perancangan ulang baris Komposisi Aset menjadi kartu terstruktur dengan lencana kanal fisik/digital dan saldo tegas, serta penataan metrik ringkas pada Laporan Hutang.
-- Penyeragaman margin judul seksi dan kartu di seluruh menu: standardisasi padding LazyColumn (16.dp horizontal, 14.dp vertical) pada layar Pengaturan, Budget, dan Hutang agar serasi dengan Beranda dan Laporan. Memindahkan SectionHeader keluar dari kartu dengan jarak vertikal konsisten 8.dp ke konten kartu.
-- Transisi navigasi berarah dan intuitif: perpindahan antar tab menu utama kini menggunakan geser horizontal terarah (slide left/right) sesuai posisi fisik tab di bilah navigasi, sedangkan navigasi masuk/keluar sub-halaman dan modal (seperti Hutang & Piutang) dibedakan menggunakan transisi scale dan fade terpadu tanpa efek slide yang membingungkan.
-- Penghapusan batas atas sintetis kurs KRM: menghilangkan tarikan mean-reversion buatan pada kalkulasi fluktuasi kurs Kron Morneven, memungkinkan kurs KRM bergerak bebas dan alami menjelajahi nilai di atas rentang awal 1000-1500 dengan perlindungan floor minimum aman.
-- Bump versionCode 113 -> 114 dan versionName 1.7.21 -> 1.7.22.
+- Tata letak baru pada halaman Laporan dan Pengaturan.
+- Penyeragaman jarak judul bagian dan kartu di seluruh layar.
+- Perbaikan arah animasi perpindahan tab navigasi bawah.
+- Penghapusan batas atas kurs KRM.
 
 ## 1.7.21 - 2026-10-15
 

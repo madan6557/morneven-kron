@@ -48,12 +48,12 @@ object KronCurrencySyncScheduler {
     }
 
     fun schedulePeriodic(context: Context) {
-        val request = androidx.work.PeriodicWorkRequestBuilder<KronCurrencySyncWorker>(1, TimeUnit.HOURS)
+        val request = androidx.work.PeriodicWorkRequestBuilder<KronCurrencySyncWorker>(30, TimeUnit.MINUTES)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
             KronCurrencySyncWorker.UNIQUE_PERIODIC_WORK_NAME,
-            androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+            androidx.work.ExistingPeriodicWorkPolicy.UPDATE,
             request,
         )
     }

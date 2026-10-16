@@ -29,7 +29,7 @@ CI akan menolak commit tanpa trailer.
 
 - Increase `versionCode`, `versionName`, and the version shown inside the app for every release.
 - Update `CHANGELOG.md` and archive the APK, SHA-256 checksum, Room schemas, R8 mapping, commit, and Git tag.
-- Release notes in `CHANGELOG.md` and Telegram broadcasts must be concise and punchy like Play Store "What's New" notes (singkat, padat, to the point), highlighting user benefits and key improvements without lengthy technical jargon.
+- Release notes in `CHANGELOG.md` and Telegram broadcasts must be short one-line bullets and must never overexplain (jangan menjelaskan berlebih di patch note). Do not use `Judul: penjelasan panjang...` format, do not mention internal implementation details/class names/endpoints, and do not include `Bump versionCode...` lines.
 - Do not mark a release complete until migration tests, backup round trips, financial invariants, lint, release build, signature verification, and install-over-previous smoke tests pass.
 - A release that cannot prove compatibility with the previous production APK is blocked.
 - Release signing is automatic: `assembleRelease` signs the APK via the Gradle signing config (`kron-release.jks`). No manual `jarsigner` step needed. The signed APK is at `app/build/outputs/apk/release/KRON-<version>.apk`.
@@ -67,3 +67,5 @@ CI akan menolak commit tanpa trailer.
 - Keep the codebase organized. Do not leave temporary files, dead code, dead files, or unnecessary directories.
 - Use a measure twice, cut once policy for migrations, journal behavior, backup formats, and destructive-looking actions.
 - Do not use an em dash in source text or documentation.
+- Do not use AI jargon slop, overexplanation, or hyperbolic marketing language (e.g., "tingkat militer", "presisi tinggi", "imersif", "kanvas bergradien aurora", or verbose filler explanations) in UI strings, source comments, README, or CHANGELOG. Keep all copy concise, factual, and direct.
+

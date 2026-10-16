@@ -112,7 +112,7 @@ def extract_changelog(repo_root: Path, version: str) -> list[str]:
             elif in_target_section:
                 if line_str.startswith("- ") or line_str.startswith("* "):
                     bullet = line_str[2:].strip()
-                    if bullet:
+                    if bullet and not bullet.lower().startswith("bump version"):
                         lines.append(bullet)
 
     return lines
@@ -136,7 +136,7 @@ def build_patch_notes_messages(version: str, changelog_items: list[str], custom_
         body = html.escape(raw_text)
     elif changelog_items:
         bullet_lines = [f"• {html.escape(item)}" for item in changelog_items]
-        body = "\n\n".join(bullet_lines)
+        body = "\n".join(bullet_lines)
     else:
         body = "<i>Pembaruan performa dan stabilitas aplikasi.</i>"
 

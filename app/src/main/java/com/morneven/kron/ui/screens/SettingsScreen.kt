@@ -210,7 +210,7 @@ fun SettingsScreen(
     var showArchive by rememberSaveable { mutableStateOf(false) }
     var showGlossary by rememberSaveable { mutableStateOf(false) }
     var showCurrencyDialog by rememberSaveable { mutableStateOf(false) }
-    var showKrmChartDialog by rememberSaveable { mutableStateOf(false) }
+    var chartDialogCurrencyCode by rememberSaveable { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val activeAccounts = state.accountBalances
@@ -671,7 +671,8 @@ fun SettingsScreen(
     if (showCurrencyDialog) {
         var currentCurrency by remember { mutableStateOf(KronWidgetManager.getDefaultCurrency(context)) }
         var isSyncing by remember { mutableStateOf(false) }
-        val lastSyncedAt = remember(isSyncing) { KronCurrencyManager.getLastSyncedTime(context) }
+        var syncGeneration by remember { mutableStateOf(0) }
+        val lastSyncedAt = remember(isSyncing, syncGeneration) { KronCurrencyManager.getLastSyncedTime(context) }
         val syncDateText = if (lastSyncedAt > 0L) {
             val instant = Instant.ofEpochMilli(lastSyncedAt)
             val formatter = DateTimeFormatter.ofPattern("dd MMM yyyy, HH:mm", Locale.forLanguageTag("id-ID"))
@@ -702,7 +703,7 @@ fun SettingsScreen(
                 ) {
                     item {
                         Text(
-                            "Pilih mata uang tampilan untuk widget KRON di Home Screen. Anda juga dapat mengetuk tombol mata uang langsung pada widget untuk beralih secara instan.",
+                            "Pilih mata uang tampilan widget. Ketuk simbol mata uang di kiri untuk membuka grafik riwayat kurs.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -710,7 +711,9 @@ fun SettingsScreen(
 
                     items(WidgetCurrency.ALL, key = { it.code }) { curr ->
                         val isSelected = curr == currentCurrency
-                        val idrRate = KronCurrencyManager.getIdrPerUnit(context, curr)
+                        val idrRate = remember(curr, lastSyncedAt, syncGeneration) {
+                            KronCurrencyManager.getIdrPerUnit(context, curr)
+                        }
                         val symbols = DecimalFormatSymbols(Locale.forLanguageTag("id-ID")).apply {
                             groupingSeparator = '.'
                             decimalSeparator = ','
@@ -746,15 +749,15 @@ fun SettingsScreen(
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                val isKron = curr == WidgetCurrency.KRON
+                                val hasChart = curr != WidgetCurrency.IDR
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
                                     color = if (isSelected) KronGold.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
-                                    border = if (isKron) BorderStroke(1.dp, KronGold.copy(alpha = 0.5f)) else null,
+                                    border = if (hasChart) BorderStroke(1.dp, KronGold.copy(alpha = 0.45f)) else null,
                                     modifier = Modifier
                                         .size(40.dp)
                                         .then(
-                                            if (isKron) Modifier.clickable { showKrmChartDialog = true } else Modifier
+                                            if (hasChart) Modifier.clickable { chartDialogCurrencyCode = curr.code } else Modifier
                                         ),
                                 ) {
                                     Box(
@@ -764,7 +767,7 @@ fun SettingsScreen(
                                         Text(
                                             text = curr.shortCode,
                                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                            color = if (isSelected || isKron) KronGold else MaterialTheme.colorScheme.onSurface,
+                                            color = if (isSelected || hasChart) KronGold else MaterialTheme.colorScheme.onSurface,
                                         )
                                     }
                                 }
@@ -785,7 +788,6 @@ fun SettingsScreen(
                                         color = if (isSelected) KronGold.copy(alpha = 0.9f) else MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
-
 
                                 RadioButton(
                                     selected = isSelected,
@@ -809,7 +811,7 @@ fun SettingsScreen(
                     item {
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Sinkronisasi Kurs Pasar:",
+                            "Sinkronisasi Kurs Pasar",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -819,7 +821,7 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text(
-                            "* Kurs KRM berfluktuasi sekali setelah sinkronisasi kurs berhasil. Saat offline, kurs terakhir tetap dipakai; widget mencoba lagi setelah koneksi kembali. Pemeriksaan otomatis dijadwalkan setiap 30 menit.",
+                            "Diperbarui otomatis setiap 30 menit saat online. Saat offline, kurs terakhir tetap digunakan.",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -830,19 +832,21 @@ fun SettingsScreen(
                                 scope.launch {
                                     isSyncing = true
                                     val result = KronCurrencyManager.syncRatesOnline(context)
+                                    syncGeneration++
                                     isSyncing = false
                                     if (result.isSuccess) {
                                         Toast.makeText(
                                             context,
-                                            "Kurs berhasil diperbarui!",
+                                            "Kurs berhasil diperbarui",
                                             Toast.LENGTH_SHORT
                                         ).show()
                                     } else {
                                         KronCurrencySyncScheduler.scheduleIfStale(context)
-                                        val errorMsg = result.exceptionOrNull()?.message ?: "Gagal memperbarui"
+                                        val errorMsg = result.exceptionOrNull()?.message
+                                            ?: "Gagal memperbarui kurs. Kurs tersimpan tetap digunakan."
                                         Toast.makeText(
                                             context,
-                                            "Gagal sync kurs: $errorMsg. Kurs tersimpan dipakai; percobaan berikutnya menunggu koneksi.",
+                                            errorMsg,
                                             Toast.LENGTH_LONG
                                         ).show()
                                     }
@@ -862,7 +866,7 @@ fun SettingsScreen(
                                     color = KronGold,
                                 )
                                 Spacer(Modifier.width(8.dp))
-                                Text("Menghubungi server kurs...")
+                                Text("Memperbarui kurs...")
                             } else {
                                 Icon(
                                     Icons.Outlined.Sync,
@@ -870,7 +874,7 @@ fun SettingsScreen(
                                     modifier = Modifier.size(18.dp),
                                 )
                                 Spacer(Modifier.width(8.dp))
-                                Text("Sinkronkan Kurs Online Sekarang")
+                                Text("Perbarui Kurs Sekarang")
                             }
                         }
                     }
@@ -884,9 +888,11 @@ fun SettingsScreen(
         )
     }
 
-    if (showKrmChartDialog) {
+    chartDialogCurrencyCode?.let { code ->
+        val targetCurrency = WidgetCurrency.fromCode(code)
         KrmRateChartDialog(
-            onDismissRequest = { showKrmChartDialog = false },
+            currency = targetCurrency,
+            onDismissRequest = { chartDialogCurrencyCode = null },
         )
     }
 }

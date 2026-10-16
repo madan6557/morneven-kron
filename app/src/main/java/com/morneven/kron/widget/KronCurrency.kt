@@ -6,19 +6,27 @@ import android.net.NetworkCapabilities
 import com.morneven.kron.ui.components.formatIdr
 import kotlin.random.Random
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.Locale
 
 /**
- * Historical exchange rate record for KRM or other tracked currencies.
+ * Historical exchange rate record (rate in IDR per 1 unit of currency).
  */
 data class KrmRateHistoryEntry(
     val timestampMs: Long,
@@ -28,16 +36,16 @@ data class KrmRateHistoryEntry(
 /**
  * Supported currencies for KRON Android Widget and displays.
  *
- * KRM (Kron Morneven) is the official currency of the fantasy world Morneven.
+ * KRM (Kron Morneven) is the currency of Morneven.
  * Starting reference rate: 1 Kr = Rp 1.200. Fluctuates once per successful rate sync.
  */
 enum class WidgetCurrency(
-    val code: String,        // 3-character ISO-style code shown as widget badge
-    val shortCode: String,   // Short symbol for compact contexts
-    val symbol: String,      // Prefix for monetary formatting
-    val displayName: String, // Full descriptive name shown in settings
-    val fixedRateFromIdr: Double?, // Fixed rate if not market-driven; null = dynamic
-    val fallbackRateFromIdr: Double, // Offline fallback (units of this currency per 1 IDR)
+    val code: String,
+    val shortCode: String,
+    val symbol: String,
+    val displayName: String,
+    val fixedRateFromIdr: Double?,
+    val fallbackRateFromIdr: Double,
 ) {
     IDR(
         code = "IDR",
@@ -52,14 +60,14 @@ enum class WidgetCurrency(
         shortCode = "Kr",
         symbol = "Kr ",
         displayName = "Kron Morneven (Kr)",
-        fixedRateFromIdr = null, // Dynamic synthetic rate; use KronCurrencyManager.getRate()
+        fixedRateFromIdr = null,
         fallbackRateFromIdr = 1.0 / 1200.0,
     ),
     USD(
         code = "USD",
         shortCode = "$",
         symbol = "$ ",
-        displayName = "US Dollar (\$)",
+        displayName = "US Dollar ($)",
         fixedRateFromIdr = null,
         fallbackRateFromIdr = 1.0 / 16200.0,
     ),
@@ -73,9 +81,9 @@ enum class WidgetCurrency(
     ),
     SGD(
         code = "SGD",
-        shortCode = "S\$",
-        symbol = "S\$ ",
-        displayName = "Singapore Dollar (S\$)",
+        shortCode = "S$",
+        symbol = "S$ ",
+        displayName = "Singapore Dollar (S$)",
         fixedRateFromIdr = null,
         fallbackRateFromIdr = 1.0 / 12500.0,
     ),
@@ -102,38 +110,56 @@ enum class WidgetCurrency(
     }
 }
 
+internal data class KrmFluctuationRoll(
+    val magnitude: Double,
+    val increase: Boolean,
+    val nextWaveTicks: Int,
+    val nextWaveDirection: Boolean,
+)
+
 object KronCurrencyManager {
     private const val PREFS_RATES = "kron_currency_rates"
     private const val KEY_PREFIX_RATE = "rate_"
+    private const val KEY_PREFIX_HISTORY = "currency_rate_history_"
     private const val KEY_LAST_SYNCED = "rates_last_synced_at"
     private const val KEY_KRM_IDR_RATE = "krm_synthetic_idr_rate"
+    private const val KEY_KRM_HISTORY = "krm_synthetic_rate_history"
+    private const val KEY_KRM_WAVE_TICKS = "krm_wave_ticks_remaining"
+    private const val KEY_KRM_WAVE_DIR = "krm_wave_direction"
+    private const val KEY_KRM_LAST_DIR = "krm_last_direction"
+    private const val KEY_FIAT_BACKFILL_EPOCH_DAY = "fiat_history_backfill_epoch_day"
+
+    private const val TRADINGVIEW_SCAN_URL = "https://scanner.tradingview.com/forex/scan"
+    private const val COINGECKO_RATES_URL = "https://api.coingecko.com/api/v3/exchange_rates"
+    private const val FRANKFURTER_BASE_URL = "https://api.frankfurter.dev/v1"
+
     internal val API_URLS = listOf(
-        "https://open.er-api.com/v6/latest/IDR",
-        "https://api.exchangerate-api.com/v4/latest/IDR",
+        "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json",
+        "https://latest.currency-api.pages.dev/v1/currencies/usd.json",
+        "https://open.er-api.com/v6/latest/USD",
+        "https://api.exchangerate-api.com/v4/latest/USD",
     )
 
-    /** 30 minutes in milliseconds -- matches widget update period. */
+    /** 30 minutes in milliseconds. */
     private const val STALE_THRESHOLD_MS = 30L * 60L * 1000L
 
     /** Starting reference rate for Kron Morneven: 1 Kr = Rp 1.200. */
     const val KRM_BASE_IDR = 1200.0
 
-    /** Hard floor: KRM cannot drop below this IDR value to prevent nonsensical rates. */
+    /** Hard floor: KRM cannot drop below this IDR value. */
     private const val KRM_FLOOR_IDR = 100.0
 
-    private val syncMutex = Mutex()
+    private const val MAX_HISTORY_POINTS = 500
 
-    /** Backwards-compatible alias for code that still reads the integer form. */
+    private val syncMutex = Mutex()
+    private val historyMutex = Mutex()
+
     val MORNEVEN_KRON_IN_IDR: Long get() = KRM_BASE_IDR.toLong()
 
     // ------------------------------------------------------------------
-    // KRM synthetic fluctuation
+    // KRM synthetic fluctuation (4-Tier + Incident Wave State)
     // ------------------------------------------------------------------
 
-    /**
-     * Returns the current synthetic KRM-to-IDR rate (IDR per 1 Kr).
-     * Defaults to [KRM_BASE_IDR] if no synthetic value has been generated yet.
-     */
     fun getKrmIdrRate(context: Context?): Double {
         if (context == null) return KRM_BASE_IDR
         val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
@@ -142,32 +168,85 @@ object KronCurrencyManager {
     }
 
     /**
-     * Applies one synthetic market-fluctuation tick to the KRM rate and persists it.
+     * Applies one market-fluctuation tick to the KRM rate and persists it.
      *
-     * Behavior:
-     * - 30% chance: large swing of 5-15% from the current rate.
-     * - 70% chance: small movement of 0.1-2% from the current rate.
-     * - No arbitrary upper cap and no artificial mean-reversion anchor, allowing KRM
-     *   to naturally trend and explore higher values beyond the initial 1000-1500 range.
-     * - Safe hard floor [KRM_FLOOR_IDR] prevents invalid or negative rates.
-     *
-     * @return the new IDR-per-Kr rate after fluctuation.
+     * Uses 4-tier continuous randomization with multi-tick incident waves:
+     * - Active wave (after Tier 3/4 shock): 80% directional bias, 1.2% - 4.8% magnitude.
+     * - Tier 1 (75%): Normal calm market, 0.05% - 1.50% (55% momentum continuation).
+     * - Tier 2 (15%): Medium market ripple, 1.50% - 4.50%.
+     * - Tier 3 (8%): Major incident shock, 4.50% - 15.00% + triggers 2-5 wave ticks.
+     * - Tier 4 (2%): Extreme incident (Black Swan), 15.00% - 28.00% + triggers 2-5 wave ticks.
      */
     fun refreshKronFluctuation(context: Context): Double {
         val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
         val current = getKrmIdrRate(context)
+        val waveTicks = prefs.getInt(KEY_KRM_WAVE_TICKS, 0).coerceAtLeast(0)
+        val waveDir = prefs.getBoolean(KEY_KRM_WAVE_DIR, true)
+        val lastDir = prefs.getBoolean(KEY_KRM_LAST_DIR, true)
 
-        val isLarge = Random.nextDouble() < 0.30
-        val magnitude = if (isLarge) {
-            Random.nextDouble(0.05, 0.15)   // 5-15% for large swings
-        } else {
-            Random.nextDouble(0.001, 0.02)  // 0.1-2% for small movements
-        }
-        val newRate = nextKrmIdrRate(current, magnitude, Random.nextBoolean())
+        val roll = rollKrmFluctuation(
+            waveTicksRemaining = waveTicks,
+            waveDirection = waveDir,
+            lastDirection = lastDir,
+            tierRoll = Random.nextDouble(),
+            directionRoll = Random.nextDouble(),
+        )
 
-        prefs.edit().putString(KEY_KRM_IDR_RATE, newRate.toString()).apply()
+        val newRate = nextKrmIdrRate(current, roll.magnitude, roll.increase)
+
+        prefs.edit()
+            .putString(KEY_KRM_IDR_RATE, newRate.toString())
+            .putInt(KEY_KRM_WAVE_TICKS, roll.nextWaveTicks)
+            .putBoolean(KEY_KRM_WAVE_DIR, roll.nextWaveDirection)
+            .putBoolean(KEY_KRM_LAST_DIR, roll.increase)
+            .apply()
+
         recordKrmRate(context, newRate)
         return newRate
+    }
+
+    internal fun rollKrmFluctuation(
+        waveTicksRemaining: Int,
+        waveDirection: Boolean,
+        lastDirection: Boolean,
+        tierRoll: Double,
+        directionRoll: Double,
+    ): KrmFluctuationRoll {
+        if (waveTicksRemaining > 0) {
+            val increase = if (directionRoll < 0.80) waveDirection else !waveDirection
+            val magnitude = Random.nextDouble(0.012, 0.048)
+            return KrmFluctuationRoll(
+                magnitude = magnitude,
+                increase = increase,
+                nextWaveTicks = waveTicksRemaining - 1,
+                nextWaveDirection = waveDirection,
+            )
+        }
+
+        return when {
+            tierRoll < 0.75 -> {
+                val magnitude = Random.nextDouble(0.0005, 0.015)
+                val increase = if (directionRoll < 0.55) lastDirection else !lastDirection
+                KrmFluctuationRoll(magnitude, increase, 0, waveDirection)
+            }
+            tierRoll < 0.90 -> {
+                val magnitude = Random.nextDouble(0.015, 0.045)
+                val increase = directionRoll < 0.50
+                KrmFluctuationRoll(magnitude, increase, 0, waveDirection)
+            }
+            tierRoll < 0.98 -> {
+                val magnitude = Random.nextDouble(0.045, 0.15)
+                val increase = directionRoll < 0.50
+                val waveTicks = Random.nextInt(2, 6)
+                KrmFluctuationRoll(magnitude, increase, waveTicks, increase)
+            }
+            else -> {
+                val magnitude = Random.nextDouble(0.15, 0.28)
+                val increase = directionRoll < 0.50
+                val waveTicks = Random.nextInt(2, 6)
+                KrmFluctuationRoll(magnitude, increase, waveTicks, increase)
+            }
+        }
     }
 
     internal fun nextKrmIdrRate(current: Double, magnitude: Double, increase: Boolean): Double {
@@ -177,27 +256,45 @@ object KronCurrencyManager {
         return if (next.isFinite()) next.coerceAtLeast(KRM_FLOOR_IDR) else startingRate
     }
 
-    private const val KEY_KRM_HISTORY = "krm_synthetic_rate_history"
-    private const val MAX_HISTORY_POINTS = 120
+    // ------------------------------------------------------------------
+    // Rate History (KRM & Foreign Currencies)
+    // ------------------------------------------------------------------
 
-    /**
-     * Retrieves the chronological list of recorded KRM exchange rate data points.
-     * Guaranteed to return at least one initial baseline point.
-     */
     fun getKrmRateHistory(context: Context?): List<KrmRateHistoryEntry> {
-        if (context == null) return emptyList()
+        return getCurrencyRateHistory(context, WidgetCurrency.KRON)
+    }
+
+    fun getCurrencyRateHistory(context: Context?, currency: WidgetCurrency): List<KrmRateHistoryEntry> {
+        if (context == null || currency == WidgetCurrency.IDR) return emptyList()
         val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
-        val raw = prefs.getString(KEY_KRM_HISTORY, null)
-        val currentRate = getKrmIdrRate(context)
+        val key = historyKeyFor(currency)
+        val raw = prefs.getString(key, null)
+        val currentIdrRate = getIdrPerUnit(context, currency)
+        val baseIdrRate = if (currency == WidgetCurrency.KRON) {
+            KRM_BASE_IDR
+        } else {
+            1.0 / currency.fallbackRateFromIdr
+        }
+
         if (raw.isNullOrBlank()) {
             val now = System.currentTimeMillis()
-            val initial = listOf(
-                KrmRateHistoryEntry(now - 3600_000L, KRM_BASE_IDR),
-                KrmRateHistoryEntry(now, currentRate),
-            )
-            saveKrmRateHistory(context, initial)
+            val initial = if (Math.abs(currentIdrRate - baseIdrRate) > 0.01) {
+                listOf(
+                    KrmRateHistoryEntry(now - 3600_000L, baseIdrRate),
+                    KrmRateHistoryEntry(now, currentIdrRate),
+                )
+            } else {
+                listOf(
+                    KrmRateHistoryEntry(now - 3600_000L, currentIdrRate),
+                    KrmRateHistoryEntry(now, currentIdrRate),
+                )
+            }
+            if (currency == WidgetCurrency.KRON) {
+                saveCurrencyRateHistory(context, currency, initial)
+            }
             return initial
         }
+
         return try {
             val array = JSONArray(raw)
             val list = mutableListOf<KrmRateHistoryEntry>()
@@ -211,33 +308,50 @@ object KronCurrencyManager {
             }
             if (list.isEmpty()) {
                 val now = System.currentTimeMillis()
-                val initial = listOf(KrmRateHistoryEntry(now, currentRate))
-                saveKrmRateHistory(context, initial)
-                initial
+                listOf(
+                    KrmRateHistoryEntry(now - 3600_000L, currentIdrRate),
+                    KrmRateHistoryEntry(now, currentIdrRate),
+                )
             } else {
-                list
+                list.sortedBy { it.timestampMs }
             }
         } catch (_: Exception) {
             val now = System.currentTimeMillis()
-            listOf(KrmRateHistoryEntry(now, currentRate))
+            listOf(
+                KrmRateHistoryEntry(now - 3600_000L, currentIdrRate),
+                KrmRateHistoryEntry(now, currentIdrRate),
+            )
         }
     }
 
-    /**
-     * Records a new exchange rate data point into the chronological history.
-     */
     fun recordKrmRate(context: Context, rate: Double, timestampMs: Long = System.currentTimeMillis()) {
-        val currentHistory = getKrmRateHistory(context).toMutableList()
-        currentHistory.add(KrmRateHistoryEntry(timestampMs, rate))
-        val trimmed = if (currentHistory.size > MAX_HISTORY_POINTS) {
-            currentHistory.takeLast(MAX_HISTORY_POINTS)
-        } else {
-            currentHistory
-        }
-        saveKrmRateHistory(context, trimmed)
+        recordCurrencyRate(context, WidgetCurrency.KRON, rate, timestampMs)
     }
 
-    private fun saveKrmRateHistory(context: Context, list: List<KrmRateHistoryEntry>) {
+    fun recordCurrencyRate(
+        context: Context,
+        currency: WidgetCurrency,
+        idrPerUnit: Double,
+        timestampMs: Long = System.currentTimeMillis(),
+    ) {
+        if (currency == WidgetCurrency.IDR || !idrPerUnit.isFinite() || idrPerUnit <= 0.0) return
+        val currentHistory = getCurrencyRateHistory(context, currency).toMutableList()
+        currentHistory.add(KrmRateHistoryEntry(timestampMs, idrPerUnit))
+        val trimmed = currentHistory
+            .sortedBy { it.timestampMs }
+            .let { if (it.size > MAX_HISTORY_POINTS) it.takeLast(MAX_HISTORY_POINTS) else it }
+        saveCurrencyRateHistory(context, currency, trimmed)
+    }
+
+    private fun historyKeyFor(currency: WidgetCurrency): String {
+        return if (currency == WidgetCurrency.KRON) KEY_KRM_HISTORY else "$KEY_PREFIX_HISTORY${currency.code}"
+    }
+
+    private fun saveCurrencyRateHistory(
+        context: Context,
+        currency: WidgetCurrency,
+        list: List<KrmRateHistoryEntry>,
+    ) {
         val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
         val array = JSONArray()
         for (entry in list) {
@@ -246,12 +360,9 @@ object KronCurrencyManager {
             obj.put("rate", entry.rate)
             array.put(obj)
         }
-        prefs.edit().putString(KEY_KRM_HISTORY, array.toString()).apply()
+        prefs.edit().putString(historyKeyFor(currency), array.toString()).apply()
     }
 
-    /**
-     * Resets the KRM rate history to a fresh baseline at the current rate.
-     */
     fun clearKrmRateHistory(context: Context) {
         val now = System.currentTimeMillis()
         val currentRate = getKrmIdrRate(context)
@@ -259,13 +370,114 @@ object KronCurrencyManager {
             KrmRateHistoryEntry(now - 1800_000L, KRM_BASE_IDR),
             KrmRateHistoryEntry(now, currentRate),
         )
-        saveKrmRateHistory(context, initial)
+        saveCurrencyRateHistory(context, WidgetCurrency.KRON, initial)
     }
 
     /**
-     * Serializes current KRM exchange rate and history into a backup JSON object.
+     * Loads up to 1 year of daily historical market rates from Frankfurter (ECB)
+     * and merges them with local intraday points. Cached per calendar day.
      */
+    suspend fun ensureHistoricalRatesLoaded(context: Context): Boolean = withContext(Dispatchers.IO) {
+        historyMutex.withLock {
+            val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
+            val todayEpochDay = LocalDate.now().toEpochDay()
+            val lastBackfillDay = prefs.getLong(KEY_FIAT_BACKFILL_EPOCH_DAY, -1L)
+            val hasSufficientPoints = getCurrencyRateHistory(context, WidgetCurrency.USD).size >= 30
+            if (lastBackfillDay == todayEpochDay && hasSufficientPoints) {
+                return@withLock true
+            }
+            if (!hasInternetAccess(context)) {
+                return@withLock false
+            }
+            fetchAndMergeFiatHistory(context, todayEpochDay)
+        }
+    }
+
+    private fun fetchAndMergeFiatHistory(context: Context, todayEpochDay: Long): Boolean {
+        return try {
+            val endDate = LocalDate.ofEpochDay(todayEpochDay)
+            val startDate = endDate.minusDays(365)
+            val url = "$FRANKFURTER_BASE_URL/$startDate..$endDate?base=USD&symbols=IDR,EUR,SGD,JPY"
+            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 8000
+                readTimeout = 8000
+                setRequestProperty("User-Agent", "KRON-App/1.0")
+                setRequestProperty("Accept", "application/json")
+            }
+            val responseText = try {
+                if (conn.responseCode != HttpURLConnection.HTTP_OK) return false
+                conn.inputStream.bufferedReader().use { it.readText() }
+            } finally {
+                conn.disconnect()
+            }
+
+            val root = JSONObject(responseText)
+            val ratesByDate = root.optJSONObject("rates") ?: return false
+            val dateKeys = ratesByDate.keys().asSequence().toList().sorted()
+            if (dateKeys.isEmpty()) return false
+
+            val zone = ZoneId.systemDefault()
+            val historicalPerCurrency = mutableMapOf<WidgetCurrency, MutableList<KrmRateHistoryEntry>>(
+                WidgetCurrency.USD to mutableListOf(),
+                WidgetCurrency.EUR to mutableListOf(),
+                WidgetCurrency.SGD to mutableListOf(),
+                WidgetCurrency.JPY to mutableListOf(),
+            )
+
+            var maxHistoricalMs = 0L
+            for (dateStr in dateKeys) {
+                val dayObj = ratesByDate.optJSONObject(dateStr) ?: continue
+                val idrPerUsd = dayObj.optDouble("IDR", 0.0)
+                if (idrPerUsd <= 0.0 || !idrPerUsd.isFinite()) continue
+
+                val timestampMs = runCatching {
+                    LocalDate.parse(dateStr).atTime(12, 0).atZone(zone).toInstant().toEpochMilli()
+                }.getOrDefault(0L)
+                if (timestampMs <= 0L) continue
+                if (timestampMs > maxHistoricalMs) maxHistoricalMs = timestampMs
+
+                historicalPerCurrency[WidgetCurrency.USD]?.add(KrmRateHistoryEntry(timestampMs, idrPerUsd))
+
+                for (curr in listOf(WidgetCurrency.EUR, WidgetCurrency.SGD, WidgetCurrency.JPY)) {
+                    val currPerUsd = dayObj.optDouble(curr.code, 0.0)
+                    if (currPerUsd > 0.0 && currPerUsd.isFinite()) {
+                        val idrPerCurr = idrPerUsd / currPerUsd
+                        historicalPerCurrency[curr]?.add(KrmRateHistoryEntry(timestampMs, idrPerCurr))
+                    }
+                }
+            }
+
+            for ((curr, histList) in historicalPerCurrency) {
+                if (histList.isEmpty()) continue
+                val existing = getCurrencyRateHistory(context, curr)
+                val recentLocalTicks = existing.filter { it.timestampMs > maxHistoricalMs }
+                val merged = (histList + recentLocalTicks).sortedBy { it.timestampMs }.toMutableList()
+                val currentLive = getIdrPerUnit(context, curr)
+                val now = System.currentTimeMillis()
+                if (merged.isEmpty() || now - merged.last().timestampMs > 15 * 60 * 1000L) {
+                    merged.add(KrmRateHistoryEntry(now, currentLive))
+                }
+                val trimmed = if (merged.size > MAX_HISTORY_POINTS) merged.takeLast(MAX_HISTORY_POINTS) else merged
+                saveCurrencyRateHistory(context, curr, trimmed)
+            }
+
+            context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
+                .edit()
+                .putLong(KEY_FIAT_BACKFILL_EPOCH_DAY, todayEpochDay)
+                .apply()
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Backup & Restore
+    // ------------------------------------------------------------------
+
     fun exportBackupData(context: Context): JSONObject {
+        val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
         val rate = getKrmIdrRate(context)
         val history = getKrmRateHistory(context)
         val historyArray = JSONArray()
@@ -275,14 +487,31 @@ object KronCurrencyManager {
             obj.put("rate", entry.rate)
             historyArray.put(obj)
         }
+
+        val fiatRatesObj = JSONObject()
+        val fiatHistoryObj = JSONObject()
+        for (curr in WidgetCurrency.entries) {
+            if (curr == WidgetCurrency.IDR || curr == WidgetCurrency.KRON) continue
+            prefs.getString("$KEY_PREFIX_RATE${curr.code}", null)?.let { saved ->
+                fiatRatesObj.put(curr.code, saved)
+            }
+            prefs.getString(historyKeyFor(curr), null)?.let { rawHist ->
+                runCatching { JSONArray(rawHist) }.getOrNull()?.let { arr ->
+                    fiatHistoryObj.put(curr.code, arr)
+                }
+            }
+        }
+
         return JSONObject()
             .put("krmIdrRate", rate)
             .put("krmRateHistory", historyArray)
+            .put("krmWaveTicks", prefs.getInt(KEY_KRM_WAVE_TICKS, 0))
+            .put("krmWaveDir", prefs.getBoolean(KEY_KRM_WAVE_DIR, true))
+            .put("krmLastDir", prefs.getBoolean(KEY_KRM_LAST_DIR, true))
+            .put("fiatRates", fiatRatesObj)
+            .put("fiatRateHistory", fiatHistoryObj)
     }
 
-    /**
-     * Restores KRM exchange rate and history from backup JSON object.
-     */
     fun restoreBackupData(context: Context, json: JSONObject) {
         val rate = json.optDouble("krmIdrRate", -1.0)
         val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
@@ -294,6 +523,33 @@ object KronCurrencyManager {
         if (historyArray != null && historyArray.length() > 0) {
             editor.putString(KEY_KRM_HISTORY, historyArray.toString())
         }
+        if (json.has("krmWaveTicks")) {
+            editor.putInt(KEY_KRM_WAVE_TICKS, json.optInt("krmWaveTicks", 0).coerceAtLeast(0))
+        }
+        if (json.has("krmWaveDir")) {
+            editor.putBoolean(KEY_KRM_WAVE_DIR, json.optBoolean("krmWaveDir", true))
+        }
+        if (json.has("krmLastDir")) {
+            editor.putBoolean(KEY_KRM_LAST_DIR, json.optBoolean("krmLastDir", true))
+        }
+        json.optJSONObject("fiatRates")?.let { fiatRates ->
+            for (curr in WidgetCurrency.entries) {
+                if (curr == WidgetCurrency.IDR || curr == WidgetCurrency.KRON) continue
+                val saved = fiatRates.optString(curr.code, "")
+                if (saved.isNotBlank() && saved.toDoubleOrNull() != null) {
+                    editor.putString("$KEY_PREFIX_RATE${curr.code}", saved)
+                }
+            }
+        }
+        json.optJSONObject("fiatRateHistory")?.let { fiatHist ->
+            for (curr in WidgetCurrency.entries) {
+                if (curr == WidgetCurrency.IDR || curr == WidgetCurrency.KRON) continue
+                val arr = fiatHist.optJSONArray(curr.code)
+                if (arr != null && arr.length() > 0) {
+                    editor.putString(historyKeyFor(curr), arr.toString())
+                }
+            }
+        }
         editor.apply()
     }
 
@@ -301,15 +557,11 @@ object KronCurrencyManager {
     // Staleness and auto-sync
     // ------------------------------------------------------------------
 
-    /** Returns true if exchange rates have not been synced within [STALE_THRESHOLD_MS]. */
     fun isRatesStale(context: Context?): Boolean {
         if (context == null) return false
         return System.currentTimeMillis() - getLastSyncedTime(context) > STALE_THRESHOLD_MS
     }
 
-    /**
-     * Syncs only when stale. A unique network-constrained worker calls this after connectivity returns.
-     */
     suspend fun checkAndAutoSync(context: Context): Result<Map<String, Double>> = withContext(Dispatchers.IO) {
         syncMutex.withLock {
             if (isRatesStale(context)) performRateSync(context) else Result.success(emptyMap())
@@ -320,12 +572,6 @@ object KronCurrencyManager {
     // Rate retrieval
     // ------------------------------------------------------------------
 
-    /**
-     * Returns how many units of [currency] equal 1 IDR.
-     *
-     * For KRM the synthetic rate is used; for IDR returns 1.0; for market currencies
-     * returns the cached API rate or [WidgetCurrency.fallbackRateFromIdr].
-     */
     fun getRate(context: Context?, currency: WidgetCurrency): Double {
         if (currency == WidgetCurrency.IDR) return 1.0
         if (currency == WidgetCurrency.KRON) {
@@ -336,14 +582,9 @@ object KronCurrencyManager {
         if (context == null) return currency.fallbackRateFromIdr
         val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
         val saved = prefs.getString("$KEY_PREFIX_RATE${currency.code}", null)
-        return saved?.toDoubleOrNull() ?: currency.fallbackRateFromIdr
+        return saved?.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0.0 } ?: currency.fallbackRateFromIdr
     }
 
-    /**
-     * Returns how many IDR equal 1 unit of [currency].
-     *
-     * This is the human-readable "1 KRM = Rp X.XXX" direction.
-     */
     fun getIdrPerUnit(context: Context?, currency: WidgetCurrency): Double {
         if (currency == WidgetCurrency.IDR) return 1.0
         if (currency == WidgetCurrency.KRON) return getKrmIdrRate(context)
@@ -361,10 +602,6 @@ object KronCurrencyManager {
     // Formatting
     // ------------------------------------------------------------------
 
-    /**
-     * Formats an IDR amount into the display string for [currency].
-     * If [visible] is false, returns a masked placeholder.
-     */
     fun formatCurrencyAmount(
         amountIdr: Long,
         currency: WidgetCurrency,
@@ -392,70 +629,245 @@ object KronCurrencyManager {
     }
 
     // ------------------------------------------------------------------
-    // Online sync
+    // Online sync (Multi-tier live market waterfall)
     // ------------------------------------------------------------------
 
-    /** Fetches market rates. KRM changes once only after a successful fetch, never while offline. */
     suspend fun syncRatesOnline(context: Context): Result<Map<String, Double>> = withContext(Dispatchers.IO) {
         syncMutex.withLock { performRateSync(context) }
     }
 
+    private fun isOfflineNetworkException(t: Throwable?): Boolean {
+        return t is java.net.UnknownHostException ||
+            t is java.net.NoRouteToHostException ||
+            t is java.net.ConnectException ||
+            t is java.net.SocketException ||
+            t is java.net.SocketTimeoutException
+    }
+
     private fun performRateSync(context: Context): Result<Map<String, Double>> {
         if (!hasInternetAccess(context)) {
-            return Result.failure(IllegalStateException("Tidak ada koneksi internet"))
+            return Result.failure(IllegalStateException("Tidak ada koneksi internet. Kurs tersimpan tetap digunakan."))
         }
+
         var lastException: Exception? = null
+        var consecutiveDnsOrConnectFailures = 0
+
+        // Tier 1: TradingView Live Forex Spot Scanner
+        val tvRates = runCatching { fetchTradingViewSpotRates() }
+            .onFailure {
+                lastException = it as? Exception ?: Exception(it.message)
+                if (it is java.net.UnknownHostException || it is java.net.NoRouteToHostException) {
+                    consecutiveDnsOrConnectFailures++
+                }
+            }
+            .getOrNull()
+        if (tvRates != null && tvRates.isNotEmpty()) {
+            return Result.success(persistSyncedFiatRates(context, tvRates))
+        }
+
+        // Tier 2: CoinGecko 5-Minute Global Cross-Rates
+        val cgRates = runCatching { fetchCoinGeckoCrossRates() }
+            .onFailure {
+                lastException = it as? Exception ?: Exception(it.message)
+                if (it is java.net.UnknownHostException || it is java.net.NoRouteToHostException) {
+                    consecutiveDnsOrConnectFailures++
+                }
+            }
+            .getOrNull()
+        if (cgRates != null && cgRates.isNotEmpty()) {
+            return Result.success(persistSyncedFiatRates(context, cgRates))
+        }
+
+        // If two independent global domains failed DNS/route resolution, the device has no working internet.
+        // Fail fast instead of blocking on 4 more fallback URLs.
+        if (consecutiveDnsOrConnectFailures >= 2 || !hasInternetAccess(context)) {
+            return Result.failure(IllegalStateException("Tidak ada koneksi internet. Kurs tersimpan tetap digunakan."))
+        }
+
+        // Tier 3: USD-Pivot JSON Endpoints (jsDelivr CDN, Cloudflare Pages, open.er-api, exchangerate-api)
         for (apiUrl in API_URLS) {
+            if (!hasInternetAccess(context)) break
             try {
-                val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "GET"
-                    connectTimeout = 6000
-                    readTimeout = 6000
-                    setRequestProperty("User-Agent", "KRON-App/1.0")
-                    setRequestProperty("Accept", "application/json")
+                val pivotRates = fetchUsdPivotRates(apiUrl)
+                if (pivotRates.isNotEmpty()) {
+                    return Result.success(persistSyncedFiatRates(context, pivotRates))
                 }
-                val responseText = try {
-                    if (conn.responseCode != HttpURLConnection.HTTP_OK) {
-                        throw Exception("HTTP ${conn.responseCode} dari $apiUrl")
-                    }
-                    conn.inputStream.bufferedReader().use { it.readText() }
-                } finally {
-                    conn.disconnect()
-                }
-
-                val json = JSONObject(responseText)
-                val ratesObj = json.optJSONObject("rates")
-                    ?: throw Exception("Format response kurs dari $apiUrl tidak memiliki objek rates")
-
-                val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
-                val editor = prefs.edit()
-                val savedRates = mutableMapOf<String, Double>()
-
-                for (curr in WidgetCurrency.entries) {
-                    if (curr == WidgetCurrency.IDR || curr == WidgetCurrency.KRON) continue
-                    if (curr.fixedRateFromIdr != null) {
-                        savedRates[curr.code] = curr.fixedRateFromIdr
-                        continue
-                    }
-                    if (ratesObj.has(curr.code)) {
-                        val rate = ratesObj.getDouble(curr.code)
-                        editor.putString("$KEY_PREFIX_RATE${curr.code}", rate.toString())
-                        savedRates[curr.code] = rate
-                    }
-                }
-
-                editor.putLong(KEY_LAST_SYNCED, System.currentTimeMillis())
-                editor.apply()
-
-                val newKrmIdr = refreshKronFluctuation(context)
-                savedRates["KRM"] = 1.0 / newKrmIdr
-                runCatching { KronWidgetManager.notifyWidgetUpdate(context) }
-                return Result.success(savedRates)
             } catch (e: Exception) {
                 lastException = e
+                if (e is java.net.UnknownHostException || e is java.net.NoRouteToHostException) {
+                    consecutiveDnsOrConnectFailures++
+                    if (consecutiveDnsOrConnectFailures >= 2) break
+                }
             }
         }
-        return Result.failure(lastException ?: Exception("Gagal menghubungi server kurs"))
+
+        val friendlyMessage = if (isOfflineNetworkException(lastException)) {
+            "Tidak ada koneksi internet. Kurs tersimpan tetap digunakan."
+        } else {
+            lastException?.message ?: "Gagal menghubungi server kurs"
+        }
+        return Result.failure(IllegalStateException(friendlyMessage))
+    }
+
+    private fun persistSyncedFiatRates(
+        context: Context,
+        idrPerUnitMap: Map<WidgetCurrency, Double>,
+    ): Map<String, Double> {
+        val now = System.currentTimeMillis()
+        val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
+        val editor = prefs.edit()
+        val savedRates = mutableMapOf<String, Double>()
+
+        for ((curr, idrPerUnit) in idrPerUnitMap) {
+            if (idrPerUnit > 0.0 && idrPerUnit.isFinite()) {
+                val rateFromIdr = 1.0 / idrPerUnit
+                editor.putString("$KEY_PREFIX_RATE${curr.code}", rateFromIdr.toString())
+                savedRates[curr.code] = rateFromIdr
+            }
+        }
+
+        editor.putLong(KEY_LAST_SYNCED, now)
+        editor.apply()
+
+        for ((curr, idrPerUnit) in idrPerUnitMap) {
+            recordCurrencyRate(context, curr, idrPerUnit, now)
+        }
+
+        // Pre-cache 1-year historical chart data while online so charts remain available offline.
+        val todayEpochDay = LocalDate.now().toEpochDay()
+        if (prefs.getLong(KEY_FIAT_BACKFILL_EPOCH_DAY, -1L) != todayEpochDay) {
+            runCatching { fetchAndMergeFiatHistory(context, todayEpochDay) }
+        }
+
+        val newKrmIdr = refreshKronFluctuation(context)
+        savedRates["KRM"] = 1.0 / newKrmIdr
+        runCatching { KronWidgetManager.notifyWidgetUpdate(context) }
+        return savedRates
+    }
+
+    private fun fetchTradingViewSpotRates(): Map<WidgetCurrency, Double> {
+        val payload = """{"symbols":{"tickers":["FX_IDC:USDIDR","FX_IDC:EURIDR","FX_IDC:SGDIDR","FX_IDC:JPYIDR"],"query":{"types":[]}},"columns":["close"]}"""
+        val conn = (URL(TRADINGVIEW_SCAN_URL).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            connectTimeout = 4000
+            readTimeout = 4000
+            setRequestProperty("User-Agent", "KRON-App/1.0")
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        val responseText = try {
+            conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+            if (conn.responseCode != HttpURLConnection.HTTP_OK) {
+                throw Exception("HTTP ${conn.responseCode} dari TradingView")
+            }
+            conn.inputStream.bufferedReader().use { it.readText() }
+        } finally {
+            conn.disconnect()
+        }
+        return parseTradingViewResponse(responseText)
+    }
+
+    internal fun parseTradingViewResponse(responseText: String): Map<WidgetCurrency, Double> {
+        val root = runCatching { Json.parseToJsonElement(responseText).jsonObject }.getOrNull() ?: return emptyMap()
+        val dataArr = root["data"]?.jsonArray ?: return emptyMap()
+        val result = mutableMapOf<WidgetCurrency, Double>()
+        for (elem in dataArr) {
+            val item = elem.jsonObject
+            val symbol = item["s"]?.jsonPrimitive?.contentOrNull ?: continue
+            val dArr = item["d"]?.jsonArray ?: continue
+            if (dArr.isEmpty()) continue
+            val closeIdr = dArr[0].jsonPrimitive.doubleOrNull ?: continue
+            if (closeIdr <= 0.0 || !closeIdr.isFinite()) continue
+            when (symbol) {
+                "FX_IDC:USDIDR" -> result[WidgetCurrency.USD] = closeIdr
+                "FX_IDC:EURIDR" -> result[WidgetCurrency.EUR] = closeIdr
+                "FX_IDC:SGDIDR" -> result[WidgetCurrency.SGD] = closeIdr
+                "FX_IDC:JPYIDR" -> result[WidgetCurrency.JPY] = closeIdr
+            }
+        }
+        return result
+    }
+
+    private fun fetchCoinGeckoCrossRates(): Map<WidgetCurrency, Double> {
+        val conn = (URL(COINGECKO_RATES_URL).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 4000
+            readTimeout = 4000
+            setRequestProperty("User-Agent", "KRON-App/1.0")
+            setRequestProperty("Accept", "application/json")
+        }
+        val responseText = try {
+            if (conn.responseCode != HttpURLConnection.HTTP_OK) {
+                throw Exception("HTTP ${conn.responseCode} dari CoinGecko")
+            }
+            conn.inputStream.bufferedReader().use { it.readText() }
+        } finally {
+            conn.disconnect()
+        }
+        return parseCoinGeckoResponse(responseText)
+    }
+
+    internal fun parseCoinGeckoResponse(responseText: String): Map<WidgetCurrency, Double> {
+        val root = runCatching { Json.parseToJsonElement(responseText).jsonObject }.getOrNull() ?: return emptyMap()
+        val ratesObj = root["rates"]?.jsonObject ?: return emptyMap()
+        val idrPerBtc = ratesObj["idr"]?.jsonObject?.get("value")?.jsonPrimitive?.doubleOrNull ?: 0.0
+        if (idrPerBtc <= 0.0 || !idrPerBtc.isFinite()) return emptyMap()
+
+        val result = mutableMapOf<WidgetCurrency, Double>()
+        for (curr in listOf(WidgetCurrency.USD, WidgetCurrency.EUR, WidgetCurrency.SGD, WidgetCurrency.JPY)) {
+            val currPerBtc = ratesObj[curr.code.lowercase(Locale.ROOT)]
+                ?.jsonObject?.get("value")?.jsonPrimitive?.doubleOrNull ?: 0.0
+            if (currPerBtc > 0.0 && currPerBtc.isFinite()) {
+                result[curr] = idrPerBtc / currPerBtc
+            }
+        }
+        return result
+    }
+
+    private fun fetchUsdPivotRates(apiUrl: String): Map<WidgetCurrency, Double> {
+        val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 4000
+            readTimeout = 4000
+            setRequestProperty("User-Agent", "KRON-App/1.0")
+            setRequestProperty("Accept", "application/json")
+        }
+        val responseText = try {
+            if (conn.responseCode != HttpURLConnection.HTTP_OK) {
+                throw Exception("HTTP ${conn.responseCode} dari $apiUrl")
+            }
+            conn.inputStream.bufferedReader().use { it.readText() }
+        } finally {
+            conn.disconnect()
+        }
+        return parseUsdPivotResponse(responseText)
+    }
+
+    internal fun parseUsdPivotResponse(responseText: String): Map<WidgetCurrency, Double> {
+        val root = runCatching { Json.parseToJsonElement(responseText).jsonObject }.getOrNull() ?: return emptyMap()
+        val ratesObj = root["rates"]?.jsonObject ?: root["usd"]?.jsonObject ?: return emptyMap()
+
+        fun readRate(code: String): Double {
+            val upper = ratesObj[code.uppercase(Locale.ROOT)]?.jsonPrimitive?.doubleOrNull ?: -1.0
+            if (upper > 0.0 && upper.isFinite()) return upper
+            val lower = ratesObj[code.lowercase(Locale.ROOT)]?.jsonPrimitive?.doubleOrNull ?: -1.0
+            if (lower > 0.0 && lower.isFinite()) return lower
+            return 0.0
+        }
+
+        val idrPerUsd = readRate("IDR")
+        if (idrPerUsd <= 0.0) return emptyMap()
+
+        val result = mutableMapOf<WidgetCurrency, Double>()
+        result[WidgetCurrency.USD] = idrPerUsd
+        for (curr in listOf(WidgetCurrency.EUR, WidgetCurrency.SGD, WidgetCurrency.JPY)) {
+            val currPerUsd = readRate(curr.code)
+            if (currPerUsd > 0.0) {
+                result[curr] = idrPerUsd / currPerUsd
+            }
+        }
+        return result
     }
 
     private fun hasInternetAccess(context: Context): Boolean {

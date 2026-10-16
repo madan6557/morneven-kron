@@ -41,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -74,6 +75,7 @@ import com.morneven.kron.ui.theme.KronSubCardShape
 import com.morneven.kron.ui.theme.LocalKronDarkTheme
 import com.morneven.kron.widget.KrmRateHistoryEntry
 import com.morneven.kron.widget.KronCurrencyManager
+import com.morneven.kron.widget.WidgetCurrency
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.time.Instant
@@ -95,12 +97,27 @@ private enum class KrmChartRange(val label: String, val days: Int) {
 @Composable
 fun KrmRateChartDialog(
     onDismissRequest: () -> Unit,
+    currency: WidgetCurrency = WidgetCurrency.KRON,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val allHistory = remember { KronCurrencyManager.getKrmRateHistory(context) }
-    var selectedIndex by remember { mutableStateOf<Int?>(null) }
+    var allHistory by remember(currency) {
+        mutableStateOf(KronCurrencyManager.getCurrencyRateHistory(context, currency))
+    }
+    var isOfflineFallback by remember(currency) { mutableStateOf(false) }
+    LaunchedEffect(currency) {
+        if (currency != WidgetCurrency.KRON && currency != WidgetCurrency.IDR) {
+            val loaded = KronCurrencyManager.ensureHistoricalRatesLoaded(context)
+            allHistory = KronCurrencyManager.getCurrencyRateHistory(context, currency)
+            isOfflineFallback = !loaded && allHistory.size < 10
+        }
+    }
+    var selectedIndex by remember(currency) { mutableStateOf<Int?>(null) }
     var selectedRange by rememberSaveable { mutableStateOf(KrmChartRange.THIRTY_DAYS) }
+
+    val unitLabel = if (currency == WidgetCurrency.KRON) "KRM" else currency.code
+    val titleLabel = if (currency == WidgetCurrency.KRON) "KRON" else currency.code
+    val subtitleLabel = if (currency == WidgetCurrency.KRON) "Mata uang Morneven (KRM)" else currency.displayName
 
     val today = remember { LocalDate.now() }
     var customStartDay by rememberSaveable { mutableLongStateOf(today.minusDays(29).toEpochDay()) }
@@ -135,31 +152,33 @@ fun KrmRateChartDialog(
         }
     }
 
-    val symbols = remember {
-        DecimalFormatSymbols(Locale.forLanguageTag("id-ID")).apply {
-            groupingSeparator = '.'
-            decimalSeparator = ','
-        }
-    }
-    val idrFormatter = remember(symbols) { DecimalFormat("#,##0", symbols) }
-    val deltaFormatter = remember(symbols) { DecimalFormat("#,##0.0", symbols) }
-    val timeFormatter = remember {
-        DateTimeFormatter.ofPattern("HH:mm:ss", Locale.forLanguageTag("id-ID"))
-    }
-    val dateFormatter = remember {
-        DateTimeFormatter.ofPattern("d MMM HH:mm", Locale.forLanguageTag("id-ID"))
-    }
-    val shortDateFormatter = remember {
-        DateTimeFormatter.ofPattern("d MMM yyyy", Locale.forLanguageTag("id-ID"))
-    }
-
-    val currentPoint = history.lastOrNull() ?: allHistory.lastOrNull() ?: KrmRateHistoryEntry(System.currentTimeMillis(), KronCurrencyManager.KRM_BASE_IDR)
+    val currentPoint = history.lastOrNull()
+        ?: allHistory.lastOrNull()
+        ?: KrmRateHistoryEntry(System.currentTimeMillis(), KronCurrencyManager.getIdrPerUnit(context, currency))
     val displayPoint = selectedIndex?.let { history.getOrNull(it) } ?: currentPoint
 
     val rates = history.map { it.rate }
     val minRate = rates.minOrNull() ?: currentPoint.rate
     val maxRate = rates.maxOrNull() ?: currentPoint.rate
     val avgRate = if (rates.isNotEmpty()) rates.average() else currentPoint.rate
+
+    val symbols = remember {
+        DecimalFormatSymbols(Locale.forLanguageTag("id-ID")).apply {
+            groupingSeparator = '.'
+            decimalSeparator = ','
+        }
+    }
+    val useDecimals = currency != WidgetCurrency.KRON && maxRate < 1000.0
+    val idrFormatter = remember(symbols, useDecimals) {
+        if (useDecimals) DecimalFormat("#,##0.00", symbols) else DecimalFormat("#,##0", symbols)
+    }
+    val deltaFormatter = remember(symbols) { DecimalFormat("#,##0.0", symbols) }
+    val dateFormatter = remember {
+        DateTimeFormatter.ofPattern("d MMM HH:mm", Locale.forLanguageTag("id-ID"))
+    }
+    val shortDateFormatter = remember {
+        DateTimeFormatter.ofPattern("d MMM yyyy", Locale.forLanguageTag("id-ID"))
+    }
 
     val initialRate = history.firstOrNull()?.rate ?: currentPoint.rate
     val totalDeltaNominal = currentPoint.rate - initialRate
@@ -198,13 +217,13 @@ fun KrmRateChartDialog(
                     }
                     Column {
                         Text(
-                            "KRON",
+                            titleLabel,
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            "Mata uang Morneven (KRM)",
+                            subtitleLabel,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -240,7 +259,7 @@ fun KrmRateChartDialog(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    if (selectedIndex != null) "KURS PADA TITIK TERPILIH" else "KURS TERKINI KRM",
+                                    if (selectedIndex != null) "KURS TERPILIH" else "KURS TERKINI $unitLabel",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = KronGold,
                                     fontWeight = FontWeight.Bold,
@@ -248,7 +267,7 @@ fun KrmRateChartDialog(
                                 )
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    text = "1 KRM = Rp ${idrFormatter.format(displayPoint.rate.roundToInt())}",
+                                    text = "1 $unitLabel = Rp ${idrFormatter.format(displayPoint.rate)}",
                                     style = MaterialTheme.typography.titleLarge,
                                     fontWeight = FontWeight.ExtraBold,
                                     color = MaterialTheme.colorScheme.onSurface,
@@ -307,17 +326,17 @@ fun KrmRateChartDialog(
                         ) {
                             StatMiniBox(
                                 label = "Terendah",
-                                value = "Rp ${idrFormatter.format(minRate.roundToInt())}",
+                                value = "Rp ${idrFormatter.format(minRate)}",
                                 modifier = Modifier.weight(1f),
                             )
                             StatMiniBox(
                                 label = "Rata-rata",
-                                value = "Rp ${idrFormatter.format(avgRate.roundToInt())}",
+                                value = "Rp ${idrFormatter.format(avgRate)}",
                                 modifier = Modifier.weight(1f),
                             )
                             StatMiniBox(
                                 label = "Tertinggi",
-                                value = "Rp ${idrFormatter.format(maxRate.roundToInt())}",
+                                value = "Rp ${idrFormatter.format(maxRate)}",
                                 modifier = Modifier.weight(1f),
                             )
                         }
@@ -395,7 +414,11 @@ fun KrmRateChartDialog(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                "Grafik Riwayat (${history.size} data)",
+                                if (isOfflineFallback) {
+                                    "Grafik Riwayat (${history.size} data • Offline)"
+                                } else {
+                                    "Grafik Riwayat (${history.size} data)"
+                                },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontWeight = FontWeight.Bold,
@@ -441,6 +464,7 @@ fun KrmRateChartDialog(
                             val selEntry = history[selectedIndex!!]
                             val prevEntry = if (selectedIndex!! > 0) history[selectedIndex!! - 1] else null
                             KrmPointInspectionCard(
+                                unitLabel = unitLabel,
                                 entry = selEntry,
                                 prevEntry = prevEntry,
                                 initialRate = initialRate,
@@ -473,7 +497,7 @@ fun KrmRateChartDialog(
                                         modifier = Modifier.size(16.dp),
                                     )
                                     Text(
-                                        "Ketuk atau geser kurva untuk melihat detail kurs, waktu, dan perubahan per titik.",
+                                        "Ketuk atau geser grafik untuk melihat detail per titik.",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
@@ -525,14 +549,14 @@ fun KrmRateChartDialog(
                             Column {
                                 val tStr = Instant.ofEpochMilli(entry.timestampMs)
                                     .atZone(ZoneId.systemDefault())
-                                    .format(timeFormatter)
+                                    .format(dateFormatter)
                                 Text(
-                                    "Pukul $tStr",
+                                    tStr,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                                 Text(
-                                    "Rp ${idrFormatter.format(entry.rate.roundToInt())}",
+                                    "Rp ${idrFormatter.format(entry.rate)}",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface,
@@ -645,10 +669,11 @@ private fun KrmLineChart(
     val rates = history.map { it.rate }
     val rawMin = rates.minOrNull() ?: KronCurrencyManager.KRM_BASE_IDR
     val rawMax = rates.maxOrNull() ?: KronCurrencyManager.KRM_BASE_IDR
-    val spread = (rawMax - rawMin).coerceAtLeast(10.0)
+    val minSpread = (rawMax * 0.005).coerceAtLeast(0.5)
+    val spread = (rawMax - rawMin).coerceAtLeast(minSpread)
     val displayMin = rawMin - spread * 0.08
     val displayMax = rawMax + spread * 0.08
-    val displayRange = (displayMax - displayMin).coerceAtLeast(1.0)
+    val displayRange = (displayMax - displayMin).coerceAtLeast(0.1)
 
     val dashedEffect = remember { PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f) }
 
@@ -816,7 +841,7 @@ private fun KrmLineChart(
             )
 
             // On-canvas floating rate badge
-            val rateText = "Rp ${idrFormatter.format(history[selectedIndex].rate.roundToInt())}"
+            val rateText = "Rp ${idrFormatter.format(history[selectedIndex].rate)}"
             val textLayout = textMeasurer.measure(
                 text = rateText,
                 style = androidx.compose.ui.text.TextStyle(
@@ -915,6 +940,7 @@ private fun KrmChartTimeAxis(
 
 @Composable
 private fun KrmPointInspectionCard(
+    unitLabel: String,
     entry: KrmRateHistoryEntry,
     prevEntry: KrmRateHistoryEntry?,
     initialRate: Double,
@@ -982,13 +1008,13 @@ private fun KrmPointInspectionCard(
                     }
                     Column {
                         Text(
-                            "Inspeksi Titik Riwayat",
+                            "Detail Titik",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = KronGold,
                         )
                         Text(
-                            "Titik ${index + 1} dari $totalCount data",
+                            "Titik ${index + 1} dari $totalCount",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 11.sp,
@@ -1040,7 +1066,7 @@ private fun KrmPointInspectionCard(
             // Main Rate & Date
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    text = "1 KRM = Rp ${idrFormatter.format(entry.rate.roundToInt())}",
+                    text = "1 $unitLabel = Rp ${idrFormatter.format(entry.rate)}",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.ExtraBold,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -1068,7 +1094,7 @@ private fun KrmPointInspectionCard(
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
                         Text(
-                            "VS TITIK SEBELUMNYA",
+                            "VS SEBELUMNYA",
                             style = MaterialTheme.typography.labelSmall,
                             fontSize = 9.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1076,7 +1102,7 @@ private fun KrmPointInspectionCard(
                         if (prevEntry != null) {
                             val sign = if (isStepPos) "+" else ""
                             Text(
-                                text = "$sign${deltaFormatter.format(stepDeltaPercent)}% ($sign${idrFormatter.format(stepDelta.roundToInt())})",
+                                text = "$sign${deltaFormatter.format(stepDeltaPercent)}% ($sign${idrFormatter.format(stepDelta)})",
                                 style = MaterialTheme.typography.bodySmall,
                                 fontWeight = FontWeight.Bold,
                                 color = stepColor,
@@ -1110,7 +1136,7 @@ private fun KrmPointInspectionCard(
                         )
                         val sign = if (isCumPos) "+" else ""
                         Text(
-                            text = "$sign${deltaFormatter.format(cumDeltaPercent)}% ($sign${idrFormatter.format(cumDelta.roundToInt())})",
+                            text = "$sign${deltaFormatter.format(cumDeltaPercent)}% ($sign${idrFormatter.format(cumDelta)})",
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.Bold,
                             color = cumColor,
@@ -1127,7 +1153,7 @@ private fun KrmPointInspectionCard(
                     border = BorderStroke(0.8.dp, KronGold.copy(alpha = 0.35f)),
                 ) {
                     Text(
-                        text = "★ Nilai Tertinggi dalam rentang terpilih",
+                        text = "★ Tertinggi di rentang ini",
                         style = MaterialTheme.typography.labelSmall,
                         color = KronGold,
                         fontWeight = FontWeight.Bold,
@@ -1141,7 +1167,7 @@ private fun KrmPointInspectionCard(
                     border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.35f)),
                 ) {
                     Text(
-                        text = "▼ Nilai Terendah dalam rentang terpilih",
+                        text = "▼ Terendah di rentang ini",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.error,
                         fontWeight = FontWeight.Bold,
