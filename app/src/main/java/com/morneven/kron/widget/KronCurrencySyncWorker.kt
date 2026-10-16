@@ -35,7 +35,7 @@ class KronCurrencySyncWorker(
 
 object KronCurrencySyncScheduler {
     fun scheduleIfStale(context: Context) {
-        if (!KronCurrencyManager.isRatesStale(context)) return
+        if (!KronCurrencyManager.isRatesStale(context) && !KronCurrencyManager.isKrmTickDue(context)) return
         val request = OneTimeWorkRequestBuilder<KronCurrencySyncWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.MINUTES)

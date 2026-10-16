@@ -66,36 +66,89 @@ class KronCurrencyTest {
         var rate = 1200.0
         var waveDir = true
         var waveTicks = 0
-        var lastDir = true
+        var sentimentTicks = 0
+        var sentimentUpChance = 0.0
         var sawWaveTrigger = false
         var sawWaveStep = false
+        var sawBullishSentiment = false
+        var sawBearishSentiment = false
 
         repeat(250) {
             val wasInWave = waveTicks > 0
             val roll = KronCurrencyManager.rollKrmFluctuation(
                 waveTicksRemaining = waveTicks,
                 waveDirection = waveDir,
-                lastDirection = lastDir,
+                sentimentTicksRemaining = sentimentTicks,
+                sentimentUpChance = sentimentUpChance,
                 tierRoll = rng.nextDouble(),
+                sentimentRoll = rng.nextDouble(),
                 directionRoll = rng.nextDouble(),
+                magnitudeRoll = rng.nextDouble(),
             )
             rate = KronCurrencyManager.nextKrmIdrRate(rate, roll.magnitude, roll.increase)
             assertTrue(rate >= 100.0)
+            assertTrue("upChance must stay within 25%..75%", roll.upChance in 0.25..0.75)
+            assertTrue(
+                "nextSentimentUpChance must be bimodal (25%..40% or 60%..75%)",
+                KronCurrencyManager.isValidSentimentUpChance(roll.nextSentimentUpChance),
+            )
+            if (roll.nextSentimentUpChance >= 0.60) sawBullishSentiment = true
+            if (roll.nextSentimentUpChance <= 0.40) sawBearishSentiment = true
+
             if (!wasInWave && roll.nextWaveTicks > 0) {
                 sawWaveTrigger = true
+                assertTrue(roll.tier == 3 || roll.tier == 4)
                 assertTrue(roll.nextWaveTicks in 2..5)
             }
             if (wasInWave) {
                 sawWaveStep = true
+                assertEquals(0, roll.tier)
                 assertEquals(waveTicks - 1, roll.nextWaveTicks)
             }
             waveDir = roll.nextWaveDirection
             waveTicks = roll.nextWaveTicks
-            lastDir = roll.increase
+            sentimentTicks = roll.nextSentimentTicks
+            sentimentUpChance = roll.nextSentimentUpChance
         }
 
         assertTrue("Expected at least one incident wave trigger over 250 ticks", sawWaveTrigger)
         assertTrue("Expected wave continuation step to execute", sawWaveStep)
+        assertTrue("Expected bullish sentiment phase", sawBullishSentiment)
+        assertTrue("Expected bearish sentiment phase", sawBearishSentiment)
+    }
+
+    @Test
+    fun testPersistentBimodalSentimentDoesNotResetEveryTick() {
+        val initialRoll = KronCurrencyManager.rollKrmFluctuation(
+            waveTicksRemaining = 0,
+            waveDirection = true,
+            sentimentTicksRemaining = 0,
+            sentimentUpChance = 0.0,
+            tierRoll = 0.20, // Tier 1
+            sentimentRoll = 0.80, // Bullish (60%..75%)
+            directionRoll = 0.30,
+            magnitudeRoll = 0.50,
+        )
+        assertEquals(1, initialRoll.tier)
+        assertTrue(initialRoll.upChance in 0.60..0.75)
+        assertTrue(initialRoll.increase)
+        assertTrue(initialRoll.nextSentimentTicks in 5..15)
+
+        // Next tick with opposite sentimentRoll must keep the active persistent sentiment
+        val secondRoll = KronCurrencyManager.rollKrmFluctuation(
+            waveTicksRemaining = 0,
+            waveDirection = true,
+            sentimentTicksRemaining = initialRoll.nextSentimentTicks,
+            sentimentUpChance = initialRoll.nextSentimentUpChance,
+            tierRoll = 0.82, // Tier 2
+            sentimentRoll = 0.10, // Would be bearish if not locked
+            directionRoll = 0.55, // < initialRoll.upChance, so still increases
+            magnitudeRoll = 0.50,
+        )
+        assertEquals(2, secondRoll.tier)
+        assertEquals(initialRoll.nextSentimentUpChance, secondRoll.upChance, 0.00001)
+        assertEquals(initialRoll.nextSentimentTicks - 1, secondRoll.nextSentimentTicks)
+        assertTrue(secondRoll.increase)
     }
 
     @Test

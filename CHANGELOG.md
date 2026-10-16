@@ -1,5 +1,10 @@
 # KRON Changelog
 
+## 1.7.30 - 2026-10-17
+
+- Penyesuaian rasio arah naik/turun dan tren fluktuasi kurs KRM.
+- Pembaruan kurs manual tidak lagi mengubah kurs KRM di luar siklus 30 menit.
+
 ## 1.7.29 - 2026-10-16
 
 - Perbaikan akurasi kurs mata uang asing (USD, EUR, SGD, JPY) sesuai pasar.

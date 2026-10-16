@@ -111,10 +111,14 @@ enum class WidgetCurrency(
 }
 
 internal data class KrmFluctuationRoll(
-    val magnitude: Double,
+    val tier: Int,
+    val upChance: Double,
     val increase: Boolean,
+    val magnitude: Double,
     val nextWaveTicks: Int,
     val nextWaveDirection: Boolean,
+    val nextSentimentTicks: Int,
+    val nextSentimentUpChance: Double,
 )
 
 object KronCurrencyManager {
@@ -124,9 +128,12 @@ object KronCurrencyManager {
     private const val KEY_LAST_SYNCED = "rates_last_synced_at"
     private const val KEY_KRM_IDR_RATE = "krm_synthetic_idr_rate"
     private const val KEY_KRM_HISTORY = "krm_synthetic_rate_history"
+    private const val KEY_KRM_LAST_TICK_AT = "krm_last_tick_at"
     private const val KEY_KRM_WAVE_TICKS = "krm_wave_ticks_remaining"
     private const val KEY_KRM_WAVE_DIR = "krm_wave_direction"
     private const val KEY_KRM_LAST_DIR = "krm_last_direction"
+    private const val KEY_KRM_SENTIMENT_TICKS = "krm_sentiment_ticks_remaining"
+    private const val KEY_KRM_SENTIMENT_UP_CHANCE = "krm_sentiment_up_chance"
     private const val KEY_FIAT_BACKFILL_EPOCH_DAY = "fiat_history_backfill_epoch_day"
 
     private const val TRADINGVIEW_SCAN_URL = "https://scanner.tradingview.com/forex/scan"
@@ -157,7 +164,7 @@ object KronCurrencyManager {
     val MORNEVEN_KRON_IN_IDR: Long get() = KRM_BASE_IDR.toLong()
 
     // ------------------------------------------------------------------
-    // KRM synthetic fluctuation (4-Tier + Incident Wave State)
+    // KRM synthetic fluctuation (4-Step Pipeline + Sentiment + Wave State)
     // ------------------------------------------------------------------
 
     fun getKrmIdrRate(context: Context?): Double {
@@ -167,84 +174,192 @@ object KronCurrencyManager {
             ?.takeIf { it.isFinite() && it > 0.0 } ?: KRM_BASE_IDR
     }
 
+    fun isKrmTickDue(context: Context?): Boolean {
+        if (context == null) return false
+        val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
+        val lastTickAt = prefs.getLong(KEY_KRM_LAST_TICK_AT, 0L)
+        return System.currentTimeMillis() - lastTickAt >= STALE_THRESHOLD_MS
+    }
+
     /**
-     * Applies one market-fluctuation tick to the KRM rate and persists it.
+     * Applies one 30-minute market-fluctuation tick to the KRM rate and persists it.
      *
-     * Uses 4-tier continuous randomization with multi-tick incident waves:
-     * - Active wave (after Tier 3/4 shock): 80% directional bias, 1.2% - 4.8% magnitude.
-     * - Tier 1 (75%): Normal calm market, 0.05% - 1.50% (55% momentum continuation).
-     * - Tier 2 (15%): Medium market ripple, 1.50% - 4.50%.
-     * - Tier 3 (8%): Major incident shock, 4.50% - 15.00% + triggers 2-5 wave ticks.
-     * - Tier 4 (2%): Extreme incident (Black Swan), 15.00% - 28.00% + triggers 2-5 wave ticks.
+     * 4-step pipeline:
+     * 1. Gacha Tier (Tier 1: 75%, Tier 2: 15%, Tier 3: 8%, Tier 4: 2%, or active post-shock wave).
+     * 2. Gacha / Persist Bimodal Sentiment Ratio (25%-40% bearish or 60%-75% bullish for 6-16 ticks).
+     * 3. Gacha Direction (Up / Down) using the active sentiment ratio.
+     * 4. Gacha Magnitude within the selected tier's percentage range.
      */
     fun refreshKronFluctuation(context: Context): Double {
+        val now = System.currentTimeMillis()
         val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
         val current = getKrmIdrRate(context)
         val waveTicks = prefs.getInt(KEY_KRM_WAVE_TICKS, 0).coerceAtLeast(0)
         val waveDir = prefs.getBoolean(KEY_KRM_WAVE_DIR, true)
-        val lastDir = prefs.getBoolean(KEY_KRM_LAST_DIR, true)
+        val sentimentTicks = prefs.getInt(KEY_KRM_SENTIMENT_TICKS, 0).coerceAtLeast(0)
+        val sentimentUpChance = prefs.getString(KEY_KRM_SENTIMENT_UP_CHANCE, null)?.toDoubleOrNull() ?: 0.0
 
         val roll = rollKrmFluctuation(
             waveTicksRemaining = waveTicks,
             waveDirection = waveDir,
-            lastDirection = lastDir,
+            sentimentTicksRemaining = sentimentTicks,
+            sentimentUpChance = sentimentUpChance,
             tierRoll = Random.nextDouble(),
+            sentimentRoll = Random.nextDouble(),
             directionRoll = Random.nextDouble(),
+            magnitudeRoll = Random.nextDouble(),
         )
 
         val newRate = nextKrmIdrRate(current, roll.magnitude, roll.increase)
 
         prefs.edit()
             .putString(KEY_KRM_IDR_RATE, newRate.toString())
+            .putLong(KEY_KRM_LAST_TICK_AT, now)
             .putInt(KEY_KRM_WAVE_TICKS, roll.nextWaveTicks)
             .putBoolean(KEY_KRM_WAVE_DIR, roll.nextWaveDirection)
             .putBoolean(KEY_KRM_LAST_DIR, roll.increase)
+            .putInt(KEY_KRM_SENTIMENT_TICKS, roll.nextSentimentTicks)
+            .putString(KEY_KRM_SENTIMENT_UP_CHANCE, roll.nextSentimentUpChance.toString())
             .apply()
 
-        recordKrmRate(context, newRate)
+        recordKrmRate(context, newRate, now)
         return newRate
+    }
+
+    internal fun rollBimodalSentimentUpChance(
+        bullish: Boolean = Random.nextBoolean(),
+        rangeRoll: Double = Random.nextDouble(),
+    ): Double {
+        val clamped = rangeRoll.coerceIn(0.0, 1.0)
+        return if (bullish) {
+            0.60 + clamped * 0.15
+        } else {
+            0.25 + clamped * 0.15
+        }
+    }
+
+    internal fun isValidSentimentUpChance(value: Double): Boolean {
+        return value.isFinite() && ((value in 0.25..0.40) || (value in 0.60..0.75))
     }
 
     internal fun rollKrmFluctuation(
         waveTicksRemaining: Int,
         waveDirection: Boolean,
-        lastDirection: Boolean,
-        tierRoll: Double,
-        directionRoll: Double,
+        sentimentTicksRemaining: Int = 0,
+        sentimentUpChance: Double = 0.0,
+        tierRoll: Double = Random.nextDouble(),
+        sentimentRoll: Double = Random.nextDouble(),
+        directionRoll: Double = Random.nextDouble(),
+        magnitudeRoll: Double = Random.nextDouble(),
     ): KrmFluctuationRoll {
+        val clampedMag = magnitudeRoll.coerceIn(0.0, 1.0)
+
         if (waveTicksRemaining > 0) {
-            val increase = if (directionRoll < 0.80) waveDirection else !waveDirection
-            val magnitude = Random.nextDouble(0.012, 0.048)
+            val waveBias = 0.65 + (sentimentRoll.coerceIn(0.0, 1.0) * 0.10)
+            val activeUpChance = if (waveDirection) waveBias else (1.0 - waveBias)
+            val increase = directionRoll < activeUpChance
+            val magnitude = 0.012 + clampedMag * (0.048 - 0.012)
+            val preservedSentimentUp = if (isValidSentimentUpChance(sentimentUpChance)) {
+                sentimentUpChance
+            } else {
+                rollBimodalSentimentUpChance(bullish = waveDirection, rangeRoll = sentimentRoll)
+            }
+            val preservedSentimentTicks = if (sentimentTicksRemaining > 0) sentimentTicksRemaining else Random.nextInt(6, 17)
             return KrmFluctuationRoll(
-                magnitude = magnitude,
+                tier = 0,
+                upChance = activeUpChance,
                 increase = increase,
+                magnitude = magnitude,
                 nextWaveTicks = waveTicksRemaining - 1,
                 nextWaveDirection = waveDirection,
+                nextSentimentTicks = preservedSentimentTicks,
+                nextSentimentUpChance = preservedSentimentUp,
             )
         }
 
-        return when {
-            tierRoll < 0.75 -> {
-                val magnitude = Random.nextDouble(0.0005, 0.015)
-                val increase = if (directionRoll < 0.55) lastDirection else !lastDirection
-                KrmFluctuationRoll(magnitude, increase, 0, waveDirection)
+        // Step 1: Gacha Tier
+        val tier = when {
+            tierRoll < 0.75 -> 1
+            tierRoll < 0.90 -> 2
+            tierRoll < 0.98 -> 3
+            else -> 4
+        }
+
+        // Step 2: Gacha / Check Persistent Sentiment Ratio (25%-40% bearish or 60%-75% bullish)
+        val hasActiveSentiment = sentimentTicksRemaining > 0 && isValidSentimentUpChance(sentimentUpChance)
+        val activeUpChance = if (hasActiveSentiment) {
+            sentimentUpChance
+        } else {
+            val bullish = sentimentRoll >= 0.5
+            val subRoll = if (bullish) (sentimentRoll - 0.5) * 2.0 else sentimentRoll * 2.0
+            rollBimodalSentimentUpChance(bullish = bullish, rangeRoll = subRoll)
+        }
+        val baseNextSentimentTicks = if (hasActiveSentiment) {
+            sentimentTicksRemaining - 1
+        } else {
+            Random.nextInt(6, 17) - 1
+        }
+
+        // Step 3: Gacha Direction (Up / Down)
+        val increase = directionRoll < activeUpChance
+
+        // Step 4: Gacha Magnitude
+        return when (tier) {
+            1 -> {
+                val magnitude = 0.0005 + clampedMag * (0.015 - 0.0005)
+                KrmFluctuationRoll(
+                    tier = 1,
+                    upChance = activeUpChance,
+                    increase = increase,
+                    magnitude = magnitude,
+                    nextWaveTicks = 0,
+                    nextWaveDirection = waveDirection,
+                    nextSentimentTicks = baseNextSentimentTicks,
+                    nextSentimentUpChance = activeUpChance,
+                )
             }
-            tierRoll < 0.90 -> {
-                val magnitude = Random.nextDouble(0.015, 0.045)
-                val increase = directionRoll < 0.50
-                KrmFluctuationRoll(magnitude, increase, 0, waveDirection)
+            2 -> {
+                val magnitude = 0.015 + clampedMag * (0.045 - 0.015)
+                KrmFluctuationRoll(
+                    tier = 2,
+                    upChance = activeUpChance,
+                    increase = increase,
+                    magnitude = magnitude,
+                    nextWaveTicks = 0,
+                    nextWaveDirection = waveDirection,
+                    nextSentimentTicks = baseNextSentimentTicks,
+                    nextSentimentUpChance = activeUpChance,
+                )
             }
-            tierRoll < 0.98 -> {
-                val magnitude = Random.nextDouble(0.045, 0.15)
-                val increase = directionRoll < 0.50
+            3 -> {
+                val magnitude = 0.045 + clampedMag * (0.15 - 0.045)
                 val waveTicks = Random.nextInt(2, 6)
-                KrmFluctuationRoll(magnitude, increase, waveTicks, increase)
+                val alignedSentiment = rollBimodalSentimentUpChance(bullish = increase, rangeRoll = sentimentRoll)
+                KrmFluctuationRoll(
+                    tier = 3,
+                    upChance = activeUpChance,
+                    increase = increase,
+                    magnitude = magnitude,
+                    nextWaveTicks = waveTicks,
+                    nextWaveDirection = increase,
+                    nextSentimentTicks = Random.nextInt(6, 17),
+                    nextSentimentUpChance = alignedSentiment,
+                )
             }
             else -> {
-                val magnitude = Random.nextDouble(0.15, 0.28)
-                val increase = directionRoll < 0.50
+                val magnitude = 0.15 + clampedMag * (0.28 - 0.15)
                 val waveTicks = Random.nextInt(2, 6)
-                KrmFluctuationRoll(magnitude, increase, waveTicks, increase)
+                val alignedSentiment = rollBimodalSentimentUpChance(bullish = increase, rangeRoll = sentimentRoll)
+                KrmFluctuationRoll(
+                    tier = 4,
+                    upChance = activeUpChance,
+                    increase = increase,
+                    magnitude = magnitude,
+                    nextWaveTicks = waveTicks,
+                    nextWaveDirection = increase,
+                    nextSentimentTicks = Random.nextInt(6, 17),
+                    nextSentimentUpChance = alignedSentiment,
+                )
             }
         }
     }
@@ -505,9 +620,12 @@ object KronCurrencyManager {
         return JSONObject()
             .put("krmIdrRate", rate)
             .put("krmRateHistory", historyArray)
+            .put("krmLastTickAt", prefs.getLong(KEY_KRM_LAST_TICK_AT, 0L))
             .put("krmWaveTicks", prefs.getInt(KEY_KRM_WAVE_TICKS, 0))
             .put("krmWaveDir", prefs.getBoolean(KEY_KRM_WAVE_DIR, true))
             .put("krmLastDir", prefs.getBoolean(KEY_KRM_LAST_DIR, true))
+            .put("krmSentimentTicks", prefs.getInt(KEY_KRM_SENTIMENT_TICKS, 0))
+            .put("krmSentimentUpChance", prefs.getString(KEY_KRM_SENTIMENT_UP_CHANCE, null)?.toDoubleOrNull() ?: 0.0)
             .put("fiatRates", fiatRatesObj)
             .put("fiatRateHistory", fiatHistoryObj)
     }
@@ -523,6 +641,10 @@ object KronCurrencyManager {
         if (historyArray != null && historyArray.length() > 0) {
             editor.putString(KEY_KRM_HISTORY, historyArray.toString())
         }
+        if (json.has("krmLastTickAt")) {
+            val lastTickAt = json.optLong("krmLastTickAt", 0L).coerceAtLeast(0L)
+            editor.putLong(KEY_KRM_LAST_TICK_AT, lastTickAt)
+        }
         if (json.has("krmWaveTicks")) {
             editor.putInt(KEY_KRM_WAVE_TICKS, json.optInt("krmWaveTicks", 0).coerceAtLeast(0))
         }
@@ -531,6 +653,15 @@ object KronCurrencyManager {
         }
         if (json.has("krmLastDir")) {
             editor.putBoolean(KEY_KRM_LAST_DIR, json.optBoolean("krmLastDir", true))
+        }
+        if (json.has("krmSentimentTicks")) {
+            editor.putInt(KEY_KRM_SENTIMENT_TICKS, json.optInt("krmSentimentTicks", 0).coerceAtLeast(0))
+        }
+        if (json.has("krmSentimentUpChance")) {
+            val upChance = json.optDouble("krmSentimentUpChance", 0.0)
+            if (isValidSentimentUpChance(upChance)) {
+                editor.putString(KEY_KRM_SENTIMENT_UP_CHANCE, upChance.toString())
+            }
         }
         json.optJSONObject("fiatRates")?.let { fiatRates ->
             for (curr in WidgetCurrency.entries) {
@@ -564,7 +695,15 @@ object KronCurrencyManager {
 
     suspend fun checkAndAutoSync(context: Context): Result<Map<String, Double>> = withContext(Dispatchers.IO) {
         syncMutex.withLock {
-            if (isRatesStale(context)) performRateSync(context) else Result.success(emptyMap())
+            if (isRatesStale(context)) {
+                performRateSync(context, isManualRefresh = false)
+            } else if (isKrmTickDue(context) && hasInternetAccess(context)) {
+                val newKrmIdr = refreshKronFluctuation(context)
+                runCatching { KronWidgetManager.notifyWidgetUpdate(context) }
+                Result.success(mapOf("KRM" to (1.0 / newKrmIdr)))
+            } else {
+                Result.success(emptyMap())
+            }
         }
     }
 
@@ -632,8 +771,12 @@ object KronCurrencyManager {
     // Online sync (Multi-tier live market waterfall)
     // ------------------------------------------------------------------
 
+    /**
+     * Manual refresh of foreign exchange rates.
+     * Updates USD, EUR, SGD, and JPY only; KRM only advances on automatic 30-minute cycles.
+     */
     suspend fun syncRatesOnline(context: Context): Result<Map<String, Double>> = withContext(Dispatchers.IO) {
-        syncMutex.withLock { performRateSync(context) }
+        syncMutex.withLock { performRateSync(context, isManualRefresh = true) }
     }
 
     private fun isOfflineNetworkException(t: Throwable?): Boolean {
@@ -644,7 +787,10 @@ object KronCurrencyManager {
             t is java.net.SocketTimeoutException
     }
 
-    private fun performRateSync(context: Context): Result<Map<String, Double>> {
+    private fun performRateSync(
+        context: Context,
+        isManualRefresh: Boolean = false,
+    ): Result<Map<String, Double>> {
         if (!hasInternetAccess(context)) {
             return Result.failure(IllegalStateException("Tidak ada koneksi internet. Kurs tersimpan tetap digunakan."))
         }
@@ -662,7 +808,7 @@ object KronCurrencyManager {
             }
             .getOrNull()
         if (tvRates != null && tvRates.isNotEmpty()) {
-            return Result.success(persistSyncedFiatRates(context, tvRates))
+            return Result.success(persistSyncedFiatRates(context, tvRates, isManualRefresh))
         }
 
         // Tier 2: CoinGecko 5-Minute Global Cross-Rates
@@ -675,7 +821,7 @@ object KronCurrencyManager {
             }
             .getOrNull()
         if (cgRates != null && cgRates.isNotEmpty()) {
-            return Result.success(persistSyncedFiatRates(context, cgRates))
+            return Result.success(persistSyncedFiatRates(context, cgRates, isManualRefresh))
         }
 
         // If two independent global domains failed DNS/route resolution, the device has no working internet.
@@ -690,7 +836,7 @@ object KronCurrencyManager {
             try {
                 val pivotRates = fetchUsdPivotRates(apiUrl)
                 if (pivotRates.isNotEmpty()) {
-                    return Result.success(persistSyncedFiatRates(context, pivotRates))
+                    return Result.success(persistSyncedFiatRates(context, pivotRates, isManualRefresh))
                 }
             } catch (e: Exception) {
                 lastException = e
@@ -712,6 +858,7 @@ object KronCurrencyManager {
     private fun persistSyncedFiatRates(
         context: Context,
         idrPerUnitMap: Map<WidgetCurrency, Double>,
+        isManualRefresh: Boolean,
     ): Map<String, Double> {
         val now = System.currentTimeMillis()
         val prefs = context.getSharedPreferences(PREFS_RATES, Context.MODE_PRIVATE)
@@ -739,8 +886,13 @@ object KronCurrencyManager {
             runCatching { fetchAndMergeFiatHistory(context, todayEpochDay) }
         }
 
-        val newKrmIdr = refreshKronFluctuation(context)
-        savedRates["KRM"] = 1.0 / newKrmIdr
+        // KRM only ticks on automatic 30-minute intervals, never on manual refresh.
+        val krmIdr = if (!isManualRefresh && isKrmTickDue(context)) {
+            refreshKronFluctuation(context)
+        } else {
+            getKrmIdrRate(context)
+        }
+        savedRates["KRM"] = 1.0 / krmIdr
         runCatching { KronWidgetManager.notifyWidgetUpdate(context) }
         return savedRates
     }
