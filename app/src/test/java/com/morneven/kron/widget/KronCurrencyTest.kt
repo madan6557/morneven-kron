@@ -68,22 +68,26 @@ class KronCurrencyTest {
         var waveTicks = 0
         var sentimentTicks = 0
         var sentimentUpChance = 0.0
-        var sawWaveTrigger = false
-        var sawWaveStep = false
+        var tensionTicks = 0
+        var marketTension = -1.0
         var sawBullishSentiment = false
         var sawBearishSentiment = false
 
-        repeat(250) {
-            val wasInWave = waveTicks > 0
+        repeat(400) {
             val roll = KronCurrencyManager.rollKrmFluctuation(
                 waveTicksRemaining = waveTicks,
                 waveDirection = waveDir,
                 sentimentTicksRemaining = sentimentTicks,
                 sentimentUpChance = sentimentUpChance,
+                tensionTicksRemaining = tensionTicks,
+                marketTension = marketTension,
                 tierRoll = rng.nextDouble(),
                 sentimentRoll = rng.nextDouble(),
                 directionRoll = rng.nextDouble(),
                 magnitudeRoll = rng.nextDouble(),
+                tensionRoll = rng.nextDouble(),
+                durationRoll = rng.nextDouble(),
+                breakRoll = rng.nextDouble(),
             )
             rate = KronCurrencyManager.nextKrmIdrRate(rate, roll.magnitude, roll.increase)
             assertTrue(rate >= 100.0)
@@ -92,29 +96,70 @@ class KronCurrencyTest {
                 "nextSentimentUpChance must be bimodal (25%..40% or 60%..75%)",
                 KronCurrencyManager.isValidSentimentUpChance(roll.nextSentimentUpChance),
             )
+            assertTrue(
+                "nextMarketTension must be valid (0.0..1.0)",
+                KronCurrencyManager.isValidMarketTension(roll.nextMarketTension),
+            )
             if (roll.nextSentimentUpChance >= 0.60) sawBullishSentiment = true
             if (roll.nextSentimentUpChance <= 0.40) sawBearishSentiment = true
 
-            if (!wasInWave && roll.nextWaveTicks > 0) {
-                sawWaveTrigger = true
-                assertTrue(roll.tier == 3 || roll.tier == 4)
-                assertTrue(roll.nextWaveTicks in 2..5)
-            }
-            if (wasInWave) {
-                sawWaveStep = true
-                assertEquals(0, roll.tier)
-                assertEquals(waveTicks - 1, roll.nextWaveTicks)
-            }
             waveDir = roll.nextWaveDirection
             waveTicks = roll.nextWaveTicks
             sentimentTicks = roll.nextSentimentTicks
             sentimentUpChance = roll.nextSentimentUpChance
+            tensionTicks = roll.nextTensionTicks
+            marketTension = roll.nextMarketTension
         }
 
-        assertTrue("Expected at least one incident wave trigger over 250 ticks", sawWaveTrigger)
-        assertTrue("Expected wave continuation step to execute", sawWaveStep)
         assertTrue("Expected bullish sentiment phase", sawBullishSentiment)
         assertTrue("Expected bearish sentiment phase", sawBearishSentiment)
+
+        // Verify post-incident Exhaustion Cooldown vs Contagion Domino & Wave step
+        val cooldownShock = KronCurrencyManager.rollKrmFluctuation(
+            waveTicksRemaining = 0,
+            waveDirection = true,
+            tensionTicksRemaining = 10,
+            marketTension = 0.90,
+            tierRoll = 0.9999, // Tier 4
+            sentimentRoll = 0.80,
+            directionRoll = 0.20,
+            magnitudeRoll = 0.50,
+            tensionRoll = 0.50,
+            durationRoll = 0.50,
+            breakRoll = 0.20, // < 0.50 -> Exhaustion Cooldown
+        )
+        assertEquals(4, cooldownShock.tier)
+        assertTrue(cooldownShock.nextWaveTicks in 2..5)
+        assertTrue(cooldownShock.nextMarketTension <= 0.05)
+
+        val contagionShock = KronCurrencyManager.rollKrmFluctuation(
+            waveTicksRemaining = 0,
+            waveDirection = true,
+            tensionTicksRemaining = 10,
+            marketTension = 0.20,
+            tierRoll = 0.9990, // Tier 3 at low tension
+            sentimentRoll = 0.80,
+            directionRoll = 0.20,
+            magnitudeRoll = 0.50,
+            tensionRoll = 0.50,
+            durationRoll = 0.50,
+            breakRoll = 0.80, // >= 0.50 -> Contagion Domino
+        )
+        assertTrue(contagionShock.tier == 3 || contagionShock.tier == 4)
+        assertTrue(contagionShock.nextWaveTicks in 2..5)
+        assertTrue(contagionShock.nextMarketTension in 0.60..1.0)
+        assertTrue(contagionShock.nextTensionTicks in 48..384)
+
+        val waveStep = KronCurrencyManager.rollKrmFluctuation(
+            waveTicksRemaining = contagionShock.nextWaveTicks,
+            waveDirection = contagionShock.nextWaveDirection,
+            sentimentTicksRemaining = contagionShock.nextSentimentTicks,
+            sentimentUpChance = contagionShock.nextSentimentUpChance,
+            tensionTicksRemaining = contagionShock.nextTensionTicks,
+            marketTension = contagionShock.nextMarketTension,
+        )
+        assertEquals(0, waveStep.tier)
+        assertEquals(contagionShock.nextWaveTicks - 1, waveStep.nextWaveTicks)
     }
 
     @Test
@@ -124,10 +169,13 @@ class KronCurrencyTest {
             waveDirection = true,
             sentimentTicksRemaining = 0,
             sentimentUpChance = 0.0,
+            tensionTicksRemaining = 20,
+            marketTension = 0.20,
             tierRoll = 0.20, // Tier 1
             sentimentRoll = 0.80, // Bullish (60%..75%)
             directionRoll = 0.30,
             magnitudeRoll = 0.50,
+            breakRoll = 0.50,
         )
         assertEquals(1, initialRoll.tier)
         assertTrue(initialRoll.upChance in 0.60..0.75)
@@ -140,10 +188,13 @@ class KronCurrencyTest {
             waveDirection = true,
             sentimentTicksRemaining = initialRoll.nextSentimentTicks,
             sentimentUpChance = initialRoll.nextSentimentUpChance,
-            tierRoll = 0.82, // Tier 2
+            tensionTicksRemaining = initialRoll.nextTensionTicks,
+            marketTension = initialRoll.nextMarketTension,
+            tierRoll = 0.95, // Tier 2 at tension 0.20
             sentimentRoll = 0.10, // Would be bearish if not locked
             directionRoll = 0.55, // < initialRoll.upChance, so still increases
             magnitudeRoll = 0.50,
+            breakRoll = 0.50,
         )
         assertEquals(2, secondRoll.tier)
         assertEquals(initialRoll.nextSentimentUpChance, secondRoll.upChance, 0.00001)

@@ -1,5 +1,9 @@
 # KRON Changelog
 
+## 1.7.31 - 2026-10-17
+
+- Penyesuaian peluang insiden dan volatilitas dinamis pada kurs KRM.
+
 ## 1.7.30 - 2026-10-17
 
 - Penyesuaian rasio arah naik/turun dan tren fluktuasi kurs KRM.

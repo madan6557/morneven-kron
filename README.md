@@ -1,6 +1,6 @@
 # KRON
 
-Current release: KRON 1.7.30.
+Current release: KRON 1.7.31.
 
 KRON adalah aplikasi manajemen keuangan pribadi dan tim di Android dengan arsitektur *local-first* tanpa server backend. KRON mendukung pencatatan transaksi (pemasukan, pengeluaran, transfer), alokasi RAB multi-periode, manajemen hutang/piutang, jadwal transaksi berulang, audit *append-only*, laporan grafik, kolaborasi akun Team melalui Google Drive, dan backup lokal terenkripsi.
 

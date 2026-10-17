@@ -119,6 +119,8 @@ internal data class KrmFluctuationRoll(
     val nextWaveDirection: Boolean,
     val nextSentimentTicks: Int,
     val nextSentimentUpChance: Double,
+    val nextTensionTicks: Int,
+    val nextMarketTension: Double,
 )
 
 object KronCurrencyManager {
@@ -134,6 +136,8 @@ object KronCurrencyManager {
     private const val KEY_KRM_LAST_DIR = "krm_last_direction"
     private const val KEY_KRM_SENTIMENT_TICKS = "krm_sentiment_ticks_remaining"
     private const val KEY_KRM_SENTIMENT_UP_CHANCE = "krm_sentiment_up_chance"
+    private const val KEY_KRM_TENSION_TICKS = "krm_tension_ticks_remaining"
+    private const val KEY_KRM_MARKET_TENSION = "krm_market_tension"
     private const val KEY_FIAT_BACKFILL_EPOCH_DAY = "fiat_history_backfill_epoch_day"
 
     private const val TRADINGVIEW_SCAN_URL = "https://scanner.tradingview.com/forex/scan"
@@ -164,7 +168,7 @@ object KronCurrencyManager {
     val MORNEVEN_KRON_IN_IDR: Long get() = KRM_BASE_IDR.toLong()
 
     // ------------------------------------------------------------------
-    // KRM synthetic fluctuation (4-Step Pipeline + Sentiment + Wave State)
+    // KRM synthetic fluctuation (Continuous Dynamic Tension + Sentiment + Wave)
     // ------------------------------------------------------------------
 
     fun getKrmIdrRate(context: Context?): Double {
@@ -184,11 +188,15 @@ object KronCurrencyManager {
     /**
      * Applies one 30-minute market-fluctuation tick to the KRM rate and persists it.
      *
-     * 4-step pipeline:
-     * 1. Gacha Tier (Tier 1: 75%, Tier 2: 15%, Tier 3: 8%, Tier 4: 2%, or active post-shock wave).
-     * 2. Gacha / Persist Bimodal Sentiment Ratio (25%-40% bearish or 60%-75% bullish for 6-16 ticks).
-     * 3. Gacha Direction (Up / Down) using the active sentiment ratio.
-     * 4. Gacha Magnitude within the selected tier's percentage range.
+     * Unpredictable Continuous Dynamic Tension + 4-step pipeline:
+     * - Dynamic Market Tension (0.0 .. 1.0, u^4 curve) with non-linear duration (2..2160 ticks / 1h..45d)
+     *   and 0.5% per-tick sudden regime break.
+     * - Step 1: Gacha Tier using dynamic probabilities derived from current tension
+     *   (Tier 4: 0.002%..1.20%, Tier 3: 0.03%..4.50%, Tier 2: 3.00%..30.00%, Tier 1: remainder).
+     * - Step 2: Gacha / Persist Bimodal Sentiment Ratio (25%-40% bearish or 60%-75% bullish for 6-16 ticks).
+     * - Step 3: Gacha Direction (Up / Down) using the active sentiment ratio.
+     * - Step 4: Gacha Magnitude within the selected tier's percentage range, plus 50/50 post-incident
+     *   reaction (Exhaustion Cooldown vs Contagion Domino) on Tier 3/4.
      */
     fun refreshKronFluctuation(context: Context): Double {
         val now = System.currentTimeMillis()
@@ -198,16 +206,23 @@ object KronCurrencyManager {
         val waveDir = prefs.getBoolean(KEY_KRM_WAVE_DIR, true)
         val sentimentTicks = prefs.getInt(KEY_KRM_SENTIMENT_TICKS, 0).coerceAtLeast(0)
         val sentimentUpChance = prefs.getString(KEY_KRM_SENTIMENT_UP_CHANCE, null)?.toDoubleOrNull() ?: 0.0
+        val tensionTicks = prefs.getInt(KEY_KRM_TENSION_TICKS, 0).coerceAtLeast(0)
+        val marketTension = prefs.getString(KEY_KRM_MARKET_TENSION, null)?.toDoubleOrNull() ?: -1.0
 
         val roll = rollKrmFluctuation(
             waveTicksRemaining = waveTicks,
             waveDirection = waveDir,
             sentimentTicksRemaining = sentimentTicks,
             sentimentUpChance = sentimentUpChance,
+            tensionTicksRemaining = tensionTicks,
+            marketTension = marketTension,
             tierRoll = Random.nextDouble(),
             sentimentRoll = Random.nextDouble(),
             directionRoll = Random.nextDouble(),
             magnitudeRoll = Random.nextDouble(),
+            tensionRoll = Random.nextDouble(),
+            durationRoll = Random.nextDouble(),
+            breakRoll = Random.nextDouble(),
         )
 
         val newRate = nextKrmIdrRate(current, roll.magnitude, roll.increase)
@@ -220,10 +235,31 @@ object KronCurrencyManager {
             .putBoolean(KEY_KRM_LAST_DIR, roll.increase)
             .putInt(KEY_KRM_SENTIMENT_TICKS, roll.nextSentimentTicks)
             .putString(KEY_KRM_SENTIMENT_UP_CHANCE, roll.nextSentimentUpChance.toString())
+            .putInt(KEY_KRM_TENSION_TICKS, roll.nextTensionTicks)
+            .putString(KEY_KRM_MARKET_TENSION, roll.nextMarketTension.toString())
             .apply()
 
         recordKrmRate(context, newRate, now)
         return newRate
+    }
+
+    internal fun rollMarketTension(tensionRoll: Double = Random.nextDouble()): Double {
+        val u = tensionRoll.coerceIn(0.0, 1.0)
+        return u * u * u * u
+    }
+
+    internal fun rollTensionDurationTicks(
+        durationRoll: Double = Random.nextDouble(),
+        tension: Double = 0.0,
+    ): Int {
+        val u = durationRoll.coerceIn(0.0, 1.0)
+        val curved = u * u
+        val maxTicks = if (tension > 0.50) 384 else 2160
+        return (2 + (curved * (maxTicks - 2)).toInt()).coerceIn(2, maxTicks)
+    }
+
+    internal fun isValidMarketTension(value: Double): Boolean {
+        return value.isFinite() && value in 0.0..1.0
     }
 
     internal fun rollBimodalSentimentUpChance(
@@ -247,12 +283,28 @@ object KronCurrencyManager {
         waveDirection: Boolean,
         sentimentTicksRemaining: Int = 0,
         sentimentUpChance: Double = 0.0,
+        tensionTicksRemaining: Int = 0,
+        marketTension: Double = -1.0,
         tierRoll: Double = Random.nextDouble(),
         sentimentRoll: Double = Random.nextDouble(),
         directionRoll: Double = Random.nextDouble(),
         magnitudeRoll: Double = Random.nextDouble(),
+        tensionRoll: Double = Random.nextDouble(),
+        durationRoll: Double = Random.nextDouble(),
+        breakRoll: Double = Random.nextDouble(),
     ): KrmFluctuationRoll {
         val clampedMag = magnitudeRoll.coerceIn(0.0, 1.0)
+        val hasActiveTension = tensionTicksRemaining > 0 && isValidMarketTension(marketTension) && breakRoll >= 0.005
+        val activeTension = if (hasActiveTension) {
+            marketTension.coerceIn(0.0, 1.0)
+        } else {
+            rollMarketTension(tensionRoll)
+        }
+        val baseNextTensionTicks = if (hasActiveTension) {
+            tensionTicksRemaining - 1
+        } else {
+            rollTensionDurationTicks(durationRoll, activeTension) - 1
+        }
 
         if (waveTicksRemaining > 0) {
             val waveBias = 0.65 + (sentimentRoll.coerceIn(0.0, 1.0) * 0.10)
@@ -265,6 +317,8 @@ object KronCurrencyManager {
                 rollBimodalSentimentUpChance(bullish = waveDirection, rangeRoll = sentimentRoll)
             }
             val preservedSentimentTicks = if (sentimentTicksRemaining > 0) sentimentTicksRemaining else Random.nextInt(6, 17)
+            val preservedTension = if (isValidMarketTension(marketTension)) marketTension else activeTension
+            val preservedTensionTicks = if (tensionTicksRemaining > 0) tensionTicksRemaining else baseNextTensionTicks.coerceAtLeast(1)
             return KrmFluctuationRoll(
                 tier = 0,
                 upChance = activeUpChance,
@@ -274,14 +328,22 @@ object KronCurrencyManager {
                 nextWaveDirection = waveDirection,
                 nextSentimentTicks = preservedSentimentTicks,
                 nextSentimentUpChance = preservedSentimentUp,
+                nextTensionTicks = preservedTensionTicks,
+                nextMarketTension = preservedTension,
             )
         }
 
-        // Step 1: Gacha Tier
+        // Step 1: Dynamic Tier Chances derived from Continuous Market Tension (0.0 .. 1.0)
+        val tSq = activeTension * activeTension
+        val tier4Chance = 0.00002 + tSq * (0.0120 - 0.00002) // 0.002% .. 1.20%
+        val tier3Chance = 0.00030 + tSq * (0.0450 - 0.00030) // 0.030% .. 4.50%
+        val tier2Chance = 0.03000 + activeTension * (0.3000 - 0.03000) // 3.00% .. 30.00%
+        val tier1Chance = (1.0 - (tier2Chance + tier3Chance + tier4Chance)).coerceAtLeast(0.50)
+
         val tier = when {
-            tierRoll < 0.75 -> 1
-            tierRoll < 0.90 -> 2
-            tierRoll < 0.98 -> 3
+            tierRoll < tier1Chance -> 1
+            tierRoll < tier1Chance + tier2Chance -> 2
+            tierRoll < tier1Chance + tier2Chance + tier3Chance -> 3
             else -> 4
         }
 
@@ -303,7 +365,7 @@ object KronCurrencyManager {
         // Step 3: Gacha Direction (Up / Down)
         val increase = directionRoll < activeUpChance
 
-        // Step 4: Gacha Magnitude
+        // Step 4: Gacha Magnitude + Post-Incident Reaction (50% Exhaustion Cooldown vs 50% Contagion Domino)
         return when (tier) {
             1 -> {
                 val magnitude = 0.0005 + clampedMag * (0.015 - 0.0005)
@@ -316,6 +378,8 @@ object KronCurrencyManager {
                     nextWaveDirection = waveDirection,
                     nextSentimentTicks = baseNextSentimentTicks,
                     nextSentimentUpChance = activeUpChance,
+                    nextTensionTicks = baseNextTensionTicks,
+                    nextMarketTension = activeTension,
                 )
             }
             2 -> {
@@ -329,14 +393,34 @@ object KronCurrencyManager {
                     nextWaveDirection = waveDirection,
                     nextSentimentTicks = baseNextSentimentTicks,
                     nextSentimentUpChance = activeUpChance,
+                    nextTensionTicks = baseNextTensionTicks,
+                    nextMarketTension = activeTension,
                 )
             }
-            3 -> {
-                val magnitude = 0.045 + clampedMag * (0.15 - 0.045)
+            3, 4 -> {
+                val magnitude = if (tier == 3) {
+                    0.045 + clampedMag * (0.15 - 0.045)
+                } else {
+                    0.15 + clampedMag * (0.28 - 0.15)
+                }
                 val waveTicks = Random.nextInt(2, 6)
                 val alignedSentiment = rollBimodalSentimentUpChance(bullish = increase, rangeRoll = sentimentRoll)
+                val isContagion = breakRoll >= 0.50
+                val postShockTension = if (isContagion) {
+                    (0.60 + 0.40 * tensionRoll.coerceIn(0.0, 1.0)).coerceIn(0.60, 1.0)
+                } else {
+                    (0.05 * tensionRoll.coerceIn(0.0, 1.0)).coerceIn(0.0, 0.05)
+                }
+                val postShockTensionTicks = if (isContagion) {
+                    (48 + (durationRoll.coerceIn(0.0, 1.0) * (384 - 48)).toInt()).coerceIn(48, 384)
+                } else {
+                    rollTensionDurationTicks(
+                        durationRoll = 0.35 + 0.65 * durationRoll.coerceIn(0.0, 1.0),
+                        tension = postShockTension,
+                    )
+                }
                 KrmFluctuationRoll(
-                    tier = 3,
+                    tier = tier,
                     upChance = activeUpChance,
                     increase = increase,
                     magnitude = magnitude,
@@ -344,23 +428,11 @@ object KronCurrencyManager {
                     nextWaveDirection = increase,
                     nextSentimentTicks = Random.nextInt(6, 17),
                     nextSentimentUpChance = alignedSentiment,
+                    nextTensionTicks = postShockTensionTicks,
+                    nextMarketTension = postShockTension,
                 )
             }
-            else -> {
-                val magnitude = 0.15 + clampedMag * (0.28 - 0.15)
-                val waveTicks = Random.nextInt(2, 6)
-                val alignedSentiment = rollBimodalSentimentUpChance(bullish = increase, rangeRoll = sentimentRoll)
-                KrmFluctuationRoll(
-                    tier = 4,
-                    upChance = activeUpChance,
-                    increase = increase,
-                    magnitude = magnitude,
-                    nextWaveTicks = waveTicks,
-                    nextWaveDirection = increase,
-                    nextSentimentTicks = Random.nextInt(6, 17),
-                    nextSentimentUpChance = alignedSentiment,
-                )
-            }
+            else -> error("Unreachable tier $tier")
         }
     }
 
@@ -626,6 +698,8 @@ object KronCurrencyManager {
             .put("krmLastDir", prefs.getBoolean(KEY_KRM_LAST_DIR, true))
             .put("krmSentimentTicks", prefs.getInt(KEY_KRM_SENTIMENT_TICKS, 0))
             .put("krmSentimentUpChance", prefs.getString(KEY_KRM_SENTIMENT_UP_CHANCE, null)?.toDoubleOrNull() ?: 0.0)
+            .put("krmTensionTicks", prefs.getInt(KEY_KRM_TENSION_TICKS, 0))
+            .put("krmMarketTension", prefs.getString(KEY_KRM_MARKET_TENSION, null)?.toDoubleOrNull() ?: -1.0)
             .put("fiatRates", fiatRatesObj)
             .put("fiatRateHistory", fiatHistoryObj)
     }
@@ -661,6 +735,15 @@ object KronCurrencyManager {
             val upChance = json.optDouble("krmSentimentUpChance", 0.0)
             if (isValidSentimentUpChance(upChance)) {
                 editor.putString(KEY_KRM_SENTIMENT_UP_CHANCE, upChance.toString())
+            }
+        }
+        if (json.has("krmTensionTicks")) {
+            editor.putInt(KEY_KRM_TENSION_TICKS, json.optInt("krmTensionTicks", 0).coerceAtLeast(0))
+        }
+        if (json.has("krmMarketTension")) {
+            val tension = json.optDouble("krmMarketTension", -1.0)
+            if (isValidMarketTension(tension)) {
+                editor.putString(KEY_KRM_MARKET_TENSION, tension.toString())
             }
         }
         json.optJSONObject("fiatRates")?.let { fiatRates ->
