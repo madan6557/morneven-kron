@@ -381,7 +381,10 @@ private fun DebtPaymentDialog(
     onSave: (String, Long, Long?, String, LocalDate) -> Unit,
 ) {
     val direction = if (debt.role == DebtRole.DEBTOR) TransactionDirection.EXPENSE else TransactionDirection.INCOME
-    val categories = state.categories.filter { it.direction == direction }
+    val categories = state.categories.filter { category ->
+        category.direction == direction &&
+            (debt.role == DebtRole.DEBTOR || !category.name.equals("Gaji", ignoreCase = true))
+    }
     var channel by rememberSaveable { mutableStateOf(DebtFundingSource.CASH) }
     var categoryId by rememberSaveable { mutableStateOf(categories.firstOrNull()?.id) }
     var amount by rememberSaveable { mutableStateOf("") }
@@ -473,9 +476,9 @@ private fun DebtPaymentDialog(
                 }
                 Text(
                     if (debt.role == DebtRole.DEBTOR) {
-                        "Lebihan ${displayMoney(excessAmount, state.valuesVisible)} otomatis dicatat terpisah sebagai pengeluaran bonus."
+                        "Lebihan ${displayMoney(excessAmount, state.valuesVisible)} digabung dalam satu transaksi pelunasan sebagai bonus terimakasih."
                     } else {
-                        "Lebihan ${displayMoney(excessAmount, state.valuesVisible)} otomatis dicatat terpisah sebagai pemasukan bonus."
+                        "Lebihan ${displayMoney(excessAmount, state.valuesVisible)} digabung dalam satu transaksi pelunasan sebagai bonus terimakasih."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

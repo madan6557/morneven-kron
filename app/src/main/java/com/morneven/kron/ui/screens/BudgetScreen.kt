@@ -86,10 +86,12 @@ fun BudgetScreen(
     var showArchive by remember { mutableStateOf(false) }
     val categoryMap = remember(state.categories) { state.categories.associateBy { it.id } }
     val latestActivePeriods = state.portfolios.mapNotNull { portfolio ->
-        state.allocations
-            .filter { it.portfolioId == portfolio.id && !it.portfolioArchived }
-            .groupBy { it.periodId }
-            .maxByOrNull { (_, rows) -> rows.maxOf { it.startEpochDay } }
+        val latestPeriod = state.periods
+            .filter { it.portfolioId == portfolio.id }
+            .maxByOrNull { it.startEpochDay }
+            ?: return@mapNotNull null
+        val rows = state.allocations.filter { it.periodId == latestPeriod.id && !it.portfolioArchived }
+        Triple(portfolio, latestPeriod, rows)
     }
 
     LazyColumn(
@@ -192,27 +194,27 @@ fun BudgetScreen(
             if (latestActivePeriods.isEmpty()) {
                 item { EmptyState(Icons.Outlined.AccountBalanceWallet, "Belum ada portfolio aktif", "Buat RAB baru atau pulihkan portfolio dari tab Arsip.") }
             }
-            items(latestActivePeriods, key = { it.key }) { (_, rows) ->
-                val first = rows.first()
-                val portfolio = state.portfolios.first { it.id == first.portfolioId }
-                val period = state.periods.firstOrNull { it.id == first.periodId }
-                val periodTotal = period?.plannedTotal ?: rows.sumOf { it.plannedAmount }
+            items(latestActivePeriods, key = { (_, period, _) -> period.id }) { (portfolio, period, rows) ->
+                val periodTotal = period.plannedTotal
                 ActiveBudgetCard(
+                    portfolioName = portfolio.name,
+                    periodStatus = period.status,
+                    startEpochDay = period.startEpochDay,
                     rows = rows,
                     categoryMap = categoryMap,
                     periodTotal = periodTotal,
                     paused = portfolio.isPaused,
                     rolloverEnabled = portfolio.rolloverEnabled,
-                    hasPortfolioDeficit = state.allocations.any { it.portfolioId == first.portfolioId && it.availableAmount < 0 },
+                    hasPortfolioDeficit = state.allocations.any { it.portfolioId == portfolio.id && it.availableAmount < 0 },
                     visible = state.valuesVisible,
-                    onDetail = { onDetail(first.periodId, readOnly) },
-                    onHistory = { onHistory(first.portfolioId) },
-                    onPause = { onPause(first.portfolioId) },
-                    onResume = { onResume(first.portfolioId) },
-                    onArchive = { onArchive(first.portfolioId) },
-                    onToggleRollover = { enabled -> onToggleRollover(first.portfolioId, enabled) },
+                    onDetail = { onDetail(period.id, readOnly) },
+                    onHistory = { onHistory(portfolio.id) },
+                    onPause = { onPause(portfolio.id) },
+                    onResume = { onResume(portfolio.id) },
+                    onArchive = { onArchive(portfolio.id) },
+                    onToggleRollover = { enabled -> onToggleRollover(portfolio.id, enabled) },
                     onResolve = onResolve,
-                    onFund = { onFund(first.periodId) },
+                    onFund = { onFund(period.id) },
                     readOnly = readOnly,
                 )
             }
@@ -265,6 +267,9 @@ fun BudgetScreen(
 
 @Composable
 private fun ActiveBudgetCard(
+    portfolioName: String,
+    periodStatus: String,
+    startEpochDay: Long,
     rows: List<AllocationBalanceRow>,
     categoryMap: Map<Long, CategoryEntity>,
     periodTotal: Long,
@@ -282,7 +287,6 @@ private fun ActiveBudgetCard(
     onFund: () -> Unit,
     readOnly: Boolean,
 ) {
-    val first = rows.first()
     val available = rows.sumOf { it.availableAmount }
     val booked = rows.sumOf { it.bookedAmount }
     val hasDeficit = rows.any { it.availableAmount < 0 }
@@ -292,9 +296,9 @@ private fun ActiveBudgetCard(
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                Text(first.portfolioName, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                Text(portfolioName, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 Spacer(Modifier.height(2.dp))
-                Text("${if (paused) "JEDA" else first.periodStatus.replace('_', ' ')} · ${LocalDate.ofEpochDay(first.startEpochDay).format(indonesianDate)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("${if (paused) "JEDA" else periodStatus.replace('_', ' ')} · ${LocalDate.ofEpochDay(startEpochDay).format(indonesianDate)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Text(
                 displayMoney(available, visible),
@@ -445,7 +449,7 @@ private fun ActiveBudgetCard(
                     Icon(Icons.Outlined.ErrorOutline, contentDescription = null)
                     Text("Selesaikan budget minus")
                 }
-            } else if (first.periodStatus == PeriodStatus.UNDERFUNDED || first.periodStatus == PeriodStatus.DRAFT) {
+            } else if (periodStatus == PeriodStatus.UNDERFUNDED || periodStatus == PeriodStatus.DRAFT) {
                 Button(onClick = onFund, modifier = Modifier.fillMaxWidth().padding(top = 10.dp), shape = KronButtonShape) { Text("Booking dari Main Vault") }
             }
             Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {

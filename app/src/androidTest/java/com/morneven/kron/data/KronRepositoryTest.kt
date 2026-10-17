@@ -368,7 +368,8 @@ class KronRepositoryTest {
     fun debtOpeningAndPaymentsTrackCashFlowAndSettlement() = runBlocking {
         val account = dao.activeAccount() ?: error("Akun aktif tidak ditemukan")
         val expenseCategory = dao.allCategories().first { it.direction == TransactionDirection.EXPENSE }
-        val incomeCategory = dao.allCategories().first { it.direction == TransactionDirection.INCOME }
+        val salaryCategory = dao.allCategories().first { it.direction == TransactionDirection.INCOME && it.name.equals("Gaji", ignoreCase = true) }
+        val incomeCategory = dao.allCategories().first { it.direction == TransactionDirection.INCOME && !it.name.equals("Gaji", ignoreCase = true) }
         val today = LocalDate.now()
         repository.addIncome(account.id, FundingChannel.CASH, 200, incomeCategory.id, "Modal", "")
 
@@ -427,6 +428,9 @@ class KronRepositoryTest {
             dueDate = null,
             note = "",
         )
+        assertTrue(runCatching {
+            repository.recordDebtPayment(creditorId, FundingChannel.CASH, 50, salaryCategory.id, "", today)
+        }.isFailure)
         repository.recordDebtPayment(creditorId, FundingChannel.CASH, 50, incomeCategory.id, "", today)
         assertEquals(DebtStatus.SETTLED, dao.debtById(creditorId)?.status)
         assertEquals(285L, dao.accountBalance(account.id, FundingChannel.CASH))
@@ -543,6 +547,8 @@ class KronRepositoryTest {
         assertFalse(dao.allPortfolios().single { it.id == portfolioId }.isArchived)
         assertFalse(dao.allRules().single { it.id == "archive-rule" }.isPaused)
         assertTrue(dao.allRules().single { it.id == "manual-rule" }.isPaused)
+        assertEquals(1, dao.periodsForPortfolio(portfolioId).size)
+        assertEquals(PeriodStatus.ACTIVE, dao.periodsForPortfolio(portfolioId).single().status)
     }
 
     @Test
@@ -580,5 +586,109 @@ class KronRepositoryTest {
         assertEquals(LocalDate.of(2028, 2, 29), ScheduleCalculator.next(LocalDate.of(2027, 2, 28), "YEARLY", 2, 29))
         assertEquals(LocalDate.of(2026, 2, 28), ScheduleCalculator.next(LocalDate.of(2026, 1, 31), "MONTHLY", 1, 31))
         assertEquals(LocalDate.of(2026, 3, 31), ScheduleCalculator.next(LocalDate.of(2026, 2, 28), "MONTHLY", 1, 31))
+    }
+
+    @Test
+    fun creditorSettlementWithBonusIsSingleTransactionAndReversesAtomically() = runBlocking {
+        val account = dao.activeAccount() ?: error("Akun aktif tidak ditemukan")
+        val nonSalaryCategory = dao.allCategories().first { it.direction == TransactionDirection.INCOME && !it.name.equals("Gaji", ignoreCase = true) }
+        val today = LocalDate.now()
+        repository.addIncome(account.id, FundingChannel.CASH, 200, nonSalaryCategory.id, "Modal", "")
+
+        val creditorId = repository.createDebt(
+            accountId = account.id,
+            role = DebtRole.CREDITOR,
+            fundingSource = DebtFundingSource.CASH,
+            counterparty = "Peminjam",
+            title = "Piutang dengan bonus",
+            principal = 100,
+            interestRateBps = 0,
+            interestIntervalMonths = 1,
+            interestIntervalUnit = InterestInterval.MONTHS,
+            startDate = today,
+            dueDate = null,
+            note = "",
+        )
+        assertEquals(100L, dao.accountBalance(account.id, FundingChannel.CASH))
+
+        val eventsBefore = dao.eventCount()
+        val settlementEventId = repository.recordDebtPayment(
+            debtId = creditorId,
+            fundingSource = FundingChannel.CASH,
+            amount = 125,
+            categoryId = null,
+            note = "Lunas plus lebihan",
+            effectiveDate = today,
+        )
+        assertEquals(eventsBefore + 1, dao.eventCount())
+        assertEquals(DebtStatus.SETTLED, dao.debtById(creditorId)?.status)
+        assertEquals(225L, dao.accountBalance(account.id, FundingChannel.CASH))
+        assertEquals(225L, dao.vaultBalance(FundingChannel.CASH))
+        assertEquals(nonSalaryCategory.id, dao.splitsForEvent(settlementEventId).single().categoryId)
+
+        repository.reverseEvent(settlementEventId, "Batal pelunasan")
+        assertEquals(DebtStatus.OPEN, dao.debtById(creditorId)?.status)
+        assertEquals(100L, dao.debtById(creditorId)?.principalOutstanding)
+        assertEquals(100L, dao.accountBalance(account.id, FundingChannel.CASH))
+        assertEquals(100L, dao.vaultBalance(FundingChannel.CASH))
+
+        repository.restoreReversedEvent(settlementEventId)
+        assertEquals(DebtStatus.SETTLED, dao.debtById(creditorId)?.status)
+        assertEquals(0L, dao.debtById(creditorId)?.principalOutstanding)
+        assertEquals(225L, dao.accountBalance(account.id, FundingChannel.CASH))
+        assertEquals(225L, dao.vaultBalance(FundingChannel.CASH))
+        postingEngine.validateAll()
+    }
+
+    @Test
+    fun budgetCycle_underfundedEdits_restoreSpent_andClosedPeriodReversalStayConsistent() = runBlocking {
+        val account = dao.activeAccount() ?: error("Akun aktif tidak ditemukan")
+        val category = dao.allCategories().first { it.direction == TransactionDirection.EXPENSE }
+        val today = LocalDate.now()
+
+        // Create portfolio while Vault is 0 -> UNDERFUNDED
+        val portfolioId = repository.createPortfolio(
+            name = "Siklus Uji",
+            cadence = "MONTHLY",
+            plannedIncome = 0,
+            rolloverEnabled = false,
+            drafts = listOf(AllocationDraft(category.id, FundingChannel.CASH, 100)),
+            startDate = today,
+            plannedTotal = 100,
+        )
+        val period = dao.periodsForPortfolio(portfolioId).single()
+        assertEquals(PeriodStatus.UNDERFUNDED, period.status)
+
+        // Editing category down while UNDERFUNDED must not draw from Vault or fail
+        repository.correctBudgetCategorySplit(period.id, category.id, 60, 100, "Turunkan rencana")
+        val alloc = dao.allocationsForPeriod(period.id).single()
+        assertEquals(60L, alloc.plannedAmount)
+        assertEquals(0L, dao.allocationBooked(alloc.id))
+        assertEquals(60L, dao.templateForCategory(portfolioId, category.id)?.plannedAmount)
+
+        // Fund period after adding income
+        repository.addIncome(account.id, FundingChannel.CASH, 100, null, "Modal", "")
+        repository.fundUnderfundedPeriod(period.id)
+        assertEquals(PeriodStatus.ACTIVE, dao.periodById(period.id)?.status)
+        assertEquals(60L, dao.allocationBooked(alloc.id))
+        assertEquals(40L, dao.vaultBalance(FundingChannel.CASH))
+
+        // Spend, reverse, and restore -> spentAmount must remain accurate
+        val expenseId = repository.addExpense(
+            accountId = account.id,
+            fundingChannel = FundingChannel.CASH,
+            amount = 25,
+            splits = listOf(ExpenseSplitInput(category.id, alloc.id, 25)),
+            title = "Makan",
+            note = "",
+        )
+        assertEquals(25L, dao.allocationSpent(alloc.id))
+        repository.reverseEvent(expenseId, "Salah input")
+        assertEquals(0L, dao.allocationSpent(alloc.id))
+        repository.restoreReversedEvent(expenseId)
+        assertEquals(25L, dao.allocationSpent(alloc.id))
+        assertEquals(60L, dao.allocationBooked(alloc.id))
+        assertEquals(35L, dao.allocationAvailable(alloc.id))
+        postingEngine.validateAll()
     }
 }

@@ -675,6 +675,13 @@ class KronRepository private constructor(
         } else {
             if (isSettled) "Pelunasan piutang: ${debt.title}" else "Terima piutang: ${debt.title}"
         }
+        val entryNote = when {
+            excessAmount > 0L && note.isNotBlank() ->
+                "${note.trim()} (Termasuk bonus terimakasih Rp $excessAmount)"
+            excessAmount > 0L ->
+                "Pelunasan lunas (Termasuk bonus terimakasih Rp $excessAmount)"
+            else -> note.trim()
+        }
         val balanceBefore = if (fundingSource == DebtFundingSource.EXTERNAL) 0L else dao.accountBalance(debt.accountId, fundingSource)
         val vaultBefore = if (fundingSource == DebtFundingSource.EXTERNAL) 0L else dao.vaultBalance(fundingSource, debt.accountId)
         val eventId = if (fundingSource == DebtFundingSource.EXTERNAL) {
@@ -683,7 +690,7 @@ class KronRepository private constructor(
                 id = externalEventId,
                 type = LedgerType.DEBT_PAYMENT,
                 title = title,
-                note = note.trim(),
+                note = entryNote,
                 source = "USER",
                 effectiveEpochDay = effectiveDate.toEpochDay(),
                 accountId = debt.accountId,
@@ -693,23 +700,38 @@ class KronRepository private constructor(
             postExpenseInternal(
                 accountId = debt.accountId,
                 fundingChannel = fundingSource,
-                amount = debtPaymentAmount,
-                splits = listOf(ExpenseSplitInput(categoryId = categoryId, allocationId = null, amount = debtPaymentAmount)),
+                amount = amount,
+                splits = if (excessAmount > 0L) {
+                    listOf(
+                        ExpenseSplitInput(categoryId = categoryId, allocationId = null, amount = debtPaymentAmount),
+                        ExpenseSplitInput(categoryId = categoryId, allocationId = null, amount = excessAmount),
+                    )
+                } else {
+                    listOf(ExpenseSplitInput(categoryId = categoryId, allocationId = null, amount = amount))
+                },
                 title = title,
-                note = note.trim(),
+                note = entryNote,
                 effectiveDate = effectiveDate,
                 eventType = LedgerType.UNEXPECTED_EXPENSE,
                 source = "USER",
                 reduceVault = true,
             )
         } else {
+            val selectedCategory = categoryId?.let { dao.categoryById(it) }
+            require(selectedCategory == null || !selectedCategory.name.equals("Gaji", ignoreCase = true)) {
+                "Piutang tidak dapat dihitung sebagai Gaji"
+            }
+            val effectiveCategoryId = selectedCategory?.id
+                ?: dao.categoriesForAccount(debt.accountId)
+                    .firstOrNull { it.direction == TransactionDirection.INCOME && !it.name.equals("Gaji", ignoreCase = true) }
+                    ?.id
             postIncomeInternal(
                 accountId = debt.accountId,
                 fundingChannel = fundingSource,
-                amount = debtPaymentAmount,
-                categoryId = categoryId,
+                amount = amount,
+                categoryId = effectiveCategoryId,
                 title = title,
-                note = note.trim(),
+                note = entryNote,
                 effectiveDate = effectiveDate,
                 eventType = LedgerType.INCOME,
                 source = "USER",
@@ -724,13 +746,6 @@ class KronRepository private constructor(
             interestAnchorEpochDay = DebtCalculator.settledAnchorEpochDay(debt, effectiveDate),
             status = if (settled) DebtStatus.SETTLED else DebtStatus.OPEN,
         ).bumpRevision())
-        val entryNote = when {
-            excessAmount > 0L && note.isNotBlank() ->
-                "${note.trim()} (Lebihan bonus terimakasih Rp $excessAmount dicatat terpisah)"
-            excessAmount > 0L ->
-                "Pelunasan lunas (Lebihan bonus terimakasih Rp $excessAmount dicatat terpisah)"
-            else -> note.trim()
-        }
         dao.insertDebtEntry(DebtEntryEntity(
             debtId = debt.id,
             accountId = debt.accountId,
@@ -743,66 +758,13 @@ class KronRepository private constructor(
             note = entryNote,
         ))
 
-        var bonusEventId: String? = null
-        if (excessAmount > 0L) {
-            val bonusTitle = "Bonus terimakasih: ${debt.title}"
-            val bonusNote = if (note.isNotBlank()) {
-                "${note.trim()} (Bonus terimakasih)"
-            } else if (debt.role == DebtRole.DEBTOR) {
-                "Bonus terimakasih pelunasan hutang kepada ${debt.counterparty}"
-            } else {
-                "Bonus terimakasih penerimaan piutang dari ${debt.counterparty}"
-            }
-            bonusEventId = if (fundingSource == DebtFundingSource.EXTERNAL) {
-                val externalBonusId = UUID.randomUUID().toString()
-                dao.insertEvent(ActivityEventEntity(
-                    id = externalBonusId,
-                    type = LedgerType.DEBT_PAYMENT,
-                    title = bonusTitle,
-                    note = bonusNote,
-                    source = "USER",
-                    effectiveEpochDay = effectiveDate.toEpochDay(),
-                    relatedEventId = eventId,
-                    accountId = debt.accountId,
-                ))
-                externalBonusId
-            } else if (debt.role == DebtRole.DEBTOR) {
-                postExpenseInternal(
-                    accountId = debt.accountId,
-                    fundingChannel = fundingSource,
-                    amount = excessAmount,
-                    splits = listOf(ExpenseSplitInput(categoryId = categoryId, allocationId = null, amount = excessAmount)),
-                    title = bonusTitle,
-                    note = bonusNote,
-                    effectiveDate = effectiveDate,
-                    eventType = LedgerType.UNEXPECTED_EXPENSE,
-                    source = "USER",
-                    reduceVault = true,
-                    relatedEventId = eventId,
-                )
-            } else {
-                postIncomeInternal(
-                    accountId = debt.accountId,
-                    fundingChannel = fundingSource,
-                    amount = excessAmount,
-                    categoryId = categoryId,
-                    title = bonusTitle,
-                    note = bonusNote,
-                    effectiveDate = effectiveDate,
-                    eventType = LedgerType.INCOME,
-                    source = "USER",
-                    relatedEventId = eventId,
-                )
-            }
-        }
-
         dao.insertAudit(AuditSnapshotEntity(
             eventId = eventId,
             reason = if (fundingSource == DebtFundingSource.EXTERNAL) {
-                if (excessAmount > 0L) "Pembayaran hutang dicatat dari sumber external dengan bonus terimakasih terpisah"
+                if (excessAmount > 0L) "Pembayaran hutang dicatat dari sumber external beserta bonus terimakasih"
                 else "Pembayaran hutang dicatat dari sumber external"
             } else {
-                if (excessAmount > 0L) "Pembayaran hutang dicatat bersama transaksi saldo dengan bonus terimakasih terpisah"
+                if (excessAmount > 0L) "Pembayaran hutang dicatat bersama transaksi saldo beserta bonus terimakasih"
                 else "Pembayaran hutang dicatat bersama transaksi saldo"
             },
             beforeJson = JSONObject()
@@ -818,7 +780,7 @@ class KronRepository private constructor(
                 .put("payment", amount)
                 .put("debtPayment", debtPaymentAmount)
                 .put("excessAmount", excessAmount)
-                .put("bonusEventId", bonusEventId ?: JSONObject.NULL)
+                .put("bonusEventId", JSONObject.NULL)
                 .put("principalPaid", principalPaid)
                 .put("interestPaid", interestPaid)
                 .put("principal", nextPrincipal)
@@ -1021,7 +983,7 @@ class KronRepository private constructor(
         }
         require(period.status == PeriodStatus.UNDERFUNDED || period.status == PeriodStatus.DRAFT)
         val allocations = dao.allocationsForPeriod(periodId)
-        val needs = allocations.associateWith { (it.plannedAmount - dao.allocationAvailable(it.id)).coerceAtLeast(0) }
+        val needs = allocations.associateWith { (it.plannedAmount - dao.allocationBooked(it.id)).coerceAtLeast(0) }
         val requestedByChannel = needs.entries.groupBy { it.key.fundingChannel }.mapValues { (_, values) -> values.sumOf { it.value } }
         require(requestedByChannel.all { (channel, value) -> dao.vaultBalance(channel, activeId) >= value }) { "Main Vault belum mencukupi" }
         if (requestedByChannel.values.all { it == 0L }) {
@@ -1045,7 +1007,7 @@ class KronRepository private constructor(
         val channel = if (allocation.fundingChannel == FundingChannel.CASH) "Cash" else "eBudget"
         val start = LocalDate.ofEpochDay(period.startEpochDay)
         val end = LocalDate.ofEpochDay(period.endEpochDay)
-        return category.name to "$portfolio.name | $start s.d. $end | $channel"
+        return category.name to "${portfolio.name} | $start s.d. $end | $channel"
     }
 
     private fun systemResolutionLabel(bucket: String, channel: String): Pair<String, String> {
@@ -1102,6 +1064,7 @@ class KronRepository private constructor(
             beforeJson = before,
             afterJson = after,
         ))
+        reconcilePortfoliosInternal(LocalDate.now(), activeId)
         assertInvariant()
         eventId
     }
@@ -1187,6 +1150,7 @@ class KronRepository private constructor(
             beforeJson = before,
             afterJson = after,
         ))
+        reconcilePortfoliosInternal(LocalDate.now(), activeId)
         assertInvariant()
         eventId
     }
@@ -1225,6 +1189,7 @@ class KronRepository private constructor(
             targetAfter = targetBefore + actualAmount,
         )
         dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = "Defisit ditutup dari Reserve rollover", beforeJson = before, afterJson = after))
+        reconcilePortfoliosInternal(LocalDate.now(), activeId)
         assertInvariant()
         eventId
     }
@@ -1242,8 +1207,10 @@ class KronRepository private constructor(
         val spent = dao.allocationSpent(allocationId)
         require(newPlannedAmount >= spent) { "Budget baru lebih kecil dari pengeluaran yang sudah tercatat" }
         val currentBooked = currentAvailable + spent
-        val delta = if (period.status == PeriodStatus.DRAFT && currentBooked == 0L) 0L else newPlannedAmount - currentBooked
-        require(newPlannedAmount != oldPlanned || delta != 0L) { "Tidak ada perubahan nominal" }
+        val isUnfundedPeriod = period.status == PeriodStatus.DRAFT || period.status == PeriodStatus.UNDERFUNDED
+        val delta = if (isUnfundedPeriod && currentBooked == 0L) 0L else newPlannedAmount - currentBooked
+        val plannedDelta = newPlannedAmount - oldPlanned
+        require(plannedDelta != 0L || delta != 0L) { "Tidak ada perubahan nominal" }
         if (delta > 0) require(dao.vaultBalance(allocation.fundingChannel, activeId) >= delta) { "Main Vault tidak mencukupi untuk menambah budget" }
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(eventId, LedgerType.REALLOCATION, "Koreksi budget", note, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
@@ -1257,15 +1224,15 @@ class KronRepository private constructor(
         val template = dao.templatesForPortfolio(period.portfolioId).firstOrNull { it.categoryId == allocation.categoryId }
         if (template != null) {
             val oldCash = template.plannedAmount * template.cashPercentage / 100
-            val newCash = oldCash + (if (allocation.fundingChannel == FundingChannel.CASH) delta else 0)
-            val newTotal = template.plannedAmount + delta
-            val newPercentage = if (newTotal == 0L) 0 else ((newCash * 100) / newTotal).toInt()
+            val newCash = (oldCash + (if (allocation.fundingChannel == FundingChannel.CASH) plannedDelta else 0L)).coerceAtLeast(0L)
+            val newTotal = (template.plannedAmount + plannedDelta).coerceAtLeast(0L)
+            val newPercentage = if (newTotal == 0L) 0 else ((newCash * 100) / newTotal).toInt().coerceIn(0, 100)
             dao.updateAllocationTemplate(template.copy(
                 plannedAmount = newTotal,
                 cashPercentage = newPercentage,
             ).bumpRevision())
         }
-        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = note, beforeJson = "{\"planned\":$oldPlanned,\"template\":${template?.plannedAmount ?: 0}}", afterJson = "{\"planned\":$newPlannedAmount,\"template\":${if (template != null) template.plannedAmount + delta else 0}}"))
+        dao.insertAudit(AuditSnapshotEntity(eventId = eventId, reason = note, beforeJson = "{\"planned\":$oldPlanned,\"template\":${template?.plannedAmount ?: 0}}", afterJson = "{\"planned\":$newPlannedAmount,\"template\":${if (template != null) (template.plannedAmount + plannedDelta).coerceAtLeast(0L) else 0}}"))
         refreshPeriodStatus(allocation.periodId)
         assertInvariant()
         eventId
@@ -1313,8 +1280,9 @@ class KronRepository private constructor(
         val currentCashBooked = currentCashAvailable + cashSpent
         val currentEBudgetBooked = currentEBudgetAvailable + eBudgetSpent
 
-        val deltaCash = if (period.status == PeriodStatus.DRAFT && currentCashBooked == 0L) 0L else newCash - currentCashBooked
-        val deltaEBudget = if (period.status == PeriodStatus.DRAFT && currentEBudgetBooked == 0L) 0L else newEBudget - currentEBudgetBooked
+        val isUnfundedPeriod = period.status == PeriodStatus.DRAFT || period.status == PeriodStatus.UNDERFUNDED
+        val deltaCash = if (isUnfundedPeriod && currentCashBooked == 0L) 0L else newCash - currentCashBooked
+        val deltaEBudget = if (isUnfundedPeriod && currentEBudgetBooked == 0L) 0L else newEBudget - currentEBudgetBooked
 
         val hasPlannedChange = newCash != oldCash || newEBudget != oldEBudget
         val hasFundingChange = deltaCash != 0L || deltaEBudget != 0L
@@ -1450,8 +1418,11 @@ class KronRepository private constructor(
         val existingAllocs = dao.allocationsForCategory(periodId, categoryId)
         val activeExistingAllocs = existingAllocs.filter { !(it.plannedAmount == 0L && dao.allocationAvailable(it.id) == 0L) }
         require(activeExistingAllocs.isEmpty()) { "Kategori sudah aktif di periode ini" }
-        if (cashAmount > 0) require(dao.vaultBalance(FundingChannel.CASH, activeId) >= cashAmount) { "Main Vault Cash tidak mencukupi" }
-        if (eBudgetAmount > 0) require(dao.vaultBalance(FundingChannel.EBUDGET, activeId) >= eBudgetAmount) { "Main Vault eBudget tidak mencukupi" }
+        val isUnfundedPeriod = period.status == PeriodStatus.DRAFT || period.status == PeriodStatus.UNDERFUNDED
+        if (!isUnfundedPeriod) {
+            if (cashAmount > 0) require(dao.vaultBalance(FundingChannel.CASH, activeId) >= cashAmount) { "Main Vault Cash tidak mencukupi" }
+            if (eBudgetAmount > 0) require(dao.vaultBalance(FundingChannel.EBUDGET, activeId) >= eBudgetAmount) { "Main Vault eBudget tidak mencukupi" }
+        }
 
         val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ActivityEventEntity(eventId, LedgerType.REALLOCATION, "Tambah kategori $trimmedName", note, "USER", LocalDate.now().toEpochDay(), accountId = activeId))
@@ -1466,8 +1437,10 @@ class KronRepository private constructor(
                 dao.insertAllocation(AllocationEntity(periodId = periodId, categoryId = categoryId, fundingChannel = FundingChannel.CASH, plannedAmount = cashAmount))
             }
             insertedIds.add(id)
-            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = id, fundingChannel = FundingChannel.CASH, amount = cashAmount, accountId = activeId))
-            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.CASH, amount = -cashAmount, accountId = activeId))
+            if (!isUnfundedPeriod) {
+                budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = id, fundingChannel = FundingChannel.CASH, amount = cashAmount, accountId = activeId))
+                budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.CASH, amount = -cashAmount, accountId = activeId))
+            }
         }
         if (eBudgetAmount > 0) {
             val existingEBudget = existingAllocs.firstOrNull { it.fundingChannel == FundingChannel.EBUDGET }
@@ -1478,8 +1451,10 @@ class KronRepository private constructor(
                 dao.insertAllocation(AllocationEntity(periodId = periodId, categoryId = categoryId, fundingChannel = FundingChannel.EBUDGET, plannedAmount = eBudgetAmount))
             }
             insertedIds.add(id)
-            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = id, fundingChannel = FundingChannel.EBUDGET, amount = eBudgetAmount, accountId = activeId))
-            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.EBUDGET, amount = -eBudgetAmount, accountId = activeId))
+            if (!isUnfundedPeriod) {
+                budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = id, fundingChannel = FundingChannel.EBUDGET, amount = eBudgetAmount, accountId = activeId))
+                budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.EBUDGET, amount = -eBudgetAmount, accountId = activeId))
+            }
         }
         if (budgetLines.isNotEmpty()) dao.insertBudgetLines(budgetLines)
         // template for future periods
@@ -1665,8 +1640,11 @@ class KronRepository private constructor(
         val eBudgetAmount = plannedAmount - cashAmount
         require(cashAmount >= 0 && eBudgetAmount >= 0) { "Komposisi kanal tidak valid" }
         require(cashAmount > 0 || eBudgetAmount > 0) { "Nominal budget tidak valid" }
-        if (cashAmount > 0) require(dao.vaultBalance(FundingChannel.CASH, activeId) >= cashAmount) { "Main Vault Cash tidak mencukupi" }
-        if (eBudgetAmount > 0) require(dao.vaultBalance(FundingChannel.EBUDGET, activeId) >= eBudgetAmount) { "Main Vault eBudget tidak mencukupi" }
+        val isUnfundedPeriod = period.status == PeriodStatus.DRAFT || period.status == PeriodStatus.UNDERFUNDED
+        if (!isUnfundedPeriod) {
+            if (cashAmount > 0) require(dao.vaultBalance(FundingChannel.CASH, activeId) >= cashAmount) { "Main Vault Cash tidak mencukupi" }
+            if (eBudgetAmount > 0) require(dao.vaultBalance(FundingChannel.EBUDGET, activeId) >= eBudgetAmount) { "Main Vault eBudget tidak mencukupi" }
+        }
 
         dao.updateCategory(category.copy(isArchived = false).bumpRevision())
 
@@ -1691,8 +1669,10 @@ class KronRepository private constructor(
             } else {
                 dao.insertAllocation(AllocationEntity(periodId = periodId, categoryId = categoryId, fundingChannel = FundingChannel.CASH, plannedAmount = cashAmount))
             }
-            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = allocId, fundingChannel = FundingChannel.CASH, amount = cashAmount, accountId = activeId))
-            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.CASH, amount = -cashAmount, accountId = activeId))
+            if (!isUnfundedPeriod) {
+                budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = allocId, fundingChannel = FundingChannel.CASH, amount = cashAmount, accountId = activeId))
+                budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.CASH, amount = -cashAmount, accountId = activeId))
+            }
         }
         if (eBudgetAmount > 0) {
             val existingEBudget = existingAllocs.firstOrNull { it.fundingChannel == FundingChannel.EBUDGET }
@@ -1702,8 +1682,10 @@ class KronRepository private constructor(
             } else {
                 dao.insertAllocation(AllocationEntity(periodId = periodId, categoryId = categoryId, fundingChannel = FundingChannel.EBUDGET, plannedAmount = eBudgetAmount))
             }
-            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = allocId, fundingChannel = FundingChannel.EBUDGET, amount = eBudgetAmount, accountId = activeId))
-            budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.EBUDGET, amount = -eBudgetAmount, accountId = activeId))
+            if (!isUnfundedPeriod) {
+                budgetLines.add(BudgetJournalLineEntity(eventId = eventId, allocationId = allocId, fundingChannel = FundingChannel.EBUDGET, amount = eBudgetAmount, accountId = activeId))
+                budgetLines.add(BudgetJournalLineEntity(eventId = eventId, bucket = BudgetBucket.VAULT, fundingChannel = FundingChannel.EBUDGET, amount = -eBudgetAmount, accountId = activeId))
+            }
         }
         if (budgetLines.isNotEmpty()) dao.insertBudgetLines(budgetLines)
 
@@ -1831,6 +1813,17 @@ class KronRepository private constructor(
         require(!dao.isEventReversed(originalEventId)) { "Event sudah dibalik" }
         require(original.type != LedgerType.REVERSAL) { "Reversal tidak dapat dibalik langsung" }
         require(original.type !in setOf(LedgerType.ARCHIVE, LedgerType.RESTORE)) { "Gunakan tindakan Pulihkan atau Arsipkan dari halaman terkait" }
+        require(
+            original.type !in setOf(
+                LedgerType.PORTFOLIO_BOOKING,
+                LedgerType.RELEASE,
+                LedgerType.ROLLOVER,
+                LedgerType.SYSTEM,
+                LedgerType.EVIDENCE_KEY_ROTATION,
+                LedgerType.ATTACH_EVIDENCE,
+                LedgerType.CORRECTION,
+            ),
+        ) { "Event sistem dan siklus budget tidak dapat dibatalkan langsung" }
         val eventId = UUID.randomUUID().toString()
         val reversalAccountId = activeId
         dao.insertEvent(ActivityEventEntity(
@@ -1844,7 +1837,29 @@ class KronRepository private constructor(
             accountId = reversalAccountId,
         ))
         val cash = dao.cashLinesForEvent(originalEventId).map { CashJournalLineEntity(eventId = eventId, accountId = it.accountId, fundingChannel = it.fundingChannel, amount = -it.amount) }
-        val budget = dao.budgetLinesForEvent(originalEventId).map { BudgetJournalLineEntity(eventId = eventId, allocationId = it.allocationId, bucket = it.bucket, fundingChannel = it.fundingChannel, amount = -it.amount, accountId = it.accountId) }
+        val budget = dao.budgetLinesForEvent(originalEventId).map { line ->
+            val alloc = line.allocationId?.let { dao.allocationById(it) }
+            val period = alloc?.let { dao.periodById(it.periodId) }
+            if (alloc != null && period?.status == PeriodStatus.CLOSED) {
+                BudgetJournalLineEntity(
+                    eventId = eventId,
+                    allocationId = null,
+                    bucket = BudgetBucket.VAULT,
+                    fundingChannel = line.fundingChannel,
+                    amount = -line.amount,
+                    accountId = line.accountId,
+                )
+            } else {
+                BudgetJournalLineEntity(
+                    eventId = eventId,
+                    allocationId = line.allocationId,
+                    bucket = line.bucket,
+                    fundingChannel = line.fundingChannel,
+                    amount = -line.amount,
+                    accountId = line.accountId,
+                )
+            }
+        }
         if (cash.isNotEmpty()) dao.insertCashLines(cash)
         if (budget.isNotEmpty()) dao.insertBudgetLines(budget)
         val affectedPeriods = budget.mapNotNull { it.allocationId }.mapNotNull { dao.allocationById(it)?.periodId }.distinct()
@@ -1900,11 +1915,32 @@ class KronRepository private constructor(
             ),
         )
         val cash = dao.cashLinesForEvent(reversedEventId)
-        val budget = dao.budgetLinesForEvent(reversedEventId)
-        val splits = dao.splitsForEvent(reversedEventId)
+        val budget = dao.budgetLinesForEvent(reversedEventId).map { line ->
+            val alloc = line.allocationId?.let { dao.allocationById(it) }
+            val period = alloc?.let { dao.periodById(it.periodId) }
+            if (alloc != null && period?.status == PeriodStatus.CLOSED) {
+                if (line.amount < 0) {
+                    require(dao.vaultBalance(line.fundingChannel, line.accountId) >= -line.amount) {
+                        "Main Vault tidak mencukupi untuk memulihkan transaksi pada periode yang sudah tertutup"
+                    }
+                }
+                line.copy(id = 0, eventId = restoreId, allocationId = null, bucket = BudgetBucket.VAULT)
+            } else {
+                line.copy(id = 0, eventId = restoreId)
+            }
+        }
+        val splits = dao.splitsForEvent(reversedEventId).map { split ->
+            val alloc = split.allocationId?.let { dao.allocationById(it) }
+            val period = alloc?.let { dao.periodById(it.periodId) }
+            if (alloc != null && period?.status == PeriodStatus.CLOSED) {
+                split.copy(id = 0, eventId = restoreId, allocationId = null)
+            } else {
+                split.copy(id = 0, eventId = restoreId)
+            }
+        }
         if (cash.isNotEmpty()) dao.insertCashLines(cash.map { it.copy(id = 0, eventId = restoreId) })
-        if (budget.isNotEmpty()) dao.insertBudgetLines(budget.map { it.copy(id = 0, eventId = restoreId) })
-        if (splits.isNotEmpty()) dao.insertSplits(splits.map { it.copy(id = 0, eventId = restoreId) })
+        if (budget.isNotEmpty()) dao.insertBudgetLines(budget)
+        if (splits.isNotEmpty()) dao.insertSplits(splits)
         dao.insertAudit(AuditSnapshotEntity(eventId = restoreId, reason = "Pemulihan reversal", beforeJson = "{\"eventId\":\"$reversedEventId\",\"reversed\":true}", afterJson = "{\"eventId\":\"${restoreId}\",\"restored\":true}"))
         dao.debtEntryForEvent(reversedEventId)?.let { payment ->
             val debt = requireNotNull(dao.debtById(payment.debtId)) { "Hutang pembayaran tidak ditemukan" }
@@ -2193,10 +2229,20 @@ class KronRepository private constructor(
             val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == portfolioId })
             requireActiveAccount(portfolio.accountId)
             require(portfolio.isArchived) { "Portfolio tidak berada di arsip" }
+            val today = LocalDate.now()
             val eventId = UUID.randomUUID().toString()
             dao.updatePortfolio(portfolio.copy(isArchived = false, archivedAt = null, isPaused = !activate).bumpRevision())
-            val resumedRuleCount = if (activate) resumeRulesPausedByArchive(portfolioId, LocalDate.now()) else 0
-            dao.insertEvent(ActivityEventEntity(eventId, LedgerType.RESTORE, if (activate) "Portfolio dipulihkan dan diaktifkan" else "Portfolio dipulihkan", reason, "USER", LocalDate.now().toEpochDay(), accountId = portfolio.accountId))
+            if (activate) {
+                val latestPeriod = dao.periodsForPortfolio(portfolioId).maxByOrNull { it.endEpochDay }
+                if (latestPeriod != null &&
+                    latestPeriod.status == PeriodStatus.CLOSED &&
+                    today.toEpochDay() in latestPeriod.startEpochDay..latestPeriod.endEpochDay
+                ) {
+                    dao.updatePeriod(latestPeriod.copy(status = PeriodStatus.UNDERFUNDED).bumpRevision())
+                }
+            }
+            val resumedRuleCount = if (activate) resumeRulesPausedByArchive(portfolioId, today) else 0
+            dao.insertEvent(ActivityEventEntity(eventId, LedgerType.RESTORE, if (activate) "Portfolio dipulihkan dan diaktifkan" else "Portfolio dipulihkan", reason, "USER", today.toEpochDay(), accountId = portfolio.accountId))
             dao.insertAudit(AuditSnapshotEntity(
                 eventId = eventId,
                 reason = reason,
@@ -2281,12 +2327,18 @@ class KronRepository private constructor(
 
     suspend fun reconcilePortfolios(today: LocalDate = LocalDate.now()) = database.withTransaction {
         val activeId = activeAccountId()
+        reconcilePortfoliosInternal(today, activeId)
+        assertInvariant()
+    }
+
+    private suspend fun reconcilePortfoliosInternal(today: LocalDate, activeId: Long) {
         dao.allPortfolios().filter { it.accountId == activeId && !it.isPaused && !it.isArchived }.forEach { portfolio ->
+            val initialPeriods = dao.periodsForPortfolio(portfolio.id)
+            val firstPeriod = initialPeriods.minByOrNull { it.startEpochDay }
+            if (firstPeriod != null && today.isBefore(LocalDate.ofEpochDay(firstPeriod.startEpochDay))) return@forEach
+            closeStalePeriods(initialPeriods, portfolio, today, activeId)
             val periods = dao.periodsForPortfolio(portfolio.id)
             val current = periods.firstOrNull { it.status != PeriodStatus.CLOSED && today.toEpochDay() in it.startEpochDay..it.endEpochDay }
-            val firstPeriod = periods.minByOrNull { it.startEpochDay }
-            if (firstPeriod != null && today.isBefore(LocalDate.ofEpochDay(firstPeriod.startEpochDay))) return@forEach
-            closeStalePeriods(periods, portfolio, today, activeId)
             if (current != null) {
                 val previous = periods.filter { it.endEpochDay < current.startEpochDay }.maxByOrNull { it.endEpochDay }
                 val previousHasDeficit = previous?.let { period -> dao.allocationIdsForPeriod(period.id).any { dao.allocationAvailable(it) < 0 } } == true
@@ -2298,19 +2350,27 @@ class KronRepository private constructor(
             val previous = periods.maxByOrNull { it.endEpochDay }
             if (previous != null) refreshPeriodStatus(previous.id)
             val unresolved = previous?.let { period -> dao.allocationIdsForPeriod(period.id).any { dao.allocationAvailable(it) < 0 } } == true
-            val nextAnchor = previous?.let { LocalDate.ofEpochDay(it.endEpochDay).plusDays(1) }
-                ?: LocalDate.ofEpochDay(portfolio.startEpochDay)
-            val (start, end) = periodBounds(nextAnchor, portfolio.cadence, portfolio.intervalCount)
+            val portfolioStart = LocalDate.ofEpochDay(portfolio.startEpochDay)
+            var nextAnchor = previous?.let { LocalDate.ofEpochDay(it.endEpochDay).plusDays(1) } ?: portfolioStart
+            var bounds = periodBounds(nextAnchor, portfolio.cadence, portfolio.intervalCount, portfolioStart.monthValue, portfolioStart.dayOfMonth)
+            var guard = 0
+            while (bounds.second.isBefore(today) && guard < 10_000) {
+                nextAnchor = bounds.second.plusDays(1)
+                bounds = periodBounds(nextAnchor, portfolio.cadence, portfolio.intervalCount, portfolioStart.monthValue, portfolioStart.dayOfMonth)
+                guard++
+            }
+            val (start, end) = bounds
             if (portfolio.endValue != null && start.toEpochDay() > portfolio.endValue) {
-                previous?.let { dao.updatePeriod(it.copy(status = PeriodStatus.CLOSED).bumpRevision()) }
+                if (!unresolved) closePreviousPeriod(previous, portfolio, today, activeId)
                 return@forEach
             }
+            val isFuture = today.isBefore(start)
             val nextId = dao.insertPeriod(BudgetPeriodEntity(
                 portfolioId = portfolio.id,
                 startEpochDay = start.toEpochDay(),
                 endEpochDay = end.toEpochDay(),
                 plannedTotal = maxOf(previous?.plannedTotal ?: 0L, dao.templatesForPortfolio(portfolio.id).sumOf { it.plannedAmount }),
-                status = if (unresolved) PeriodStatus.DRAFT else PeriodStatus.UNDERFUNDED,
+                status = if (unresolved || isFuture) PeriodStatus.DRAFT else PeriodStatus.UNDERFUNDED,
             ))
             val nextAllocations = mutableMapOf<Pair<Long, String>, Long>()
             dao.templatesForPortfolio(portfolio.id).forEach { template ->
@@ -2328,16 +2388,18 @@ class KronRepository private constructor(
                     }
                 }
             }
-            if (unresolved) return@forEach
+            if (unresolved || isFuture) return@forEach
             if (canFundPeriod(nextId)) fundUnderfundedPeriod(nextId)
         }
-        assertInvariant()
     }
 
     private suspend fun closePreviousPeriod(previous: BudgetPeriodEntity?, portfolio: PortfolioEntity, today: LocalDate, activeId: Long) {
         if (previous == null || previous.status == PeriodStatus.CLOSED) return
         val hasDeficit = dao.allocationIdsForPeriod(previous.id).any { dao.allocationAvailable(it) < 0 }
-        if (hasDeficit) return
+        if (hasDeficit) {
+            refreshPeriodStatus(previous.id)
+            return
+        }
         val remaining = dao.allocationsForPeriod(previous.id).mapNotNull { allocation ->
             dao.allocationAvailable(allocation.id).takeIf { it > 0 }?.let { allocation to it }
         }
@@ -2380,7 +2442,7 @@ class KronRepository private constructor(
         val period = requireNotNull(dao.periodById(periodId))
         val portfolio = requireNotNull(dao.allPortfolios().firstOrNull { it.id == period.portfolioId })
         val needs = dao.allocationsForPeriod(periodId).groupBy { it.fundingChannel }.mapValues { (_, allocations) ->
-            allocations.sumOf { (it.plannedAmount - dao.allocationAvailable(it.id)).coerceAtLeast(0) }
+            allocations.sumOf { (it.plannedAmount - dao.allocationBooked(it.id)).coerceAtLeast(0) }
         }
         return needs.all { (channel, amount) -> dao.vaultBalance(channel, portfolio.accountId) >= amount }
     }
@@ -2401,13 +2463,15 @@ class KronRepository private constructor(
         return rule.copy(nextEpochDay = nextDate.toEpochDay(), remainingOccurrences = remaining, isPaused = ended)
     }
 
-    private fun periodBounds(anchor: LocalDate, cadence: String, intervalCount: Int): Pair<LocalDate, LocalDate> = if (cadence == "YEARLY") {
-        val start = LocalDate.of(anchor.year, 1, 1)
-        start to LocalDate.of(anchor.year + intervalCount - 1, 12, 31)
-    } else {
-        val startMonth = YearMonth.from(anchor).atDay(1)
-        val endMonth = YearMonth.from(startMonth).plusMonths(intervalCount.toLong() - 1)
-        startMonth to endMonth.atEndOfMonth()
+    private fun periodBounds(
+        anchor: LocalDate,
+        cadence: String,
+        intervalCount: Int,
+        anchorMonth: Int = anchor.monthValue,
+        anchorDay: Int = anchor.dayOfMonth,
+    ): Pair<LocalDate, LocalDate> {
+        val nextStart = ScheduleCalculator.next(anchor, cadence, anchorMonth, anchorDay, intervalCount)
+        return anchor to nextStart.minusDays(1)
     }
 
     private suspend fun refreshPeriodStatus(periodId: Long) {

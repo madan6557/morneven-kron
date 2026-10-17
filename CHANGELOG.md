@@ -1,5 +1,11 @@
 # KRON Changelog
 
+## 1.7.32 - 2026-10-17
+
+- Perbaikan siklus periode budget, perhitungan pemakaian alokasi, dan pembatalan transaksi pada periode tertutup.
+- Penggabungan pelunasan dan bonus lebihan bayar hutang/piutang menjadi satu transaksi.
+- Kategori Gaji tidak lagi muncul pada pencatatan pelunasan piutang.
+
 ## 1.7.31 - 2026-10-17
 
 - Penyesuaian peluang insiden dan volatilitas dinamis pada kurs KRM.

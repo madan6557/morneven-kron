@@ -1721,7 +1721,19 @@ fun AuditDialog(
     var correctionMode by rememberSaveable(event.id) { mutableStateOf(false) }
     var correctedTitle by rememberSaveable(event.id) { mutableStateOf(event.title) }
     var correctedNote by rememberSaveable(event.id) { mutableStateOf(event.note) }
-    val lifecycleEvent = event.type in setOf("ARCHIVE", "RESTORE", "DEBT_OPEN", "DEBT_ARCHIVE")
+    val lifecycleEvent = event.type in setOf(
+        "ARCHIVE",
+        "RESTORE",
+        "DEBT_OPEN",
+        "DEBT_ARCHIVE",
+        "PORTFOLIO_BOOKING",
+        "RELEASE",
+        "ROLLOVER",
+        "SYSTEM",
+        "EVIDENCE_KEY_ROTATION",
+        "ATTACH_EVIDENCE",
+        "CORRECTION",
+    )
     val isAttachEvidence = event.type == "ATTACH_EVIDENCE"
     val parentEvent = if (isAttachEvidence && event.relatedEventId != null) {
         state.activities.firstOrNull { it.id == event.relatedEventId }

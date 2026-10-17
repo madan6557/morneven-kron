@@ -201,9 +201,9 @@ interface KronDao {
         SELECT al.id, al.periodId, p.portfolioId, pf.name AS portfolioName, pf.isArchived AS portfolioArchived,
                al.categoryId, c.name AS categoryName, c.color, c.isArchived AS categoryArchived, al.fundingChannel,
                al.plannedAmount,
-               COALESCE(SUM(b.amount), 0) - COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS bookedAmount,
+               COALESCE(SUM(b.amount), 0) - COALESCE(SUM(CASE WHEN (e.type IN ('EXPENSE','AUTOMATION') OR (e.type = 'RESTORE_REVERSAL' AND EXISTS(SELECT 1 FROM cash_journal_lines c WHERE c.eventId = e.id)) OR (e.type IN ('REALLOCATION','RESTORE_REVERSAL') AND EXISTS(SELECT 1 FROM budget_journal_lines u WHERE u.eventId = e.id AND u.bucket = 'UNALLOCATED' AND u.amount > 0))) AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS bookedAmount,
                COALESCE(SUM(b.amount), 0) AS availableAmount,
-               -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS spentAmount,
+               -COALESCE(SUM(CASE WHEN (e.type IN ('EXPENSE','AUTOMATION') OR (e.type = 'RESTORE_REVERSAL' AND EXISTS(SELECT 1 FROM cash_journal_lines c WHERE c.eventId = e.id)) OR (e.type IN ('REALLOCATION','RESTORE_REVERSAL') AND EXISTS(SELECT 1 FROM budget_journal_lines u WHERE u.eventId = e.id AND u.bucket = 'UNALLOCATED' AND u.amount > 0))) AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS spentAmount,
                p.status AS periodStatus, p.startEpochDay, p.endEpochDay
         FROM allocations al
         JOIN budget_periods p ON p.id = al.periodId
@@ -220,9 +220,9 @@ interface KronDao {
         SELECT al.id, al.periodId, p.portfolioId, pf.name AS portfolioName, pf.isArchived AS portfolioArchived,
                al.categoryId, c.name AS categoryName, c.color, c.isArchived AS categoryArchived, al.fundingChannel,
                al.plannedAmount,
-               COALESCE(SUM(b.amount), 0) - COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS bookedAmount,
+               COALESCE(SUM(b.amount), 0) - COALESCE(SUM(CASE WHEN (e.type IN ('EXPENSE','AUTOMATION') OR (e.type = 'RESTORE_REVERSAL' AND EXISTS(SELECT 1 FROM cash_journal_lines c WHERE c.eventId = e.id)) OR (e.type IN ('REALLOCATION','RESTORE_REVERSAL') AND EXISTS(SELECT 1 FROM budget_journal_lines u WHERE u.eventId = e.id AND u.bucket = 'UNALLOCATED' AND u.amount > 0))) AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS bookedAmount,
                COALESCE(SUM(b.amount), 0) AS availableAmount,
-               -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS spentAmount,
+               -COALESCE(SUM(CASE WHEN (e.type IN ('EXPENSE','AUTOMATION') OR (e.type = 'RESTORE_REVERSAL' AND EXISTS(SELECT 1 FROM cash_journal_lines c WHERE c.eventId = e.id)) OR (e.type IN ('REALLOCATION','RESTORE_REVERSAL') AND EXISTS(SELECT 1 FROM budget_journal_lines u WHERE u.eventId = e.id AND u.bucket = 'UNALLOCATED' AND u.amount > 0))) AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS spentAmount,
                p.status AS periodStatus, p.startEpochDay, p.endEpochDay
         FROM allocations al
         JOIN budget_periods p ON p.id = al.periodId
@@ -351,9 +351,15 @@ interface KronDao {
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = 'UNALLOCATED' AND fundingChannel = :channel AND accountId = :accountId") suspend fun unallocatedBalance(channel: String, accountId: Long): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE bucket = :bucket AND fundingChannel = :channel") suspend fun budgetBucketBalance(bucket: String, channel: String): Long
     @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE allocationId = :allocationId") suspend fun allocationAvailable(allocationId: Long): Long
-    @Query("SELECT COALESCE(SUM(amount), 0) FROM budget_journal_lines WHERE allocationId = :allocationId AND eventId IN (SELECT id FROM activity_events WHERE type IN ('PORTFOLIO_BOOKING','REALLOCATION','OVERBUDGET_COVERAGE','RELEASE','ROLLOVER'))") suspend fun allocationBooked(allocationId: Long): Long
     @Query("""
-        SELECT -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0)
+        SELECT COALESCE(SUM(b.amount), 0) - COALESCE(SUM(CASE WHEN (e.type IN ('EXPENSE','AUTOMATION') OR (e.type = 'RESTORE_REVERSAL' AND EXISTS(SELECT 1 FROM cash_journal_lines c WHERE c.eventId = e.id)) OR (e.type IN ('REALLOCATION','RESTORE_REVERSAL') AND EXISTS(SELECT 1 FROM budget_journal_lines u WHERE u.eventId = e.id AND u.bucket = 'UNALLOCATED' AND u.amount > 0))) AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0)
+        FROM budget_journal_lines b
+        LEFT JOIN activity_events e ON e.id = b.eventId
+        WHERE b.allocationId = :allocationId
+    """)
+    suspend fun allocationBooked(allocationId: Long): Long
+    @Query("""
+        SELECT -COALESCE(SUM(CASE WHEN (e.type IN ('EXPENSE','AUTOMATION') OR (e.type = 'RESTORE_REVERSAL' AND EXISTS(SELECT 1 FROM cash_journal_lines c WHERE c.eventId = e.id)) OR (e.type IN ('REALLOCATION','RESTORE_REVERSAL') AND EXISTS(SELECT 1 FROM budget_journal_lines u WHERE u.eventId = e.id AND u.bucket = 'UNALLOCATED' AND u.amount > 0))) AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0)
         FROM budget_journal_lines b
         JOIN activity_events e ON e.id = b.eventId
         WHERE b.allocationId = :allocationId
@@ -469,9 +475,9 @@ interface KronDao {
         SELECT al.id, al.periodId, p.portfolioId, pf.name AS portfolioName, pf.isArchived AS portfolioArchived,
                al.categoryId, c.name AS categoryName, c.color, c.isArchived AS categoryArchived, al.fundingChannel,
                al.plannedAmount,
-               COALESCE(SUM(b.amount), 0) - COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS bookedAmount,
+               COALESCE(SUM(b.amount), 0) - COALESCE(SUM(CASE WHEN (e.type IN ('EXPENSE','AUTOMATION') OR (e.type = 'RESTORE_REVERSAL' AND EXISTS(SELECT 1 FROM cash_journal_lines c WHERE c.eventId = e.id)) OR (e.type IN ('REALLOCATION','RESTORE_REVERSAL') AND EXISTS(SELECT 1 FROM budget_journal_lines u WHERE u.eventId = e.id AND u.bucket = 'UNALLOCATED' AND u.amount > 0))) AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS bookedAmount,
                COALESCE(SUM(b.amount), 0) AS availableAmount,
-               -COALESCE(SUM(CASE WHEN e.type IN ('EXPENSE','AUTOMATION') AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS spentAmount,
+               -COALESCE(SUM(CASE WHEN (e.type IN ('EXPENSE','AUTOMATION') OR (e.type = 'RESTORE_REVERSAL' AND EXISTS(SELECT 1 FROM cash_journal_lines c WHERE c.eventId = e.id)) OR (e.type IN ('REALLOCATION','RESTORE_REVERSAL') AND EXISTS(SELECT 1 FROM budget_journal_lines u WHERE u.eventId = e.id AND u.bucket = 'UNALLOCATED' AND u.amount > 0))) AND NOT EXISTS(SELECT 1 FROM activity_events rv WHERE rv.type = 'REVERSAL' AND rv.relatedEventId = e.id) AND b.amount < 0 THEN b.amount ELSE 0 END), 0) AS spentAmount,
                p.status AS periodStatus, p.startEpochDay, p.endEpochDay
         FROM allocations al
         JOIN budget_periods p ON p.id = al.periodId
